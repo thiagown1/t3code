@@ -28,6 +28,7 @@ export interface MachineHealthViewModel {
   readonly storageUtilization: number | null;
   readonly t3CpuPercent: number | null;
   readonly t3MemoryBytes: number | null;
+  readonly t3Coverage: ResourceTelemetrySummary["coverage"] | null;
 }
 
 export interface MachineHealthHistoryPoint {
@@ -93,10 +94,9 @@ export function deriveMachineHealth(input: {
   const storageUtilization = storage
     ? utilization(storage.totalBytes, storage.availableBytes)
     : null;
-  const hasT3Metrics =
-    input.telemetry?.status === "healthy" || input.telemetry?.status === "degraded";
-  const t3CpuPercent = hasT3Metrics ? input.telemetry.currentCpuPercent : null;
-  const t3MemoryBytes = hasT3Metrics ? input.telemetry.currentRssBytes : null;
+  const t3CpuPercent = input.telemetry?.currentCpuPercent ?? null;
+  const t3MemoryBytes = input.telemetry?.currentRssBytes ?? null;
+  const t3Coverage = input.telemetry?.coverage ?? null;
   const threshold = resolveMachineHealthThreshold(input.threshold);
 
   const withMetrics = (level: MachineHealthLevel): MachineHealthViewModel => ({
@@ -106,6 +106,7 @@ export function deriveMachineHealth(input: {
     storageUtilization,
     t3CpuPercent,
     t3MemoryBytes,
+    t3Coverage,
   });
 
   if (!input.connected) return withMetrics("unavailable");
@@ -135,6 +136,7 @@ export function deriveMachineHealth(input: {
     input.failed ||
     input.telemetry === null ||
     input.telemetry.status !== "healthy" ||
+    input.telemetry.coverage !== "full" ||
     input.host.storage === undefined ||
     input.host.storage.status !== "available"
   ) {

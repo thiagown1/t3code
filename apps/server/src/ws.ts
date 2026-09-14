@@ -3396,7 +3396,7 @@ const makeWsRpcLayer = (
             Stream.unwrap(
               Effect.map(resourceTelemetry.subscribe, ({ latest, changes }) =>
                 Stream.concat(Stream.make(latest), changes).pipe(
-                  Stream.map(summarizeResourceTelemetry),
+                  Stream.map((snapshot) => summarizeResourceTelemetry(snapshot)),
                 ),
               ),
             ),

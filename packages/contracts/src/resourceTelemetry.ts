@@ -434,9 +434,10 @@ export type ResourceTelemetryGroups = typeof ResourceTelemetryGroups.Type;
 export const ResourceTelemetrySummary = Schema.Struct({
   readAt: Schema.DateTimeUtc,
   status: ResourceTelemetrySourceStatus,
+  coverage: Schema.Literals(["full", "partial", "server-only"]),
   processCount: NonNegativeInt,
-  currentCpuPercent: Schema.Number,
-  currentRssBytes: NonNegativeInt,
+  currentCpuPercent: Schema.NullOr(Schema.Number),
+  currentRssBytes: Schema.NullOr(NonNegativeInt),
 });
 export type ResourceTelemetrySummary = typeof ResourceTelemetrySummary.Type;
 

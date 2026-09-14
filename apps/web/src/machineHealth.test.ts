@@ -26,6 +26,7 @@ const host = {
 const telemetry = {
   readAt: DateTime.makeUnsafe(now),
   status: "healthy",
+  coverage: "full",
   processCount: 1,
   currentCpuPercent: 12,
   currentRssBytes: 1_024,
@@ -54,6 +55,7 @@ describe("deriveMachineHealth", () => {
       storageUtilization: 0.25,
       t3CpuPercent: 12,
       t3MemoryBytes: 1_024,
+      t3Coverage: "full",
     });
   });
 
@@ -87,6 +89,21 @@ describe("deriveMachineHealth", () => {
     expect(derive({ host: null, failed: true }).level).toBe("error");
     expect(derive({ telemetry: null, telemetryReceivedAt: null }).level).toBe("partial");
     expect(derive({ telemetry: { ...telemetry, status: "degraded" } }).level).toBe("partial");
+    expect(
+      derive({
+        telemetry: {
+          ...telemetry,
+          status: "unavailable",
+          coverage: "server-only",
+          currentCpuPercent: null,
+        },
+      }),
+    ).toMatchObject({
+      level: "partial",
+      t3CpuPercent: null,
+      t3MemoryBytes: 1_024,
+      t3Coverage: "server-only",
+    });
     expect(
       derive({
         host: { ...host, storage: { status: "error", volumes: [] } },

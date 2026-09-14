@@ -76,6 +76,10 @@ its card to save a client-local override. The card retains at most 60 host
 samples for session peaks, and explicitly marks old, partial, unavailable, and
 failed samples instead of treating missing data as zero.
 
+If the native monitor is missing, the panel can still show the T3 server's own
+memory as partial coverage. It labels that value **T3 server** and leaves T3 CPU
+unavailable because agent and child-process usage is not included.
+
 ### Balance new threads across machines
 
 Auto balance is off by default. On web and desktop, enable it in

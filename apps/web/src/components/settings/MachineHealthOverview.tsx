@@ -321,7 +321,9 @@ export function MachineHealthOverview() {
                   value={formatRatio(row.health.hostCpuUtilization)}
                   detail={
                     row.health.t3CpuPercent === null
-                      ? "T3 unavailable"
+                      ? row.health.t3Coverage === "server-only"
+                        ? "T3 CPU needs native monitor"
+                        : "T3 unavailable"
                       : `T3 ${row.health.t3CpuPercent.toFixed(1)}%`
                   }
                 />
@@ -335,7 +337,9 @@ export function MachineHealthOverview() {
                       : `${formatBytes(memoryUsed)} used · ${
                           row.health.t3MemoryBytes === null
                             ? "T3 unavailable"
-                            : `T3 ${formatBytes(row.health.t3MemoryBytes)}`
+                            : row.health.t3Coverage === "server-only"
+                              ? `T3 server ${formatBytes(row.health.t3MemoryBytes)}`
+                              : `T3 ${formatBytes(row.health.t3MemoryBytes)}`
                         }`
                   }
                 />

@@ -19,6 +19,11 @@ have clock skew. Host capacity is polled while Connections is mounted; aggregate
 T3 usage remains subscription-driven, so the native monitor still stops when no
 diagnostics or machine-health consumer is present.
 
+When the native collector is unavailable and there are no aggregate process
+rows, the summary falls back to Node's current server RSS only. It reports
+`coverage: server-only` and a null CPU value; clients must not present that
+fallback as total T3 or agent usage.
+
 Alert thresholds are per-environment client settings. They classify display
 state only and never restart, signal, clean, throttle, notify, or otherwise act
 on a host. The Connections view retains no more than 60 host samples per visible
