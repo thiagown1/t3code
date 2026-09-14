@@ -67,6 +67,11 @@ current model's limits without leaving the conversation. The result opens above 
 closes when you dismiss it or send your next message. It uses the same snapshot as **Usage → Limits**, so it does not run the agent or refresh
 anything. The command is offered only for providers that appear under **Usage → Limits**.
 
+When the active provider reports subscription limits, a compact quota row stays above the composer
+on web, desktop, and mobile. It shows every current window for the active account; tap or click it
+to open the detailed account view. Readings older than two normal provider refresh intervals are
+marked stale instead of showing an exact percentage.
+
 API-key accounts may not report subscription limits. This also applies to Claude connections
 using a proxy through `ANTHROPIC_AUTH_TOKEN`.
 

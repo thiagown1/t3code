@@ -23,6 +23,8 @@ import * as DateTime from "effect/DateTime";
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
+/** Two default five-minute provider probes; older compact readings must not look live. */
+export const COMPACT_USAGE_LIMITS_STALE_AFTER_MS = 10 * MINUTE;
 
 /**
  * Providers that belong on the Limits view: enabled, installed, and one whose
@@ -547,9 +549,13 @@ export function collectProviderUsageLimits(
 ): UsageLimitsReport | null {
   const selected = providers.find((provider) => provider.instanceId === instanceId);
   if (!selected || !hasProviderUsageLimits(selected.driver, providers, sources)) return null;
-  const native = providersWithLimits(providers).filter(
-    (provider) => provider.driver === selected.driver,
-  );
+  const native = providersWithLimits(providers)
+    .filter((provider) => provider.driver === selected.driver)
+    .sort((left, right) => {
+      if (left.instanceId === selected.instanceId) return -1;
+      if (right.instanceId === selected.instanceId) return 1;
+      return 0;
+    });
   const nativeAccounts = new Set(
     native.flatMap((provider) => {
       const key = accountKey(provider.driver, provider.auth.email);
@@ -643,4 +649,101 @@ export function collectProviderUsageLimits(
     }
   }
   return { createdAt: DateTime.formatIso(DateTime.makeUnsafe(now)), accounts, notices };
+}
+
+export interface CompactUsageLimitsSummary {
+  readonly status: "available" | "stale" | "unavailable";
+  readonly accountLabel: string;
+  readonly accountCount: number;
+  readonly checkedAt: string | null;
+  readonly windows: ReadonlyArray<{
+    readonly id: string;
+    readonly kind: ServerProviderUsageWindow["kind"];
+    readonly label: string;
+    readonly remainingPercent: number;
+    readonly resetsIn: string | null;
+  }>;
+  readonly message?: string;
+}
+
+function compactAccountLabel(account: UsageLimitsReport["accounts"][number]): string {
+  if (!account.instanceId) return account.label;
+  const driver = String(account.driver)
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/[_-]+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (character) => character.toUpperCase());
+  const instance =
+    account.displayName?.trim() ||
+    (String(account.instanceId) !== String(account.driver) ? String(account.instanceId) : "");
+  return instance && instance.toLowerCase() !== driver.toLowerCase()
+    ? `${driver} · ${instance}`
+    : driver;
+}
+
+/**
+ * The small, always-visible reading for the active provider account. It never
+ * pools sibling accounts or exposes an old percentage as if it were current.
+ * Full pooled details remain available through the existing Limits surface.
+ */
+export function compactUsageLimitsSummary(
+  report: UsageLimitsReport,
+  now: number,
+): CompactUsageLimitsSummary {
+  const account = report.accounts[0];
+  if (!account) {
+    return {
+      status: "unavailable",
+      accountLabel: "Usage limits",
+      accountCount: 0,
+      checkedAt: null,
+      windows: [],
+      message: report.notices[0] ?? "Usage limits are unavailable.",
+    };
+  }
+
+  const base = {
+    accountLabel: compactAccountLabel(account),
+    accountCount: report.accounts.length,
+    checkedAt: account.limits.checkedAt,
+  } as const;
+  const checkedAt = Date.parse(account.limits.checkedAt);
+  if (!Number.isFinite(checkedAt) || now - checkedAt > COMPACT_USAGE_LIMITS_STALE_AFTER_MS) {
+    return {
+      ...base,
+      status: "stale",
+      windows: [],
+      message: "Usage reading is stale.",
+    };
+  }
+
+  const notice = limitsNotice(account.limits);
+  if (notice !== null) {
+    return { ...base, status: "unavailable", windows: [], message: notice };
+  }
+
+  return {
+    ...base,
+    status: "available",
+    windows: account.limits.windows.map((window) => ({
+      id: window.id,
+      kind: window.kind,
+      label: window.label,
+      remainingPercent: remainingPercent(window),
+      resetsIn: formatResetsIn(window, now),
+    })),
+  };
+}
+
+/** Identical compact copy on web, desktop, and mobile. */
+export function formatCompactUsageLimitsValue(summary: CompactUsageLimitsSummary): string {
+  if (summary.status !== "available") {
+    return summary.message ?? "Usage limits unavailable";
+  }
+  return summary.windows
+    .map(
+      (window) =>
+        `${window.label} ${window.remainingPercent}%${window.resetsIn ? `, ${window.resetsIn}` : ""}`,
+    )
+    .join(" · ");
 }

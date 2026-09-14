@@ -47,7 +47,7 @@ import {
 } from "@t3tools/client-runtime/text-paste";
 import { serializeComposerFileLink } from "@t3tools/shared/composerTrigger";
 import { createModelSelection, normalizeModelSlug } from "@t3tools/shared/model";
-import { USAGE_LIMITS_COMMAND } from "@t3tools/shared/usageLimits";
+import { USAGE_LIMITS_COMMAND, type CompactUsageLimitsSummary } from "@t3tools/shared/usageLimits";
 import {
   Fragment,
   memo,
@@ -133,6 +133,7 @@ import {
 } from "./composerContextUndo";
 import type { ThreadSyncPhase } from "../../threadSync";
 import { ComposerBanner } from "./ComposerBanner";
+import { PersistentUsageLimits } from "./PersistentUsageLimits";
 import { ComposerSurface } from "./ComposerSurface";
 import {
   ComposerBannerStack,
@@ -1307,6 +1308,8 @@ export interface ChatComposerProps {
   bannerItems: readonly ComposerBannerStackItem[];
   /** Picking /usage-limits from the menu is the action itself; the draft keeps nothing of it. */
   onUsageLimitsCommand?: (() => void) | undefined;
+  /** Current active-account quota; null when this provider has no limits capability. */
+  usageLimitsSummary: CompactUsageLimitsSummary | null;
   environmentUnavailable: {
     readonly label: string;
     readonly connection: EnvironmentConnectionPresentation;
@@ -5957,6 +5960,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         : null}
       <ComposerBanner.Dock>
         <ComposerBanner.Column>
+          {props.usageLimitsSummary && props.onUsageLimitsCommand ? (
+            <PersistentUsageLimits
+              summary={props.usageLimitsSummary}
+              onOpen={props.onUsageLimitsCommand}
+            />
+          ) : null}
           <ComposerBannerStack
             key={activeThreadId}
             className="relative z-0"

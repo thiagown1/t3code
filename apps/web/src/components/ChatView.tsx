@@ -3,6 +3,7 @@ import { visibleThreadPullRequests } from "@t3tools/shared/threadPullRequests";
 import type { UsageLimitSourceSnapshots } from "@t3tools/contracts";
 import {
   collectProviderUsageLimits,
+  compactUsageLimitsSummary,
   hasProviderUsageLimits,
   isUsageLimitsCommand,
 } from "@t3tools/shared/usageLimits";
@@ -2919,6 +2920,7 @@ export default function ChatView(props: ChatViewProps) {
     hasComposerAttachments: composerHasAttachments,
   });
   const activePendingApproval = pendingApprovals[0] ?? null;
+  const nowMinute = useNowMinute();
   // The open /usage-limits panel for this thread, model and turn. Only the open
   // moment is stored: the rows read live provider data, so a redeemed reset
   // credit or refreshed probe shows through. Anything that spends quota closes
@@ -2951,6 +2953,26 @@ export default function ChatView(props: ChatViewProps) {
     setUsageLimitsPanel(null);
   }
   const usageLimitSources = serverConfig?.usageLimitSources ?? EMPTY_USAGE_LIMIT_SOURCES;
+  const usageLimitsNow = Date.parse(`${nowMinute}:00.000Z`);
+  const currentUsageLimitsReport = useMemo(
+    () =>
+      activeProviderInstanceId === null
+        ? null
+        : collectProviderUsageLimits(
+            activeProviderInstanceId,
+            providerStatuses,
+            usageLimitSources,
+            usageLimitsNow,
+          ),
+    [activeProviderInstanceId, providerStatuses, usageLimitSources, usageLimitsNow],
+  );
+  const usageLimitsSummary = useMemo(
+    () =>
+      currentUsageLimitsReport === null
+        ? null
+        : compactUsageLimitsSummary(currentUsageLimitsReport, usageLimitsNow),
+    [currentUsageLimitsReport, usageLimitsNow],
+  );
   const usageLimitsReport = useMemo(
     () =>
       usageLimitsPanel !== null &&
@@ -5766,7 +5788,6 @@ export default function ChatView(props: ChatViewProps) {
   const supportsSnooze = serverConfig?.environment.capabilities.threadSnooze === true;
   const supportsPinning = serverConfig?.environment.capabilities.threadPinning === true;
   const activeThreadPinned = supportsPinning && activeThreadShell?.pinnedAt != null;
-  const nowMinute = useNowMinute();
   const snoozeNow = new Date().toISOString();
   const activeThreadSnoozed =
     activeThreadShell !== null &&
@@ -9139,6 +9160,7 @@ export default function ChatView(props: ChatViewProps) {
                                 ? openUsageLimits
                                 : undefined
                             }
+                            usageLimitsSummary={usageLimitsSummary}
                             environmentUnavailable={activeEnvironmentUnavailableState}
                             activePendingApproval={activePendingApproval}
                             pendingApprovals={pendingApprovals}

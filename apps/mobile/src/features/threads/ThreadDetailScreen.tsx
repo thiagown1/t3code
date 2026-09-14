@@ -85,6 +85,7 @@ import type {
 import { PendingApprovalCard } from "./PendingApprovalCard";
 import { ComposerFeedback } from "./ComposerFeedback";
 import { ComposerUsageLimits } from "./ComposerUsageLimits";
+import { PersistentUsageLimits } from "./PersistentUsageLimits";
 import { PendingUserInputCard } from "./PendingUserInputCard";
 import { ThreadCreationFailedCard } from "./ThreadCreationFailedCard";
 import {
@@ -938,6 +939,12 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                 onScrollToEnd={handleScrollToEnd}
               />
               <View className="w-full self-center" style={{ maxWidth: contentMaxWidth }}>
+                <PersistentUsageLimits
+                  instanceId={props.selectedThread.modelSelection.instanceId}
+                  providers={props.serverConfig?.providers ?? []}
+                  sources={props.serverConfig?.usageLimitSources ?? []}
+                  onOpen={showUsageLimits}
+                />
                 {props.feedbackSubmissions.map((submission) => (
                   <ComposerFeedback
                     key={submission.id}
