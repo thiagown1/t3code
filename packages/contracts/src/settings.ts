@@ -39,6 +39,7 @@ import {
   type ProviderDriverKind,
 } from "./providerInstance.ts";
 import { PullRequestMergeMethod } from "./pullRequest.ts";
+import { PortableCapabilityProfile } from "./capabilityProfile.ts";
 
 // ── Client Settings (local-only) ───────────────────────────────
 
@@ -1188,6 +1189,13 @@ export const ServerSettings = Schema.Struct({
   usagePriceOverrides: Schema.Record(TrimmedNonEmptyString, UsageModelPriceOverride).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
+  /**
+   * Secret-free declaration of which integrations this environment intends to expose.
+   * Availability and authorization remain runtime checks; an absent profile grants nothing.
+   */
+  capabilityProfile: Schema.NullOr(PortableCapabilityProfile).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
 });
 export type ServerSettings = typeof ServerSettings.Type;
 
@@ -1433,6 +1441,8 @@ export const ServerSettingsPatch = Schema.Struct({
   usagePriceOverrides: Schema.optionalKey(
     Schema.Record(TrimmedNonEmptyString, Schema.NullOr(UsageModelPriceOverride)),
   ),
+  // Whole-profile replacement. Import is reviewed as a dry-run diff before this patch is sent.
+  capabilityProfile: Schema.optionalKey(Schema.NullOr(PortableCapabilityProfile)),
 });
 export type ServerSettingsPatch = typeof ServerSettingsPatch.Type;
 

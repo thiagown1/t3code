@@ -21,6 +21,31 @@ const encodeServerSettings = Schema.encodeSync(ServerSettings);
 const decodeClaudeSettings = Schema.decodeUnknownSync(ClaudeSettings);
 
 describe("ServerSettings default permissions", () => {
+  it("defaults portable capability access to no configured profile", () => {
+    expect(decodeServerSettings({}).capabilityProfile).toBeNull();
+    expect(DEFAULT_SERVER_SETTINGS.capabilityProfile).toBeNull();
+  });
+
+  it("decodes a secret-free capability profile patch as a whole replacement", () => {
+    const capabilityProfile = {
+      schemaVersion: 1 as const,
+      profileId: "workstation",
+      name: "Workstation",
+      capabilities: [
+        {
+          capabilityId: "firebase.logs.read",
+          state: "enabled" as const,
+          credentialRef: { kind: "environment-variable" as const, id: "FIREBASE_PROFILE" },
+        },
+      ],
+    };
+
+    expect(decodeServerSettingsPatch({ capabilityProfile }).capabilityProfile).toEqual(
+      capabilityProfile,
+    );
+    expect(decodeServerSettingsPatch({ capabilityProfile: null }).capabilityProfile).toBeNull();
+  });
+
   it("keeps full access for settings saved before a default was configured", () => {
     expect(decodeServerSettings({}).defaultRuntimeMode).toBe("full-access");
     expect(DEFAULT_SERVER_SETTINGS.defaultRuntimeMode).toBe("full-access");

@@ -22,6 +22,11 @@ reference only a local credential identifier and resolver kind; credential mater
 in the manifest. Effective access is fail-closed: the most-specific declaration must be enabled,
 the current machine must report the integration available, and the current action must be
 separately authorized. Missing or equally specific conflicting declarations are denied.
+Each server persists its own optional profile in environment settings. The Integrations panel can
+export that profile or import one through a validate, dry-run diff, and explicit-confirmation flow.
+Import replaces the complete profile so removed declarations cannot survive unnoticed; an absent
+profile grants no capabilities. Import/export does not resolve credentials or prove availability
+or authorization, which remain independent runtime gates.
 
 ## Process and account isolation
 

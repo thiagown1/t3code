@@ -482,6 +482,14 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["allow disable enable open drive preview tools sessions project override"],
   },
   {
+    id: "capability-profile",
+    title: "Environment capability profile",
+    to: "/settings/integrations",
+    searchTerms: [
+      "portable json export import feature flags firebase api logs ssh credentials permissions environment",
+    ],
+  },
+  {
     id: "device-hosts",
     title: "Device hosts",
     to: "/settings/integrations",

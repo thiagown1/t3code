@@ -24,6 +24,22 @@ import {
 const FOLDED_SERVER_SETTINGS = { ...DEFAULT_SERVER_SETTINGS, projectSettingsFolded: true };
 
 describe("serverSettings helpers", () => {
+  it("replaces and clears an environment capability profile atomically", () => {
+    const profile = {
+      schemaVersion: 1 as const,
+      profileId: "office",
+      name: "Office",
+      capabilities: [{ capabilityId: "ssh.metrics.read", state: "enabled" as const }],
+    };
+    const saved = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
+      capabilityProfile: profile,
+    });
+    expect(saved.capabilityProfile).toEqual(profile);
+    expect(
+      applyServerSettingsPatch(saved, { capabilityProfile: null }).capabilityProfile,
+    ).toBeNull();
+  });
+
   it("replaces SSH host lists when saving, editing, and removing hosts", () => {
     const host = { id: "mini", label: "Mac mini", target: "mini" };
     const saved = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, { deviceHosts: [host] });
