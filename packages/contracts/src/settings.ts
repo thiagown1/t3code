@@ -286,6 +286,14 @@ export const LoadBalancingWeights = Schema.Record(
   Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 100 })),
 );
 
+export const MachineHealthThreshold = Schema.Struct({
+  attentionPercent: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 98 })),
+  criticalPercent: Schema.Int.check(Schema.isBetween({ minimum: 2, maximum: 99 })),
+});
+export type MachineHealthThreshold = typeof MachineHealthThreshold.Type;
+
+export const MachineHealthThresholds = Schema.Record(TrimmedNonEmptyString, MachineHealthThreshold);
+
 export const DiffColorScheme = Schema.Literals(["red-green", "blue-orange"]);
 
 export const ClientSettingsSchema = Schema.Struct({
@@ -298,6 +306,9 @@ export const ClientSettingsSchema = Schema.Struct({
   ),
   loadBalancingEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   loadBalancingWeights: LoadBalancingWeights.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  machineHealthThresholds: MachineHealthThresholds.pipe(
+    Schema.withDecodingDefault(Effect.succeed({})),
+  ),
   appearanceContrast: AppearanceContrast.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_APPEARANCE_CONTRAST)),
   ),
@@ -1452,6 +1463,7 @@ export const ClientSettingsPatch = Schema.Struct({
   diffColorScheme: Schema.optionalKey(DiffColorScheme),
   loadBalancingEnabled: Schema.optionalKey(Schema.Boolean),
   loadBalancingWeights: Schema.optionalKey(LoadBalancingWeights),
+  machineHealthThresholds: Schema.optionalKey(MachineHealthThresholds),
   appearanceContrast: Schema.optionalKey(AppearanceContrast),
   panelAnimationDurationMs: Schema.optionalKey(PanelAnimationDurationMs),
   browserDefaultViewport: Schema.optionalKey(PreviewViewportSetting),

@@ -19,6 +19,11 @@ have clock skew. Host capacity is polled while Connections is mounted; aggregate
 T3 usage remains subscription-driven, so the native monitor still stops when no
 diagnostics or machine-health consumer is present.
 
+Alert thresholds are per-environment client settings. They classify display
+state only and never restart, signal, clean, throttle, notify, or otherwise act
+on a host. The Connections view retains no more than 60 host samples per visible
+environment for session peak summaries; leaving the view releases that history.
+
 ## Collection cost
 
 The native child owns sampling and bounded in-memory history. The server requests

@@ -1,6 +1,15 @@
-import type { HostResourcesSnapshot, ResourceTelemetrySummary } from "@t3tools/contracts";
+import type {
+  HostResourcesSnapshot,
+  MachineHealthThreshold,
+  ResourceTelemetrySummary,
+} from "@t3tools/contracts";
 
 export const MACHINE_HEALTH_STALE_AFTER_MS = 30_000;
+export const MACHINE_HEALTH_HISTORY_LIMIT = 60;
+export const DEFAULT_MACHINE_HEALTH_THRESHOLD = {
+  attentionPercent: 80,
+  criticalPercent: 95,
+} as const satisfies MachineHealthThreshold;
 
 export type MachineHealthLevel =
   | "healthy"
@@ -21,6 +30,45 @@ export interface MachineHealthViewModel {
   readonly t3MemoryBytes: number | null;
 }
 
+export interface MachineHealthHistoryPoint {
+  readonly sampledAt: number;
+  readonly hostCpuUtilization: number | null;
+  readonly hostMemoryUtilization: number | null;
+  readonly storageUtilization: number | null;
+}
+
+export function resolveMachineHealthThreshold(
+  threshold: MachineHealthThreshold | undefined,
+): MachineHealthThreshold {
+  if (threshold === undefined || threshold.attentionPercent >= threshold.criticalPercent) {
+    return DEFAULT_MACHINE_HEALTH_THRESHOLD;
+  }
+  return threshold;
+}
+
+export function appendMachineHealthHistory(
+  history: ReadonlyArray<MachineHealthHistoryPoint>,
+  point: MachineHealthHistoryPoint,
+  limit = MACHINE_HEALTH_HISTORY_LIMIT,
+): ReadonlyArray<MachineHealthHistoryPoint> {
+  if (limit <= 0 || history.at(-1)?.sampledAt === point.sampledAt) return history;
+  return [...history, point].slice(-limit);
+}
+
+export function machineHealthHistoryPeaks(
+  history: ReadonlyArray<MachineHealthHistoryPoint>,
+): Omit<MachineHealthHistoryPoint, "sampledAt"> {
+  const peak = (key: Exclude<keyof MachineHealthHistoryPoint, "sampledAt">) => {
+    const values = history.flatMap((point) => (point[key] === null ? [] : [point[key]]));
+    return values.length === 0 ? null : Math.max(...values);
+  };
+  return {
+    hostCpuUtilization: peak("hostCpuUtilization"),
+    hostMemoryUtilization: peak("hostMemoryUtilization"),
+    storageUtilization: peak("storageUtilization"),
+  };
+}
+
 function utilization(total: number, available: number): number | null {
   if (total <= 0 || available < 0) return null;
   return Math.min(1, Math.max(0, (total - available) / total));
@@ -35,6 +83,7 @@ export function deriveMachineHealth(input: {
   readonly telemetryReceivedAt: number | null;
   readonly host: HostResourcesSnapshot | null;
   readonly telemetry: ResourceTelemetrySummary | null;
+  readonly threshold?: MachineHealthThreshold;
 }): MachineHealthViewModel {
   const storage = input.host?.storage?.volumes[0] ?? null;
   const hostCpuUtilization = input.host?.cpuUtilization ?? null;
@@ -48,6 +97,7 @@ export function deriveMachineHealth(input: {
     input.telemetry?.status === "healthy" || input.telemetry?.status === "degraded";
   const t3CpuPercent = hasT3Metrics ? input.telemetry.currentCpuPercent : null;
   const t3MemoryBytes = hasT3Metrics ? input.telemetry.currentRssBytes : null;
+  const threshold = resolveMachineHealthThreshold(input.threshold);
 
   const withMetrics = (level: MachineHealthLevel): MachineHealthViewModel => ({
     level,
@@ -75,8 +125,12 @@ export function deriveMachineHealth(input: {
   const utilizations = [hostCpuUtilization, hostMemoryUtilization, storageUtilization].filter(
     (value): value is number => value !== null,
   );
-  if (utilizations.some((value) => value >= 0.95)) return withMetrics("critical");
-  if (utilizations.some((value) => value >= 0.8)) return withMetrics("attention");
+  if (utilizations.some((value) => value * 100 >= threshold.criticalPercent)) {
+    return withMetrics("critical");
+  }
+  if (utilizations.some((value) => value * 100 >= threshold.attentionPercent)) {
+    return withMetrics("attention");
+  }
   if (
     input.failed ||
     input.telemetry === null ||

@@ -70,9 +70,11 @@ the filesystem that contains the server workspace; the panel never receives its
 path, file names, or per-process commands.
 
 Host capacity refreshes every ten seconds while the page is open, and the T3
-aggregate updates from the live resource monitor. **Attention** starts at 80%
-utilization and **Critical** at 95%. The panel explicitly marks old, partial,
-unavailable, and failed samples instead of treating missing data as zero.
+aggregate updates from the live resource monitor. Each environment starts with
+**Attention** at 80% utilization and **Critical** at 95%; change either value on
+its card to save a client-local override. The card retains at most 60 host
+samples for session peaks, and explicitly marks old, partial, unavailable, and
+failed samples instead of treating missing data as zero.
 
 ### Balance new threads across machines
 

@@ -711,7 +711,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: "Machine health",
     to: "/settings/connections",
     searchTerms: [
-      "status cpu memory ram storage disk space usage pressure connected environments refresh stale unavailable",
+      "status cpu memory ram storage disk space usage pressure connected environments refresh stale unavailable threshold alert critical peak history",
     ],
   },
   {

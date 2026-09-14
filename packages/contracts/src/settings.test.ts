@@ -284,6 +284,34 @@ describe("ClientSettings load balancing", () => {
   });
 });
 
+describe("ClientSettings machine health thresholds", () => {
+  it("defaults to no per-environment overrides", () => {
+    expect(decodeClientSettings({}).machineHealthThresholds).toEqual({});
+  });
+
+  it("preserves bounded per-environment thresholds", () => {
+    const machineHealthThresholds = {
+      local: { attentionPercent: 75, criticalPercent: 92 },
+    };
+    expect(decodeClientSettings({ machineHealthThresholds }).machineHealthThresholds).toEqual(
+      machineHealthThresholds,
+    );
+    expect(decodeClientSettingsPatch({ machineHealthThresholds }).machineHealthThresholds).toEqual(
+      machineHealthThresholds,
+    );
+  });
+
+  it("rejects percentages outside the supported bounds", () => {
+    expect(() =>
+      decodeClientSettings({
+        machineHealthThresholds: {
+          local: { attentionPercent: 0, criticalPercent: 100 },
+        },
+      }),
+    ).toThrow();
+  });
+});
+
 describe("ClientSettings word wrap", () => {
   it("defaults word wrap on", () => {
     expect(decodeClientSettings({}).wordWrap).toBe(true);

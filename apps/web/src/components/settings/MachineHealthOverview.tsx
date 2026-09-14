@@ -6,13 +6,34 @@ import { useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { useEnvironments } from "~/state/environments";
 import { serverEnvironment } from "~/state/server";
 import { cn } from "~/lib/utils";
-import { deriveMachineHealth, type MachineHealthLevel } from "~/machineHealth";
+import {
+  appendMachineHealthHistory,
+  deriveMachineHealth,
+  machineHealthHistoryPeaks,
+  resolveMachineHealthThreshold,
+  type MachineHealthHistoryPoint,
+  type MachineHealthLevel,
+} from "~/machineHealth";
+import {
+  useClientSettings,
+  useClientSettingsHydrated,
+  useUpdateClientSettings,
+} from "~/hooks/useSettings";
 import { Button } from "../ui/button";
 import { RefreshIcon } from "../ui/refresh-icon";
+import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { SettingsSection } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
 
 const REFRESH_INTERVAL_MS = 10_000;
+const ATTENTION_OPTIONS = [60, 70, 75, 80, 85, 90].map((value) => ({
+  value,
+  label: `${value}%`,
+}));
+const CRITICAL_OPTIONS = [85, 90, 95, 98, 99].map((value) => ({
+  value,
+  label: `${value}%`,
+}));
 
 const LEVEL_PRESENTATION: Record<
   MachineHealthLevel,
@@ -106,7 +127,13 @@ function Metric(props: {
 export function MachineHealthOverview() {
   const registry = useContext(RegistryContext);
   const { environments } = useEnvironments();
+  const settings = useClientSettings();
+  const settingsHydrated = useClientSettingsHydrated();
+  const updateSettings = useUpdateClientSettings();
   const [now, setNow] = useState(() => Date.now());
+  const [historyByEnvironment, setHistoryByEnvironment] = useState<
+    Readonly<Record<string, ReadonlyArray<MachineHealthHistoryPoint>>>
+  >({});
   const targets = useMemo(
     () =>
       environments.map((environment) => ({
@@ -158,7 +185,45 @@ export function MachineHealthOverview() {
     [targets],
   );
   const rows = useAtomValue(rowsAtom);
+  const healthRows = useMemo(
+    () =>
+      rows.map((row) => {
+        const threshold = resolveMachineHealthThreshold(
+          settings.machineHealthThresholds[row.environmentId],
+        );
+        return {
+          ...row,
+          threshold,
+          health: deriveMachineHealth({ ...row, now, threshold }),
+        };
+      }),
+    [now, rows, settings.machineHealthThresholds],
+  );
+
+  const recordCurrentHistory = useCallback(() => {
+    setHistoryByEnvironment((current) => {
+      const next: Record<string, ReadonlyArray<MachineHealthHistoryPoint>> = {};
+      let changed = Object.keys(current).length !== healthRows.length;
+      for (const row of healthRows) {
+        const previous = current[row.environmentId] ?? [];
+        const updated =
+          row.hostReceivedAt === null
+            ? previous
+            : appendMachineHealthHistory(previous, {
+                sampledAt: row.hostReceivedAt,
+                hostCpuUtilization: row.health.hostCpuUtilization,
+                hostMemoryUtilization: row.health.hostMemoryUtilization,
+                storageUtilization: row.health.storageUtilization,
+              });
+        next[row.environmentId] = updated;
+        changed ||= updated !== previous;
+      }
+      return changed ? next : current;
+    });
+  }, [healthRows]);
+
   const refresh = useCallback(() => {
+    recordCurrentHistory();
     setNow(Date.now());
     for (const target of targets) {
       if (!target.connected) continue;
@@ -166,17 +231,28 @@ export function MachineHealthOverview() {
         serverEnvironment.hostResources({ environmentId: target.environmentId, input: {} }),
       );
     }
-  }, [registry, targets]);
+  }, [recordCurrentHistory, registry, targets]);
 
   useEffect(() => {
     const interval = window.setInterval(refresh, REFRESH_INTERVAL_MS);
     return () => window.clearInterval(interval);
   }, [refresh]);
 
-  const healthRows = rows.map((row) => ({
-    ...row,
-    health: deriveMachineHealth({ ...row, now }),
-  }));
+  const updateThreshold = useCallback(
+    (
+      environmentId: string,
+      current: { readonly attentionPercent: number; readonly criticalPercent: number },
+      patch: Partial<{ readonly attentionPercent: number; readonly criticalPercent: number }>,
+    ) => {
+      updateSettings({
+        machineHealthThresholds: {
+          ...settings.machineHealthThresholds,
+          [environmentId]: { ...current, ...patch },
+        },
+      });
+    },
+    [settings.machineHealthThresholds, updateSettings],
+  );
   const criticalCount = healthRows.filter((row) => row.health.level === "critical").length;
   const refreshing = healthRows.some((row) => row.pending);
 
@@ -211,6 +287,8 @@ export function MachineHealthOverview() {
             ? row.host.totalMemoryBytes - row.host.availableMemoryBytes
             : null;
           const storageUsed = storage ? storage.totalBytes - storage.availableBytes : null;
+          const history = historyByEnvironment[row.environmentId] ?? [];
+          const peaks = machineHealthHistoryPeaks(history);
           return (
             <div
               key={row.environmentId}
@@ -273,6 +351,73 @@ export function MachineHealthOverview() {
                       : `${formatBytes(storageUsed)} used · ${formatBytes(storage.availableBytes)} free`
                   }
                 />
+              </div>
+              <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border/60 px-4 py-2.5 text-[10px] text-muted-foreground">
+                <span className="tabular-nums">
+                  Session peaks ({history.length}): CPU {formatRatio(peaks.hostCpuUtilization)} ·
+                  RAM {formatRatio(peaks.hostMemoryUtilization)} · disk{" "}
+                  {formatRatio(peaks.storageUtilization)}
+                </span>
+                <div className="flex items-center gap-1.5">
+                  <span>Attention</span>
+                  <Select
+                    items={ATTENTION_OPTIONS.filter(
+                      (option) => option.value < row.threshold.criticalPercent,
+                    )}
+                    value={row.threshold.attentionPercent}
+                    disabled={!settingsHydrated}
+                    onValueChange={(attentionPercent) => {
+                      if (attentionPercent === null) return;
+                      updateThreshold(row.environmentId, row.threshold, { attentionPercent });
+                    }}
+                  >
+                    <SelectTrigger
+                      size="xs"
+                      className="w-[4.25rem]"
+                      aria-label={`${row.label} attention threshold`}
+                    >
+                      <SelectValue>{row.threshold.attentionPercent}%</SelectValue>
+                    </SelectTrigger>
+                    <SelectPopup align="end" alignItemWithTrigger={false}>
+                      {ATTENTION_OPTIONS.filter(
+                        (option) => option.value < row.threshold.criticalPercent,
+                      ).map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
+                    </SelectPopup>
+                  </Select>
+                  <span>Critical</span>
+                  <Select
+                    items={CRITICAL_OPTIONS.filter(
+                      (option) => option.value > row.threshold.attentionPercent,
+                    )}
+                    value={row.threshold.criticalPercent}
+                    disabled={!settingsHydrated}
+                    onValueChange={(criticalPercent) => {
+                      if (criticalPercent === null) return;
+                      updateThreshold(row.environmentId, row.threshold, { criticalPercent });
+                    }}
+                  >
+                    <SelectTrigger
+                      size="xs"
+                      className="w-[4.25rem]"
+                      aria-label={`${row.label} critical threshold`}
+                    >
+                      <SelectValue>{row.threshold.criticalPercent}%</SelectValue>
+                    </SelectTrigger>
+                    <SelectPopup align="end" alignItemWithTrigger={false}>
+                      {CRITICAL_OPTIONS.filter(
+                        (option) => option.value > row.threshold.attentionPercent,
+                      ).map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
+                    </SelectPopup>
+                  </Select>
+                </div>
               </div>
             </div>
           );
