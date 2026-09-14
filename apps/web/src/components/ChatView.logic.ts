@@ -487,6 +487,7 @@ export function buildLocalDraftThread(
     createdAt: draftThread.createdAt,
     updatedAt: draftThread.createdAt,
     archivedAt: null,
+    deliveryStatus: null,
     settledOverride: null,
     settledAt: null,
     deletedAt: null,

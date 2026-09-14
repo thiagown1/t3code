@@ -6,7 +6,7 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import { canSnooze, effectiveSnoozed } from "@t3tools/client-runtime/state/thread-settled";
-import type { ScopedThreadRef, ThreadId } from "@t3tools/contracts";
+import type { ScopedThreadRef, ThreadDeliveryStatus, ThreadId } from "@t3tools/contracts";
 import { useRouter } from "@tanstack/react-router";
 import { useCallback, useMemo } from "react";
 
@@ -23,6 +23,7 @@ import {
   readEnvironmentSupportsSettlement,
   readEnvironmentSupportsSnooze,
   readEnvironmentSupportsTitleRegeneration,
+  readEnvironmentSupportsDeliveryStatus,
   readThreadShell,
   useProjects,
 } from "../state/entities";
@@ -134,6 +135,7 @@ export function useThreadActionMenu(input: {
           snooze: readEnvironmentSupportsSnooze(threadRef.environmentId),
           pinning: readEnvironmentSupportsPinning(threadRef.environmentId),
           titleRegeneration: readEnvironmentSupportsTitleRegeneration(threadRef.environmentId),
+          deliveryStatus: readEnvironmentSupportsDeliveryStatus(threadRef.environmentId),
         };
         const isRegeneratingTitle = thread.titleRegeneration != null;
         const snoozePresets = resolveSnoozePresets(now, timestampFormat);
@@ -145,6 +147,7 @@ export function useThreadActionMenu(input: {
           canSnoozeNow: canSnooze(thread, { now: now.toISOString() }),
           isRegeneratingTitle,
           isRunning: thread.session?.status === "running" && thread.session.activeTurnId != null,
+          deliveryStatus: thread.deliveryStatus ?? null,
           supports,
           snoozePresets,
         });
@@ -178,6 +181,19 @@ export function useThreadActionMenu(input: {
               },
             }),
           );
+          return;
+        }
+        if (action.startsWith("delivery-status:")) {
+          const value = action.slice("delivery-status:".length);
+          const deliveryStatus: ThreadDeliveryStatus | null =
+            value === "clear" ? null : (value as ThreadDeliveryStatus);
+          const result = await updateThreadMetadata({
+            environmentId: threadRef.environmentId,
+            input: { threadId: threadRef.threadId, deliveryStatus },
+          });
+          if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+            failureToast("Failed to update delivery status", squashAtomCommandFailure(result));
+          }
           return;
         }
         const reportFailure = async (

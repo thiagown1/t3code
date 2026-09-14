@@ -62,6 +62,13 @@ const STATUS_LABEL_BY_STATUS: Partial<
   input: { label: "Input", className: "text-foreground-secondary" },
   working: { label: "Working", className: "text-adaptive-sky-600-400" },
   failed: { label: "Failed", className: "text-danger-foreground" },
+  "waiting-ci": { label: "Waiting for CI", className: "text-foreground-secondary" },
+  "waiting-deploy": { label: "Waiting for deploy", className: "text-foreground-secondary" },
+  "validating-deploy": { label: "Validating deploy", className: "text-foreground-secondary" },
+  "waiting-activation": {
+    label: "Waiting for activation",
+    className: "text-foreground-secondary",
+  },
 };
 
 function threadTimeLabel(thread: EnvironmentThreadShell): string {

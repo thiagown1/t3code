@@ -1,4 +1,4 @@
-import type { ContextMenuItem } from "@t3tools/contracts";
+import type { ContextMenuItem, ThreadDeliveryStatus } from "@t3tools/contracts";
 import type { SnoozePreset } from "@t3tools/client-runtime/state/thread-settled";
 
 /**
@@ -19,6 +19,8 @@ export type ThreadActionMenuId =
   | "rename"
   | "regenerate-title"
   | "mark-unread"
+  | "delivery-status"
+  | `delivery-status:${ThreadDeliveryStatus | "clear"}`
   | "copy"
   | "copy-path"
   | "copy-branch"
@@ -35,11 +37,13 @@ export interface ThreadActionMenuState {
   readonly isRegeneratingTitle: boolean;
   /** Archive rejects a thread with an active turn, so disable it here rather than let the action fail. */
   readonly isRunning: boolean;
+  readonly deliveryStatus: ThreadDeliveryStatus | null;
   readonly supports: {
     readonly settlement: boolean;
     readonly snooze: boolean;
     readonly pinning: boolean;
     readonly titleRegeneration: boolean;
+    readonly deliveryStatus: boolean;
   };
   readonly snoozePresets: ReadonlyArray<SnoozePreset>;
 }
@@ -107,6 +111,27 @@ export function buildThreadActionMenuItems(
         ]
       : []),
     { id: "mark-unread", label: "Mark unread", icon: "mail-open" },
+    ...(state.supports.deliveryStatus
+      ? [
+          {
+            id: "delivery-status" as const,
+            label: "Delivery status",
+            icon: "rocket",
+            children: [
+              { id: "delivery-status:waiting-ci" as const, label: "Waiting for CI" },
+              { id: "delivery-status:waiting-deploy" as const, label: "Waiting for deploy" },
+              { id: "delivery-status:validating-deploy" as const, label: "Validating deploy" },
+              {
+                id: "delivery-status:waiting-activation" as const,
+                label: "Waiting for activation",
+              },
+              ...(state.deliveryStatus !== null
+                ? [{ id: "delivery-status:clear" as const, label: "Clear delivery status" }]
+                : []),
+            ],
+          },
+        ]
+      : []),
     {
       id: "copy",
       label: "Copy",

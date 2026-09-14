@@ -152,6 +152,7 @@ export function pendingThreadCreationShell(
     createdAt: message.createdAt,
     updatedAt: message.createdAt,
     archivedAt: null,
+    deliveryStatus: null,
     settledOverride: null,
     settledAt: null,
     snoozedUntil: null,

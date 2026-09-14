@@ -625,6 +625,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             createdAt: event.payload.createdAt,
             updatedAt: event.payload.updatedAt,
             archivedAt: null,
+            deliveryStatus: null,
             settledOverride: null,
             settledAt: null,
             unsettledAt: null,
@@ -670,6 +671,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           yield* projectionThreadRepository.upsert({
             ...existingRow.value,
             archivedAt: null,
+            deliveryStatus: null,
             updatedAt: event.payload.updatedAt,
           });
           return;
@@ -828,6 +830,9 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
               : {}),
             ...(event.payload.branchPullRequest !== undefined
               ? { branchPullRequest: event.payload.branchPullRequest }
+              : {}),
+            ...(event.payload.deliveryStatus !== undefined
+              ? { deliveryStatus: event.payload.deliveryStatus }
               : {}),
             updatedAt: event.payload.updatedAt,
           });

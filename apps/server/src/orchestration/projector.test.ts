@@ -92,6 +92,7 @@ describe("orchestration projector", () => {
         createdAt: now,
         updatedAt: now,
         archivedAt: null,
+        deliveryStatus: null,
         activeOrderKey: null,
         settledOverride: null,
         settledAt: null,
@@ -172,9 +173,25 @@ describe("orchestration projector", () => {
         url: "https://github.com/pingdotgg/t3code/pull/43",
       };
       const updates = [
-        { payload: { linkedPullRequest, branchPullRequest }, expected: branchPullRequest },
-        { payload: { title: "Renamed thread" }, expected: branchPullRequest },
-        { payload: { branchPullRequest: null }, expected: null },
+        {
+          payload: {
+            linkedPullRequest,
+            branchPullRequest,
+            deliveryStatus: "waiting-deploy" as const,
+          },
+          expected: branchPullRequest,
+          expectedDeliveryStatus: "waiting-deploy",
+        },
+        {
+          payload: { title: "Renamed thread" },
+          expected: branchPullRequest,
+          expectedDeliveryStatus: "waiting-deploy",
+        },
+        {
+          payload: { branchPullRequest: null, deliveryStatus: null },
+          expected: null,
+          expectedDeliveryStatus: null,
+        },
       ];
 
       for (const [index, update] of updates.entries()) {
@@ -189,6 +206,7 @@ describe("orchestration projector", () => {
         );
         expect(model.threads[0]?.branchPullRequest).toEqual(update.expected);
         expect(model.threads[0]?.linkedPullRequest).toEqual(linkedPullRequest);
+        expect(model.threads[0]?.deliveryStatus).toEqual(update.expectedDeliveryStatus);
       }
     }),
   );

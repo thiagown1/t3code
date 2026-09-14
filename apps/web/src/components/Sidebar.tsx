@@ -33,6 +33,7 @@ import {
   type EnvironmentMachineKind,
   type ProjectIconOverride,
   type ScopedThreadRef,
+  type ThreadDeliveryStatus,
   type ThreadId,
 } from "@t3tools/contracts";
 import type { TimestampFormat } from "@t3tools/contracts/settings";
@@ -52,6 +53,7 @@ import {
   PinIcon,
   PinOffIcon,
   PlusIcon,
+  RocketIcon,
   SettingsIcon,
   ShieldQuestionIcon,
   SquarePenIcon,
@@ -1153,19 +1155,32 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                   icon: "failed" as const,
                   className: "text-red-700 dark:text-red-300",
                 }
-              : isWoke
+              : thread.deliveryStatus != null
                 ? {
-                    label: "Woke",
-                    icon: "woke" as const,
-                    className: "text-amber-700 dark:text-amber-300",
+                    label:
+                      thread.deliveryStatus === "waiting-ci"
+                        ? "Waiting for CI"
+                        : thread.deliveryStatus === "waiting-deploy"
+                          ? "Waiting for deploy"
+                          : thread.deliveryStatus === "validating-deploy"
+                            ? "Validating deploy"
+                            : "Waiting for activation",
+                    icon: "delivery" as const,
+                    className: "text-violet-700 dark:text-violet-300",
                   }
-                : isUnread
+                : isWoke
                   ? {
-                      label: "Done",
-                      icon: "done" as const,
-                      className: "text-emerald-700 dark:text-emerald-300",
+                      label: "Woke",
+                      icon: "woke" as const,
+                      className: "text-amber-700 dark:text-amber-300",
                     }
-                  : null;
+                  : isUnread
+                    ? {
+                        label: "Done",
+                        icon: "done" as const,
+                        className: "text-emerald-700 dark:text-emerald-300",
+                      }
+                    : null;
   const isWokeStatus = topStatus?.icon === "woke";
 
   const branchMismatch = resolveLocalCheckoutBranchMismatch({
@@ -1819,6 +1834,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                             <EyeIcon aria-hidden className="size-4 shrink-0" />
                           ) : topStatus.icon === "done" ? (
                             <CircleCheckIcon aria-hidden className="size-4 shrink-0" />
+                          ) : topStatus.icon === "delivery" ? (
+                            <RocketIcon aria-hidden className="size-4 shrink-0" />
                           ) : null}
                           {/* The label alone is the live region: a role="status"
                             wrapper around the ticking duration would make
@@ -3989,6 +4006,9 @@ export default function Sidebar() {
         const supportsTitleRegeneration =
           serverConfigs.get(thread.environmentId)?.environment.capabilities
             .threadTitleRegeneration === true;
+        const supportsDeliveryStatus =
+          serverConfigs.get(thread.environmentId)?.environment.capabilities.threadDeliveryStatus ===
+          true;
         const isRegeneratingTitle = thread.titleRegeneration != null;
         const isSettled = settledThreadKeysRef.current.has(threadKey);
         const isSnoozed = snoozedThreadKeysRef.current.has(threadKey);
@@ -4006,11 +4026,13 @@ export default function Sidebar() {
               isRegeneratingTitle,
               isRunning:
                 thread.session?.status === "running" && thread.session.activeTurnId != null,
+              deliveryStatus: thread.deliveryStatus ?? null,
               supports: {
                 settlement: supportsSettlement,
                 snooze: supportsSnooze,
                 pinning: supportsPinning,
                 titleRegeneration: supportsTitleRegeneration,
+                deliveryStatus: supportsDeliveryStatus,
               },
               snoozePresets,
             }),
@@ -4023,6 +4045,26 @@ export default function Sidebar() {
             (candidate) => `snooze:${candidate.id}` === clicked.value,
           );
           if (preset) attemptSnooze(threadRef, preset);
+          return;
+        }
+        if (clicked.value?.startsWith("delivery-status:")) {
+          const value = clicked.value.slice("delivery-status:".length);
+          const deliveryStatus: ThreadDeliveryStatus | null =
+            value === "clear" ? null : (value as ThreadDeliveryStatus);
+          const result = await updateThreadMetadata({
+            environmentId: threadRef.environmentId,
+            input: { threadId: threadRef.threadId, deliveryStatus },
+          });
+          if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+            const error = squashAtomCommandFailure(result);
+            toastManager.add(
+              stackedThreadToast({
+                type: "error",
+                title: "Failed to update delivery status",
+                description: error instanceof Error ? error.message : "An error occurred.",
+              }),
+            );
+          }
           return;
         }
         switch (clicked.value) {

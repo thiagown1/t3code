@@ -220,6 +220,14 @@ export function readEnvironmentSupportsTitleRegeneration(environmentId: Environm
   );
 }
 
+/** Whether the environment persists operator-owned delivery gates. */
+export function readEnvironmentSupportsDeliveryStatus(environmentId: EnvironmentId): boolean {
+  return (
+    appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities
+      .threadDeliveryStatus === true
+  );
+}
+
 /** Whether the environment's server understands thread.pin.reorder (and
     orderKey on thread.pin). Same version-skew contract as settlement. */
 export function readEnvironmentSupportsPinReorder(environmentId: EnvironmentId): boolean {

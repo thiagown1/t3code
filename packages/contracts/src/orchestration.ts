@@ -692,6 +692,17 @@ export const ThreadPullRequestKey = Schema.Struct({
 });
 export type ThreadPullRequestKey = typeof ThreadPullRequestKey.Type;
 
+/** Operator-owned delivery gate after the agent turn is complete. This is
+ * deliberately separate from the provider session lifecycle: none of these
+ * states performs a deploy, changes a feature flag, or implies validation. */
+export const ThreadDeliveryStatus = Schema.Literals([
+  "waiting-ci",
+  "waiting-deploy",
+  "validating-deploy",
+  "waiting-activation",
+]);
+export type ThreadDeliveryStatus = typeof ThreadDeliveryStatus.Type;
+
 export const ThreadPullRequestLink = Schema.Struct({
   ...ThreadPullRequestKey.fields,
   url: TrimmedNonEmptyString,
@@ -723,6 +734,8 @@ export const OrchestrationThread = Schema.Struct({
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   archivedAt: Schema.NullOr(IsoDateTime).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
+  // Optional on the wire so older clients and persisted snapshots still decode.
+  deliveryStatus: Schema.optional(Schema.NullOr(ThreadDeliveryStatus)),
   settledOverride: Schema.NullOr(Schema.Literals(["settled", "active"])).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
@@ -808,6 +821,7 @@ export const OrchestrationThreadShell = Schema.Struct({
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   archivedAt: Schema.NullOr(IsoDateTime).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
+  deliveryStatus: Schema.optional(Schema.NullOr(ThreadDeliveryStatus)),
   settledOverride: Schema.NullOr(Schema.Literals(["settled", "active"])).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
@@ -1144,6 +1158,7 @@ const ThreadMetaUpdateCommand = Schema.Struct({
   expectedBranch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   worktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
+  deliveryStatus: Schema.optional(Schema.NullOr(ThreadDeliveryStatus)),
 }).check(
   Schema.makeFilter(
     (input) =>
@@ -1693,6 +1708,7 @@ export const ThreadMetaUpdatedPayload = Schema.Struct({
   // thread.pull-request-linked still decode and replay into the link table.
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   branchPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
+  deliveryStatus: Schema.optional(Schema.NullOr(ThreadDeliveryStatus)),
   updatedAt: IsoDateTime,
 });
 
