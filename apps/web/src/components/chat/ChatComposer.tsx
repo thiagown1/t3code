@@ -229,6 +229,7 @@ import {
 import { requestConfirmDialog } from "~/confirmDialog";
 import { encodeComposerContextFragment } from "@t3tools/shared/composerContextClipboard";
 import type { ComposerContextClipboardFragment, ComposerContextRecord } from "@t3tools/contracts";
+import { parseParallelThreadCommand } from "~/parallelThreads";
 import { resolveAssetUrl } from "~/assets/assetUrls";
 import { assetEnvironment } from "~/state/assets";
 import { readPreparedConnection } from "~/state/session";
@@ -2312,6 +2313,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     if (composerTrigger.kind === "slash-command") {
       const builtInSlashCommandItems = [
         {
+          id: "slash:parallel",
+          type: "slash-command",
+          command: "parallel",
+          label: "/paralelo",
+          description: "Start a linked task without interrupting this thread",
+        },
+        {
           id: "slash:model",
           type: "slash-command",
           command: "model",
@@ -2635,7 +2643,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     ],
   );
   const collapsedComposerPrimaryActionDisabled =
-    phase === "running" ||
+    (phase === "running" && parseParallelThreadCommand(prompt) === null) ||
     isSendBusy ||
     isSendDisabled ||
     isConnecting ||
@@ -3557,6 +3565,22 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         return;
       }
       if (item.type === "slash-command") {
+        if (item.command === "parallel") {
+          const replacement = "/paralelo ";
+          const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
+            snapshot.value,
+            trigger.rangeEnd,
+            replacement,
+          );
+          const applied = applyPromptReplacement(
+            trigger.rangeStart,
+            replacementRangeEnd,
+            replacement,
+            { expectedText: snapshot.value.slice(trigger.rangeStart, replacementRangeEnd) },
+          );
+          if (applied) setComposerHighlightedItemId(null);
+          return;
+        }
         if (item.command === "model") {
           const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
             expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
@@ -6863,7 +6887,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     isPreparingWorktree={isPreparingWorktree}
                     hasSendableContent={composerSendState.hasSendableContent}
                     preserveComposerFocusOnPointerDown={isMobileViewport || isComposerResting}
-                    showSendWhileRunning={isMobileViewport}
+                    showSendWhileRunning={
+                      isMobileViewport || parseParallelThreadCommand(prompt) !== null
+                    }
                     onPreviousPendingQuestion={onPreviousActivePendingUserInputQuestion}
                     onInterrupt={handleInterruptPrimaryAction}
                     onImplementPlanInNewThread={handleImplementPlanInNewThreadPrimaryAction}

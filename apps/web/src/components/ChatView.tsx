@@ -21,6 +21,7 @@ import {
   type AssistantCitation,
   type ApprovalRequestId,
   type ChatFileAttachment,
+  ComposerContextId,
   DEFAULT_MODEL,
   type EnvironmentId,
   type MessageId,
@@ -243,6 +244,12 @@ import {
   projectScriptIdFromCommand,
 } from "~/projectScripts";
 import { newDraftId, newMessageId, newThreadId } from "~/lib/utils";
+import {
+  buildParallelThreadStartMessage,
+  parallelThreadSnapshotIsStale,
+  parseParallelThreadCommand,
+  readParallelThreadSourceSnapshot,
+} from "~/parallelThreads";
 import { useBrowserHistoryStore } from "~/browserHistoryStore";
 import { registerFaviconProjectForThread } from "~/browserFaviconStore";
 import { getProviderModelCapabilities } from "../providerModels";
@@ -1764,6 +1771,7 @@ export default function ChatView(props: ChatViewProps) {
   const attachmentPreviewHandoffByMessageIdRef = useRef<Record<string, string[]>>({});
   const attachmentPreviewPromotionInFlightByMessageIdRef = useRef<Record<string, true>>({});
   const sendInFlightRef = useRef(false);
+  const parallelStartInFlightRef = useRef(false);
   const environmentUnavailableSendToastSlotRef = useRef(0);
   const feedbackUploadsInFlightRef = useRef(new Set<string>());
   const terminalUiOpenByThreadRef = useRef<Record<string, boolean>>({});
@@ -1942,6 +1950,18 @@ export default function ChatView(props: ChatViewProps) {
   );
   const activeThreadKey = activeThreadRef ? scopedThreadKey(activeThreadRef) : null;
   const activeThreadShell = useThreadShell(isServerThread ? activeThreadRef : null);
+  const parallelThreadSource = useMemo(
+    () => readParallelThreadSourceSnapshot(activeThread?.messages ?? []),
+    [activeThread?.messages],
+  );
+  const parallelSourceThreadRef = useMemo(
+    () =>
+      parallelThreadSource
+        ? scopeThreadRef(environmentId, parallelThreadSource.sourceThreadId)
+        : null,
+    [environmentId, parallelThreadSource],
+  );
+  const parallelSourceThreadShell = useThreadShell(parallelSourceThreadRef);
   const [timelineAnchor, setTimelineAnchor] = useState<{
     readonly threadKey: string | null;
     readonly messageId: MessageId | null;
@@ -6930,6 +6950,121 @@ export default function ChatView(props: ChatViewProps) {
     }
   };
 
+  const startParallelThread = async (objective: string): Promise<boolean> => {
+    if (parallelStartInFlightRef.current) return false;
+    if (!activeThread || !activeProject || !isServerThread) {
+      toastManager.add(
+        stackedThreadToast({
+          type: "warning",
+          title: "Start this thread first",
+          description: "Parallel work needs a persisted source conversation.",
+        }),
+      );
+      return false;
+    }
+    if (activeEnvironmentUnavailable) {
+      toastManager.add(
+        stackedThreadToast({
+          type: "warning",
+          title: "Environment not connected",
+          description: "Reconnect before starting parallel work.",
+        }),
+      );
+      return false;
+    }
+
+    parallelStartInFlightRef.current = true;
+    const childThreadId = newThreadId();
+    const childMessageId = newMessageId();
+    const createdAt = new Date().toISOString();
+    const childThreadRef = scopeThreadRef(environmentId, childThreadId);
+    const startMessage = buildParallelThreadStartMessage({
+      contextId: ComposerContextId.make(`parallel_${randomHex(12)}`),
+      objective,
+      forkedAt: createdAt,
+      sourceThread: activeThread,
+      activePlan: activeProposedPlan,
+    });
+    const title = truncate(`Parallel: ${objective}`);
+    const branch = activeThread.branch ?? null;
+
+    try {
+      const result = await startThreadTurn({
+        environmentId,
+        input: {
+          threadId: childThreadId,
+          message: {
+            messageId: childMessageId,
+            role: "user",
+            text: startMessage.text,
+            attachments: [],
+            context: startMessage.context,
+          },
+          modelSelection: activeThread.modelSelection,
+          titleSeed: title,
+          runtimeMode: activeThread.runtimeMode,
+          interactionMode: activeThread.interactionMode,
+          bootstrap: {
+            createThread: {
+              projectId: activeProject.id,
+              title,
+              modelSelection: activeThread.modelSelection,
+              runtimeMode: activeThread.runtimeMode,
+              interactionMode: activeThread.interactionMode,
+              branch,
+              worktreePath: null,
+              createdAt,
+            },
+            ...(branch
+              ? {
+                  prepareWorktree: {
+                    projectCwd: activeProject.workspaceRoot,
+                    baseBranch: branch,
+                    branch: buildTemporaryWorktreeBranchName(randomHex),
+                  },
+                  runSetupScript: true,
+                }
+              : {}),
+          },
+          createdAt,
+        },
+      });
+      if (result._tag === "Failure") {
+        if (!isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Could not start parallel thread",
+              description: error instanceof Error ? error.message : "An error occurred.",
+            }),
+          );
+        }
+        return false;
+      }
+      toastManager.add(
+        stackedThreadToast({
+          type: "success",
+          title: "Parallel thread started",
+          description: "The source thread keeps running with independent state.",
+          timeout: 8_000,
+          actionProps: {
+            children: "Open",
+            onClick: () => {
+              void navigate({
+                to: "/$environmentId/$threadId",
+                params: buildThreadRouteParams(childThreadRef),
+              });
+            },
+          },
+        }),
+      );
+      return true;
+    } finally {
+      parallelStartInFlightRef.current = false;
+    }
+  };
+
   const onSend = async (
     e?: { preventDefault: () => void },
     submissionIntent: ComposerSubmissionIntent = "foreground",
@@ -6939,6 +7074,26 @@ export default function ChatView(props: ChatViewProps) {
     },
   ) => {
     e?.preventDefault();
+    const parallelCommand =
+      !directAnnotation && !composerHasNonPromptContent
+        ? parseParallelThreadCommand(promptRef.current)
+        : null;
+    if (parallelCommand) {
+      if (parallelCommand.objective === null) {
+        toastManager.add({
+          type: "warning",
+          title: "Add an objective",
+          description: "Use /paralelo followed by what the new thread should do.",
+        });
+        return;
+      }
+      if (await startParallelThread(parallelCommand.objective)) {
+        promptRef.current = "";
+        clearComposerDraftContent(composerDraftTarget);
+        composerRef.current?.resetCursorState();
+      }
+      return;
+    }
     // Typed out in full rather than picked from the menu. Attachments or contexts
     // mean the user is sending a prompt, so those go through as usual.
     if (
@@ -8957,6 +9112,42 @@ export default function ChatView(props: ChatViewProps) {
             ) : null}
             {/* Banners overlay the timeline without changing its content height. */}
             <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex flex-col">
+              {parallelThreadSource ? (
+                <div
+                  className="pointer-events-auto mx-auto mt-2 flex max-w-[calc(100%-2rem)] items-center gap-2 rounded-full border border-border/70 bg-background/95 py-1 pr-1 pl-3 text-xs shadow-sm backdrop-blur"
+                  data-testid="parallel-thread-source-banner"
+                >
+                  <GitBranchIcon className="size-3.5 shrink-0 text-muted-foreground" />
+                  <span className="min-w-0 truncate">
+                    Parallel from {parallelThreadSource.sourceThreadTitle}
+                  </span>
+                  {parallelSourceThreadShell &&
+                  parallelThreadSnapshotIsStale(
+                    parallelThreadSource.sourceUpdatedAt,
+                    parallelSourceThreadShell.updatedAt,
+                  ) ? (
+                    <span className="shrink-0 text-amber-600 dark:text-amber-400">
+                      Source updated
+                    </span>
+                  ) : null}
+                  <Button
+                    type="button"
+                    size="xs"
+                    variant="ghost"
+                    className="h-6 shrink-0 rounded-full px-2"
+                    disabled={parallelSourceThreadShell === null}
+                    onClick={() => {
+                      if (!parallelSourceThreadRef) return;
+                      void navigate({
+                        to: "/$environmentId/$threadId",
+                        params: buildThreadRouteParams(parallelSourceThreadRef),
+                      });
+                    }}
+                  >
+                    Back to source
+                  </Button>
+                </div>
+              ) : null}
               <ProviderStatusBanner
                 status={visibleProviderStatus}
                 onDismiss={() => setDismissedProviderStatusBannerKey(providerStatusBannerKey)}
