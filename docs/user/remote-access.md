@@ -61,6 +61,19 @@ created in Settings can only be copied from the client that created them while
 its Connections page stays open. If you leave or reload that page, create
 another link to share.
 
+### Check machine health
+
+On web and desktop, **Settings → Connections → Machine health** shows CPU,
+memory, and storage pressure for every connected environment. Host CPU and
+memory are shown separately from the aggregate T3 process footprint. Storage is
+the filesystem that contains the server workspace; the panel never receives its
+path, file names, or per-process commands.
+
+Host capacity refreshes every ten seconds while the page is open, and the T3
+aggregate updates from the live resource monitor. **Attention** starts at 80%
+utilization and **Critical** at 95%. The panel explicitly marks old, partial,
+unavailable, and failed samples instead of treating missing data as zero.
+
 ### Balance new threads across machines
 
 Auto balance is off by default. On web and desktop, enable it in

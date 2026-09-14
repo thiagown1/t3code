@@ -7,12 +7,27 @@ import { DesktopUpdateStateSchema } from "./ipc.ts";
 export const RESOURCE_MONITOR_PROTOCOL_VERSION = 3 as const;
 
 /** Whole-host capacity, independent of T3's process diagnostics. */
+export const HostStorageVolumeSnapshot = Schema.Struct({
+  kind: Schema.Literal("workspace"),
+  availableBytes: NonNegativeInt,
+  totalBytes: NonNegativeInt,
+});
+export type HostStorageVolumeSnapshot = typeof HostStorageVolumeSnapshot.Type;
+
+export const HostStorageSnapshot = Schema.Struct({
+  status: Schema.Literals(["available", "unavailable", "error"]),
+  volumes: Schema.Array(HostStorageVolumeSnapshot),
+});
+export type HostStorageSnapshot = typeof HostStorageSnapshot.Type;
+
 export const HostResourcesSnapshot = Schema.Struct({
   sampledAt: NonNegativeInt,
   cpuUtilization: Schema.NullOr(Schema.Number.check(Schema.isBetween({ minimum: 0, maximum: 1 }))),
   cpuCount: NonNegativeInt,
   availableMemoryBytes: NonNegativeInt,
   totalMemoryBytes: NonNegativeInt,
+  /** Optional so newer clients can still inspect older connected environments. */
+  storage: Schema.optional(HostStorageSnapshot),
 });
 export type HostResourcesSnapshot = typeof HostResourcesSnapshot.Type;
 
@@ -414,6 +429,16 @@ export const ResourceTelemetryGroups = Schema.Struct({
   allT3: ResourceTelemetryAggregate,
 });
 export type ResourceTelemetryGroups = typeof ResourceTelemetryGroups.Type;
+
+/** Aggregate T3 footprint for machine health views. Never includes process identity or commands. */
+export const ResourceTelemetrySummary = Schema.Struct({
+  readAt: Schema.DateTimeUtc,
+  status: ResourceTelemetrySourceStatus,
+  processCount: NonNegativeInt,
+  currentCpuPercent: Schema.Number,
+  currentRssBytes: NonNegativeInt,
+});
+export type ResourceTelemetrySummary = typeof ResourceTelemetrySummary.Type;
 
 export const ResourceTelemetrySourceHealth = Schema.Struct({
   status: ResourceTelemetrySourceStatus,
