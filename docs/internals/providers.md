@@ -13,6 +13,9 @@ Context-window telemetry follows the same boundary. Adapters normalize provider 
 `context-window.updated` activities; clients derive the newest valid snapshot and share one
 presentation model across web and mobile. Compact surfaces may round counts, but detail surfaces
 must preserve exact provider values and label omitted fields instead of estimating them.
+Compaction history is reconstructed from durable `context-compaction` activities. A correlated
+request id marks a manual compaction; an uncorrelated provider event is presented as
+provider-native. Before/after counts remain optional because not every provider reports them.
 
 ## Process and account isolation
 

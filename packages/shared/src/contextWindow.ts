@@ -29,6 +29,15 @@ export type ContextWindowSnapshot = NullableContextWindowUsage & {
   readonly updatedAt: string;
 };
 
+export interface ContextCompactionRecord {
+  readonly id: string;
+  readonly createdAt: string;
+  readonly method: "manual" | "provider-native";
+  readonly beforeTokens: number | null;
+  readonly afterTokens: number | null;
+  readonly detail: string | null;
+}
+
 export function deriveLatestContextWindowSnapshot(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
 ): ContextWindowSnapshot | null {
@@ -74,6 +83,32 @@ export function deriveLatestContextWindowSnapshot(
   return null;
 }
 
+export function deriveContextCompactionHistory(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+): ReadonlyArray<ContextCompactionRecord> {
+  const history: ContextCompactionRecord[] = [];
+  for (let index = activities.length - 1; index >= 0; index -= 1) {
+    const activity = activities[index];
+    if (!activity || activity.kind !== "context-compaction") continue;
+    const payload = asRecord(activity.payload);
+    history.push({
+      id: String(activity.id),
+      createdAt: activity.createdAt,
+      method:
+        typeof payload?.requestId === "string" && payload.requestId.trim().length > 0
+          ? "manual"
+          : "provider-native",
+      beforeTokens: asNonNegativeNumber(payload?.beforeTokens),
+      afterTokens: asNonNegativeNumber(payload?.afterTokens),
+      detail:
+        typeof payload?.detail === "string" && payload.detail.trim().length > 0
+          ? payload.detail.trim()
+          : null,
+    });
+  }
+  return history;
+}
+
 /** Short display for persistent composer telemetry; it may round by design. */
 export function formatContextWindowTokens(value: number | null | undefined): string {
   if (value === null || value === undefined || !Number.isFinite(value)) return "0";
@@ -94,6 +129,15 @@ export function formatContextWindowPercentage(value: number | null | undefined):
   return value === null || value === undefined || !Number.isFinite(value)
     ? null
     : `${value.toFixed(1)}%`;
+}
+
+export function formatContextCompactionMode(
+  usage: ContextWindowSnapshot,
+  manualCompactionAvailable: boolean,
+): string {
+  if (usage.compactsAutomatically) return "Automatic · Provider-native";
+  if (manualCompactionAvailable) return "Manual";
+  return "Not reported";
 }
 
 export interface ContextWindowPresentation {

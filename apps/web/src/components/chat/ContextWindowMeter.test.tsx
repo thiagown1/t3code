@@ -28,6 +28,7 @@ const usage = deriveLatestContextWindowSnapshot([
       lastCachedInputTokens: 10_000,
       lastOutputTokens: 2_345,
       lastReasoningOutputTokens: 1_234,
+      compactsAutomatically: true,
     },
     turnId: TurnId.make("turn-1"),
     createdAt: "2026-08-24T12:00:00.000Z",
@@ -74,6 +75,16 @@ describe("ContextWindowMeter", () => {
         usage={usage}
         modelDisplayName="GPT-6-Astra"
         providerDisplayName="Codex"
+        compactions={[
+          {
+            id: "compaction-1",
+            createdAt: "2026-08-24T11:30:00.000Z",
+            method: "manual",
+            beforeTokens: 200_123,
+            afterTokens: 40_456,
+            detail: null,
+          },
+        ]}
       />,
     );
 
@@ -87,5 +98,9 @@ describe("ContextWindowMeter", () => {
     expect(markup).toContain("GPT-6-Astra");
     expect(markup).toContain("Provider telemetry · Codex");
     expect(markup).toContain('dateTime="2026-08-24T12:00:00.000Z"');
+    expect(markup).toContain("Automatic · Provider-native");
+    expect(markup).toContain("Manual");
+    expect(markup).toContain("200,123 → 40,456");
+    expect(markup).toContain('dateTime="2026-08-24T11:30:00.000Z"');
   });
 });

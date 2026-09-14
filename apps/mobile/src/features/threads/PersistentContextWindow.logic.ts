@@ -1,4 +1,10 @@
-import { presentContextWindow, type ContextWindowSnapshot } from "@t3tools/shared/contextWindow";
+import {
+  type ContextCompactionRecord,
+  type ContextWindowSnapshot,
+  formatContextCompactionMode,
+  formatContextWindowExactTokens,
+  presentContextWindow,
+} from "@t3tools/shared/contextWindow";
 
 function formatUpdatedAt(value: string): string {
   const timestamp = Date.parse(value);
@@ -14,8 +20,11 @@ export function formatContextWindowAlert(props: {
   readonly usage: ContextWindowSnapshot;
   readonly modelDisplayName?: string | null | undefined;
   readonly providerDisplayName?: string | null | undefined;
+  readonly compactions?: ReadonlyArray<ContextCompactionRecord> | undefined;
+  readonly manualCompactionAvailable?: boolean | undefined;
 }): string {
   const presentation = presentContextWindow(props.usage);
+  const latestCompaction = props.compactions?.[0] ?? null;
   const source = props.providerDisplayName
     ? `${presentation.source} · ${props.providerDisplayName}`
     : presentation.source;
@@ -33,5 +42,18 @@ export function formatContextWindowAlert(props: {
     `Cache read: ${presentation.lastCachedInputTokens}`,
     `Output: ${presentation.lastOutputTokens}`,
     `Reasoning: ${presentation.lastReasoningOutputTokens}`,
+    "",
+    "Compaction",
+    `Compaction: ${formatContextCompactionMode(props.usage, props.manualCompactionAvailable === true)}`,
+    `Automatic threshold: ${formatContextWindowExactTokens(props.usage.autoCompactThreshold)}`,
+    `Last compacted: ${latestCompaction ? formatUpdatedAt(latestCompaction.createdAt) : "Not reported"}`,
+    `Last result: ${
+      latestCompaction
+        ? `${formatContextWindowExactTokens(latestCompaction.beforeTokens)} → ${formatContextWindowExactTokens(latestCompaction.afterTokens)}`
+        : "Not reported"
+    }`,
+    ...(props.compactions ?? []).flatMap((compaction, index) => [
+      `${compaction.method === "manual" ? "Manual" : "Provider-native"} · ${formatContextWindowExactTokens(compaction.beforeTokens)} → ${formatContextWindowExactTokens(compaction.afterTokens)}`,
+    ]),
   ].join("\n");
 }

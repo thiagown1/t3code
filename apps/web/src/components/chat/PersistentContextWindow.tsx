@@ -1,4 +1,8 @@
-import { presentContextWindow, type ContextWindowSnapshot } from "~/lib/contextWindow";
+import {
+  presentContextWindow,
+  type ContextCompactionRecord,
+  type ContextWindowSnapshot,
+} from "~/lib/contextWindow";
 import { CircleGaugeIcon } from "lucide-react";
 
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
@@ -11,6 +15,7 @@ export function PersistentContextWindow(props: {
   readonly unavailableMessage?: string | null;
   readonly modelDisplayName?: string | null | undefined;
   readonly providerDisplayName?: string | null | undefined;
+  readonly compactions?: ReadonlyArray<ContextCompactionRecord> | undefined;
   readonly onCompact?: (() => void) | undefined;
   readonly compactDisabled?: boolean | undefined;
   readonly compactDisabledReason?: string | null | undefined;
@@ -69,6 +74,7 @@ export function PersistentContextWindow(props: {
               usage={props.usage}
               modelDisplayName={props.modelDisplayName}
               providerDisplayName={props.providerDisplayName}
+              compactions={props.compactions}
               onCompact={props.onCompact}
               compactDisabled={props.compactDisabled}
               compactDisabledReason={props.compactDisabledReason}

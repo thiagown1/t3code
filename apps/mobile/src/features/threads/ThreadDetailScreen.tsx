@@ -69,7 +69,10 @@ import { useWorkspaceContentWidth } from "../layout/workspace-content-width";
 
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { collectProviderUsageLimits } from "@t3tools/shared/usageLimits";
-import { deriveLatestContextWindowSnapshot } from "@t3tools/shared/contextWindow";
+import {
+  deriveContextCompactionHistory,
+  deriveLatestContextWindowSnapshot,
+} from "@t3tools/shared/contextWindow";
 import type { ComposerEditorHandle } from "../../components/ComposerEditor";
 import type { StatusTone } from "../../components/StatusPill";
 import type { DraftComposerAttachment } from "../../lib/composerImages";
@@ -338,6 +341,10 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
   const contentPresentationKind = props.contentPresentation.kind;
   const contextWindow = useMemo(
     () => deriveLatestContextWindowSnapshot(props.selectedThreadActivities),
+    [props.selectedThreadActivities],
+  );
+  const contextCompactions = useMemo(
+    () => deriveContextCompactionHistory(props.selectedThreadActivities),
     [props.selectedThreadActivities],
   );
   const selectedProvider = props.serverConfig?.providers.find(
@@ -982,6 +989,11 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                   unavailableMessage={contextWindowUnavailableMessage}
                   modelDisplayName={contextWindowModelDisplayName}
                   providerDisplayName={contextWindowProviderDisplayName}
+                  compactions={contextCompactions}
+                  manualCompactionAvailable={
+                    selectedProvider?.slashCommands.some((command) => command.name === "compact") ??
+                    false
+                  }
                 />
                 {props.feedbackSubmissions.map((submission) => (
                   <ComposerFeedback

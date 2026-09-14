@@ -146,6 +146,11 @@ output, and reasoning counts. A missing value is shown as **Not reported**; T3
 Code does not estimate provider measurements. Web and desktop also offer
 **Compact context** there when the provider supports manual compaction.
 
+The same detail view identifies automatic, manual, and provider-native
+compaction, its reported threshold, the latest before/after counts, and the
+compaction history loaded for the conversation. Mobile includes the same
+information in its context summary.
+
 ## Context in your message
 
 Context you attach lands where your cursor is, as a chip inside your text: a terminal excerpt,

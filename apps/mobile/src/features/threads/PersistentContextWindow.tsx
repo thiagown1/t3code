@@ -1,4 +1,8 @@
-import { presentContextWindow, type ContextWindowSnapshot } from "@t3tools/shared/contextWindow";
+import {
+  presentContextWindow,
+  type ContextCompactionRecord,
+  type ContextWindowSnapshot,
+} from "@t3tools/shared/contextWindow";
 import { Alert, Pressable, View } from "react-native";
 
 import { SymbolView } from "../../components/AppSymbol";
@@ -10,6 +14,8 @@ export function PersistentContextWindow(props: {
   readonly unavailableMessage?: string | null;
   readonly modelDisplayName?: string | null | undefined;
   readonly providerDisplayName?: string | null | undefined;
+  readonly compactions?: ReadonlyArray<ContextCompactionRecord> | undefined;
+  readonly manualCompactionAvailable?: boolean | undefined;
 }) {
   if (props.usage === null) {
     if (!props.unavailableMessage) return null;
@@ -46,6 +52,8 @@ export function PersistentContextWindow(props: {
             usage: props.usage!,
             modelDisplayName: props.modelDisplayName,
             providerDisplayName: props.providerDisplayName,
+            compactions: props.compactions,
+            manualCompactionAvailable: props.manualCompactionAvailable,
           }),
         )
       }

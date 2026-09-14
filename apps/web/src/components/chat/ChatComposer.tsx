@@ -959,7 +959,7 @@ import {
 } from "./composerPromptHistory";
 import type { PendingUserInputDraftAnswer } from "../../pendingUserInput";
 import type { PendingApproval, PendingUserInput } from "../../session-logic";
-import type { ContextWindowSnapshot } from "../../lib/contextWindow";
+import type { ContextCompactionRecord, ContextWindowSnapshot } from "../../lib/contextWindow";
 import {
   formatProviderSkillDisplayName,
   getProviderSlashCommandsForSlashMenu,
@@ -1148,6 +1148,7 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
 const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(props: {
   compact: boolean;
   activeContextWindow: ContextWindowSnapshot | null;
+  activeContextCompactions: ReadonlyArray<ContextCompactionRecord>;
   reserveContextWindowMeter: boolean;
   activeThreadModelDisplayName: string | null;
   activeThreadProviderDisplayName: string | null;
@@ -1183,6 +1184,7 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
           usage={props.activeContextWindow}
           modelDisplayName={props.activeThreadModelDisplayName}
           providerDisplayName={props.activeThreadProviderDisplayName}
+          compactions={props.activeContextCompactions}
           onCompact={props.onCompactContext}
           compactDisabled={props.compactDisabled}
           compactDisabledReason={props.compactDisabledReason}
@@ -1361,6 +1363,7 @@ export interface ChatComposerProps {
 
   // Context window
   activeContextWindow: ContextWindowSnapshot | null;
+  activeContextCompactions: ReadonlyArray<ContextCompactionRecord>;
   compactThreadUnavailable: boolean;
   compactDisabled: boolean;
   compactDisabledReason: string | null;
@@ -5989,6 +5992,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               unavailableMessage={contextWindowUnavailableMessage}
               modelDisplayName={activeThreadModelDisplayName}
               providerDisplayName={activeThreadProviderDisplayName}
+              compactions={props.activeContextCompactions}
               onCompact={onCompactContext}
               compactDisabled={compactDisabled}
               compactDisabledReason={compactDisabledReason}
@@ -6841,6 +6845,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     reserveContextWindowMeter={reserveContextWindowMeter}
                     activeThreadModelDisplayName={activeThreadModelDisplayName}
                     activeThreadProviderDisplayName={activeThreadProviderDisplayName}
+                    activeContextCompactions={props.activeContextCompactions}
                     pendingAction={pendingPrimaryAction}
                     isRunning={phase === "running"}
                     showPlanFollowUpPrompt={

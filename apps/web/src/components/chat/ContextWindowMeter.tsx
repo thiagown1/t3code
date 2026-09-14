@@ -1,6 +1,9 @@
 import { Button } from "../ui/button";
 import {
+  type ContextCompactionRecord,
   type ContextWindowSnapshot,
+  formatContextCompactionMode,
+  formatContextWindowExactTokens,
   formatContextWindowTokens,
   presentContextWindow,
 } from "~/lib/contextWindow";
@@ -34,6 +37,7 @@ export function ContextWindowDetails(props: {
   readonly usage: ContextWindowSnapshot;
   readonly modelDisplayName?: string | null | undefined;
   readonly providerDisplayName?: string | null | undefined;
+  readonly compactions?: ReadonlyArray<ContextCompactionRecord> | undefined;
   readonly onCompact?: (() => void) | undefined;
   readonly compactDisabled?: boolean | undefined;
   readonly compactDisabledReason?: string | null | undefined;
@@ -42,6 +46,7 @@ export function ContextWindowDetails(props: {
     usage,
     modelDisplayName,
     providerDisplayName,
+    compactions = [],
     onCompact,
     compactDisabled,
     compactDisabledReason,
@@ -51,6 +56,11 @@ export function ContextWindowDetails(props: {
   const source = providerDisplayName
     ? `${presentation.source} · ${providerDisplayName}`
     : presentation.source;
+  const latestCompaction = compactions[0] ?? null;
+  const compactionMode = formatContextCompactionMode(usage, onCompact !== undefined);
+  const latestCompactionTokens = latestCompaction
+    ? `${formatContextWindowExactTokens(latestCompaction.beforeTokens)} → ${formatContextWindowExactTokens(latestCompaction.afterTokens)}`
+    : "Not reported";
   return (
     <div className="flex flex-col gap-2 p-[var(--floating-content-inset)]">
       <div className="flex items-center justify-between gap-3">
@@ -97,6 +107,52 @@ export function ContextWindowDetails(props: {
         <DetailRow label="Output" value={presentation.lastOutputTokens} />
         <DetailRow label="Reasoning" value={presentation.lastReasoningOutputTokens} />
       </div>
+      <div className="grid gap-1.5 border-border/50 border-t pt-2">
+        <div className="font-medium text-muted-foreground text-[11px]">Compaction</div>
+        <DetailRow label="Mode" value={compactionMode} />
+        <DetailRow
+          label="Automatic threshold"
+          value={formatContextWindowExactTokens(usage.autoCompactThreshold)}
+        />
+        <div className="flex items-start justify-between gap-4 text-[11px] leading-4">
+          <span className="shrink-0 text-secondary-label">Last compacted</span>
+          {latestCompaction ? (
+            <time
+              dateTime={latestCompaction.createdAt}
+              className="min-w-0 text-right font-medium text-muted-foreground"
+            >
+              {formatUpdatedAt(latestCompaction.createdAt)}
+            </time>
+          ) : (
+            <span className="min-w-0 text-right font-medium text-muted-foreground">
+              Not reported
+            </span>
+          )}
+        </div>
+        <DetailRow label="Last result" value={latestCompactionTokens} />
+        {compactions.length > 0 ? (
+          <div className="mt-1 grid gap-1 border-border/40 border-t pt-1.5">
+            <div className="text-secondary-label text-[10px] uppercase tracking-wide">
+              Loaded history
+            </div>
+            {compactions.map((compaction) => (
+              <div
+                key={compaction.id}
+                className="flex items-start justify-between gap-3 text-[11px] leading-4"
+              >
+                <time dateTime={compaction.createdAt} className="shrink-0 text-secondary-label">
+                  {formatUpdatedAt(compaction.createdAt)}
+                </time>
+                <span className="min-w-0 text-right text-muted-foreground">
+                  {compaction.method === "manual" ? "Manual" : "Provider-native"} ·{" "}
+                  {formatContextWindowExactTokens(compaction.beforeTokens)} →{" "}
+                  {formatContextWindowExactTokens(compaction.afterTokens)}
+                </span>
+              </div>
+            ))}
+          </div>
+        ) : null}
+      </div>
       {usage.compactsAutomatically ? (
         <div className="text-pretty text-secondary-label text-[11px] font-medium">
           {formatContextWindowCompactionMessage(modelDisplayName, usage.autoCompactThreshold)}
@@ -129,6 +185,7 @@ export function ContextWindowMeter(props: {
   usage: ContextWindowSnapshot;
   modelDisplayName?: string | null | undefined;
   providerDisplayName?: string | null | undefined;
+  compactions?: ReadonlyArray<ContextCompactionRecord> | undefined;
   onCompact?: (() => void) | undefined;
   compactDisabled?: boolean | undefined;
   compactDisabledReason?: string | null | undefined;
@@ -137,6 +194,7 @@ export function ContextWindowMeter(props: {
     usage,
     modelDisplayName,
     providerDisplayName,
+    compactions,
     onCompact,
     compactDisabled,
     compactDisabledReason,
@@ -212,6 +270,7 @@ export function ContextWindowMeter(props: {
           usage={usage}
           modelDisplayName={modelDisplayName}
           providerDisplayName={providerDisplayName}
+          compactions={compactions}
           onCompact={onCompact}
           compactDisabled={compactDisabled}
           compactDisabledReason={compactDisabledReason}

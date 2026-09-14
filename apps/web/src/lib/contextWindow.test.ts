@@ -3,6 +3,7 @@ import { EventId, type OrchestrationThreadActivity, TurnId } from "@t3tools/cont
 
 import {
   deriveLatestContextWindowSnapshot,
+  deriveContextCompactionHistory,
   formatContextWindowExactTokens,
   formatContextWindowPercentage,
   formatContextWindowTokens,
@@ -138,5 +139,55 @@ describe("contextWindow", () => {
       lastOutputTokens: "Not reported",
       lastReasoningOutputTokens: "Not reported",
     });
+  });
+
+  it("reconstructs exact compaction history and distinguishes manual requests", () => {
+    const history = deriveContextCompactionHistory([
+      makeActivity("compaction-native", "context-compaction", {
+        state: "compacted",
+        beforeTokens: 190_000,
+        afterTokens: 40_000,
+      }),
+      {
+        ...makeActivity("compaction-manual", "context-compaction", {
+          state: "compacted",
+          requestId: "message-compact",
+          beforeTokens: 210_123,
+          afterTokens: 31_456,
+        }),
+        createdAt: "2026-03-24T00:00:00.000Z",
+      },
+      makeActivity("compaction-malformed", "context-compaction", {
+        beforeTokens: -1,
+        afterTokens: "unknown",
+      }),
+    ]);
+
+    expect(history).toEqual([
+      {
+        id: "compaction-malformed",
+        createdAt: "2026-03-23T00:00:00.000Z",
+        method: "provider-native",
+        beforeTokens: null,
+        afterTokens: null,
+        detail: null,
+      },
+      {
+        id: "compaction-manual",
+        createdAt: "2026-03-24T00:00:00.000Z",
+        method: "manual",
+        beforeTokens: 210_123,
+        afterTokens: 31_456,
+        detail: null,
+      },
+      {
+        id: "compaction-native",
+        createdAt: "2026-03-23T00:00:00.000Z",
+        method: "provider-native",
+        beforeTokens: 190_000,
+        afterTokens: 40_000,
+        detail: null,
+      },
+    ]);
   });
 });
