@@ -17,6 +17,12 @@ Compaction history is reconstructed from durable `context-compaction` activities
 request id marks a manual compaction; an uncorrelated provider event is presented as
 provider-native. Before/after counts remain optional because not every provider reports them.
 
+Portable capability profiles are versioned, secret-free policy manifests. Their declarations may
+reference only a local credential identifier and resolver kind; credential material never belongs
+in the manifest. Effective access is fail-closed: the most-specific declaration must be enabled,
+the current machine must report the integration available, and the current action must be
+separately authorized. Missing or equally specific conflicting declarations are denied.
+
 ## Process and account isolation
 
 T3-managed OpenCode chat uses one server per thread. Its MCP registrations are directory-scoped, while

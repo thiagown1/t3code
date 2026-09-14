@@ -307,6 +307,10 @@
       "types": "./src/contextWindow.ts",
       "import": "./src/contextWindow.ts"
     },
+    "./capabilityProfile": {
+      "types": "./src/capabilityProfile.ts",
+      "import": "./src/capabilityProfile.ts"
+    },
     "./desktopAppControl": {
       "types": "./src/desktopAppControl.ts",
       "import": "./src/desktopAppControl.ts"
