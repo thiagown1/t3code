@@ -1584,8 +1584,8 @@ export function NewTaskDraftScreen(props: {
                     </View>
                     {flow.planModeEnabled ? (
                       <ComposerInlineControl
-                        accessibilityHint={`Switches to ${flow.interactionMode === "plan" ? "Build" : "Plan"} mode`}
-                        accessibilityLabel={`Interaction mode: ${flow.interactionMode === "plan" ? "Plan" : "Build"}`}
+                        accessibilityHint={`Switches to ${flow.interactionMode === "plan" ? "Execute" : "Plan"} mode`}
+                        accessibilityLabel={`Interaction mode: ${flow.interactionMode === "plan" ? "Plan" : "Execute"}`}
                         disabled={isComposerInteractionLocked}
                         emphasized
                         icon={
@@ -1593,7 +1593,7 @@ export function NewTaskDraftScreen(props: {
                             ? { ios: "list.bullet.clipboard", android: "auto_awesome" }
                             : { ios: "hammer", android: "construction" }
                         }
-                        label={flow.interactionMode === "plan" ? "Plan" : "Build"}
+                        label={flow.interactionMode === "plan" ? "Plan" : "Execute"}
                         onPress={() =>
                           flow.setInteractionMode(
                             flow.interactionMode === "plan" ? "default" : "plan",

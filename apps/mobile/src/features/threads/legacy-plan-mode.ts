@@ -20,7 +20,7 @@ export function resolveLegacyPlanModeEnabled(input: {
   readonly loaded: boolean;
   readonly preference: boolean | undefined;
 }): boolean {
-  return input.loaded && input.preference === true;
+  return input.loaded;
 }
 
 export function resolvePendingTaskInteractionMode(input: {
@@ -38,7 +38,7 @@ export function resolvePendingTaskInteractionMode(input: {
   }
   if (!input.preferenceLoaded) {
     // Only an existing queued task may retain its previous mode while the
-    // preference is unknown. A fresh draft still defaults to Build so a stale
+    // preference is unknown. A fresh draft still defaults to Execute so a stale
     // persisted Plan selection cannot bypass a disabled preference at launch.
     return input.queuedInteractionMode ?? DEFAULT_PROVIDER_INTERACTION_MODE;
   }

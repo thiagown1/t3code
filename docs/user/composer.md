@@ -131,6 +131,17 @@ Show skills in slash menu**. Only skills enabled for the provider are listed.
 Provider commands must start the message to run. T3 Code commands such as
 `/model` and `/plan`, and skill mentions, work on any line.
 
+## Choose how the agent works
+
+The interaction mode stays visible in the composer for providers that support
+it. **Execute** allows the agent to perform the requested work. **Plan** keeps
+the conversation read-only while you explore decisions and produces a durable
+plan artifact in the thread. The selected mode is restored with the thread.
+
+When a planning turn finishes with an actionable plan, choose **Implement
+plan** to start a linked execution thread. The planning conversation and its
+artifact remain available in the original thread.
+
 Send `/compact` in an existing conversation to reduce context usage when the
 provider supports it. Web and desktop also offer compaction from the context meter.
 

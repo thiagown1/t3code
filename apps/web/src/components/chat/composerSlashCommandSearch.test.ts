@@ -17,14 +17,14 @@ describe("searchSlashCommandItems", () => {
         type: "slash-command",
         command: "default",
         label: "/default",
-        description: "Switch this thread back to normal build mode",
+        description: "Switch this thread to execute mode",
       },
       {
-        id: "provider-slash-command:claudeAgent:ui",
+        id: "provider-slash-command:claudeAgent:execute",
         type: "provider-slash-command",
         provider: claudeDriver,
-        command: { name: "ui" },
-        label: "/ui",
+        command: { name: "execute" },
+        label: "/execute",
         description: "Explore, build, and refine UI.",
       },
       {
@@ -39,8 +39,8 @@ describe("searchSlashCommandItems", () => {
       Extract<ComposerCommandItem, { type: "slash-command" | "provider-slash-command" | "skill" }>
     >;
 
-    expect(searchSlashCommandItems(items, "ui").map((item) => item.id)).toEqual([
-      "provider-slash-command:claudeAgent:ui",
+    expect(searchSlashCommandItems(items, "execute").map((item) => item.id)).toEqual([
+      "provider-slash-command:claudeAgent:execute",
       "slash:default",
     ]);
   });

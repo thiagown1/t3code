@@ -328,6 +328,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       : "Send";
   const currentModelSelection = props.selectedThread.modelSelection;
   const currentRuntimeMode = props.selectedThread.runtimeMode;
+  const currentInteractionMode = props.selectedThread.interactionMode;
   const modelUnavailable =
     props.connectionState === "connected" &&
     isModelSelectionUnavailable(props.serverConfig, currentModelSelection);
@@ -940,7 +941,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                     onDismissError={voiceInput.cancel}
                   />
                 ) : (
-                  <View className="min-w-0 flex-1 flex-row items-center justify-between">
+                  <View className="min-w-0 flex-1 flex-row items-center gap-1">
                     <ComposerAttachmentButton
                       supportsFiles={Boolean(
                         props.serverConfig?.environment.capabilities.fileAttachments,
@@ -948,7 +949,26 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                       onPickMedia={props.onPickDraftMedia}
                       onPickFiles={props.onPickDraftFiles}
                     />
-                    <View className="min-w-0 shrink">
+                    {selectedProviderStatus?.showInteractionModeToggle !== false ? (
+                      <ComposerInlineControl
+                        accessibilityHint={`Switches to ${currentInteractionMode === "plan" ? "Execute" : "Plan"} mode`}
+                        accessibilityLabel={`Interaction mode: ${currentInteractionMode === "plan" ? "Plan" : "Execute"}`}
+                        emphasized
+                        icon={
+                          currentInteractionMode === "plan"
+                            ? { ios: "list.bullet.clipboard", android: "auto_awesome" }
+                            : { ios: "hammer", android: "construction" }
+                        }
+                        label={currentInteractionMode === "plan" ? "Plan" : "Execute"}
+                        onPress={() =>
+                          props.onUpdateInteractionMode(
+                            currentInteractionMode === "plan" ? "default" : "plan",
+                          )
+                        }
+                        showChevron={false}
+                      />
+                    ) : null}
+                    <View className="min-w-0 flex-1 shrink">
                       <ComposerInlineControl
                         accessibilityLabel="Model and reasoning settings"
                         emphasized

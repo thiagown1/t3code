@@ -1,9 +1,18 @@
 import { describe, expect, it } from "@effect/vitest";
 
 import {
+  resolveLegacyPlanModeEnabled,
   resolvePendingTaskInteractionMode,
   resolveProviderInteractionMode,
 } from "./legacy-plan-mode";
+
+describe("resolveLegacyPlanModeEnabled", () => {
+  it("promotes interaction modes after preferences load, regardless of the retired flag", () => {
+    expect(resolveLegacyPlanModeEnabled({ loaded: false, preference: false })).toBe(false);
+    expect(resolveLegacyPlanModeEnabled({ loaded: true, preference: false })).toBe(true);
+    expect(resolveLegacyPlanModeEnabled({ loaded: true, preference: undefined })).toBe(true);
+  });
+});
 
 describe("resolveProviderInteractionMode", () => {
   it("clears saved plan mode when the provider cannot use T3 interaction modes", () => {
@@ -49,18 +58,18 @@ describe("resolvePendingTaskInteractionMode", () => {
     ).toBe("plan");
   });
 
-  it("forces build mode once the disabled preference has loaded", () => {
+  it("honors the draft mode once preferences have loaded", () => {
     expect(
       resolvePendingTaskInteractionMode({
         preferenceLoaded: true,
-        planModeEnabled: false,
+        planModeEnabled: true,
         draftInteractionMode: "plan",
         queuedInteractionMode: "plan",
       }),
-    ).toBe("default");
+    ).toBe("plan");
   });
 
-  it("keeps a fresh draft in build mode while the preference is loading", () => {
+  it("keeps a fresh draft in execute mode while the preference is loading", () => {
     expect(
       resolvePendingTaskInteractionMode({
         preferenceLoaded: false,

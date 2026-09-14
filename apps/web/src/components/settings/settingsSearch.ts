@@ -389,9 +389,9 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "legacy-plan-mode",
-    title: "Plan mode (legacy)",
+    title: "Provider plan options (legacy)",
     to: "/settings/general",
-    searchTerms: ["build plan composer old"],
+    searchTerms: ["provider build plan old"],
   },
   {
     id: "legacy-context-window-indicator",

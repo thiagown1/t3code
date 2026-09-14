@@ -1521,14 +1521,14 @@ describe("resolveComposerInteractionMode", () => {
     ).toEqual({ enabled: true, interactionMode: "plan" });
   });
 
-  it("resets a restored plan draft when the beta setting is off", () => {
+  it("keeps plan mode available when the retired beta setting is off", () => {
     expect(
       resolveComposerInteractionMode({
         planModeEnabled: false,
         provider: { showInteractionModeToggle: true },
         interactionMode: "plan",
       }),
-    ).toEqual({ enabled: false, interactionMode: "default" });
+    ).toEqual({ enabled: true, interactionMode: "plan" });
   });
 
   it("disables plan mode until the selected provider is available", () => {

@@ -598,16 +598,14 @@ export function resolveComposerProviderSelection(input: {
   };
 }
 
-/** Keep restored drafts and every plan control on the selected instance's supported mode. */
+/** Keep restored drafts and every interaction control on the selected instance's supported mode. */
 export function resolveComposerInteractionMode(input: {
+  /** Retained while older settings payloads still carry the retired beta flag. */
   planModeEnabled: boolean;
   provider: Pick<ServerProvider, "showInteractionModeToggle"> | null | undefined;
   interactionMode: ProviderInteractionMode;
 }): { enabled: boolean; interactionMode: ProviderInteractionMode } {
-  const enabled =
-    input.planModeEnabled &&
-    input.provider != null &&
-    input.provider.showInteractionModeToggle !== false;
+  const enabled = input.provider != null && input.provider.showInteractionModeToggle !== false;
   return {
     enabled,
     interactionMode: enabled ? input.interactionMode : "default",
