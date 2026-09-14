@@ -331,6 +331,10 @@
       "types": "./src/hostClassification.ts",
       "import": "./src/hostClassification.ts"
     },
+    "./firstMate": {
+      "types": "./src/firstMate.ts",
+      "import": "./src/firstMate.ts"
+    },
     "./dateTime": {
       "types": "./src/dateTime.ts",
       "import": "./src/dateTime.ts"
