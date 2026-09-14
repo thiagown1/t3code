@@ -17,6 +17,7 @@ import type {
   EnvironmentId,
   MessageId,
   ModelSelection,
+  OrchestrationThreadActivity,
   OrchestrationThreadShell,
   ProviderApprovalDecision,
   ProviderInteractionMode,
@@ -68,6 +69,7 @@ import { useWorkspaceContentWidth } from "../layout/workspace-content-width";
 
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { collectProviderUsageLimits } from "@t3tools/shared/usageLimits";
+import { deriveLatestContextWindowSnapshot } from "@t3tools/shared/contextWindow";
 import type { ComposerEditorHandle } from "../../components/ComposerEditor";
 import type { StatusTone } from "../../components/StatusPill";
 import type { DraftComposerAttachment } from "../../lib/composerImages";
@@ -86,6 +88,7 @@ import { PendingApprovalCard } from "./PendingApprovalCard";
 import { ComposerFeedback } from "./ComposerFeedback";
 import { ComposerUsageLimits } from "./ComposerUsageLimits";
 import { PersistentUsageLimits } from "./PersistentUsageLimits";
+import { PersistentContextWindow } from "./PersistentContextWindow";
 import { PendingUserInputCard } from "./PendingUserInputCard";
 import { ThreadCreationFailedCard } from "./ThreadCreationFailedCard";
 import {
@@ -118,6 +121,7 @@ export interface ThreadDetailScreenProps {
   readonly feedbackSubmissions: ReadonlyArray<CodexFeedbackSubmission>;
   readonly onDismissFeedback: (id: MessageId) => void;
   readonly selectedThreadFeed: ReadonlyArray<ThreadFeedEntry>;
+  readonly selectedThreadActivities: ReadonlyArray<OrchestrationThreadActivity>;
   readonly activeWorkStartedAt: string | null;
   readonly isCompacting: boolean;
   /**
@@ -332,6 +336,34 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
     ? 0
     : Math.max(insets.bottom, 12);
   const contentPresentationKind = props.contentPresentation.kind;
+  const contextWindow = useMemo(
+    () => deriveLatestContextWindowSnapshot(props.selectedThreadActivities),
+    [props.selectedThreadActivities],
+  );
+  const selectedProvider = props.serverConfig?.providers.find(
+    (provider) => provider.instanceId === props.selectedThread.modelSelection.instanceId,
+  );
+  const contextWindowModelDisplayName =
+    selectedProvider?.models.find(
+      (model) => model.slug === props.selectedThread.modelSelection.model,
+    )?.name ?? props.selectedThread.modelSelection.model;
+  const contextWindowProviderDisplayName =
+    selectedProvider?.displayName?.trim() ||
+    (selectedProvider?.driver === "codex"
+      ? "Codex"
+      : selectedProvider?.driver === "claudeAgent"
+        ? "Claude"
+        : (selectedProvider?.instanceId ?? props.selectedThread.modelSelection.instanceId));
+  const contextWindowUnavailableMessage =
+    contextWindow === null &&
+    props.selectedThread.session !== null &&
+    selectedProvider?.reportsContextWindow === true
+      ? contentPresentationKind === "loading" ||
+        props.selectedThread.session.status === "starting" ||
+        props.selectedThread.session.status === "running"
+        ? "Waiting for provider context telemetry…"
+        : "Context has not been reported by this provider."
+      : null;
   // The raw sync status enters "synchronizing" on every full fetch, cached or
   // not. Whether messages are already on screen decides the pill label: no
   // data yet → "Loading messages", cached data reconciling → "Syncing".
@@ -944,6 +976,12 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                   providers={props.serverConfig?.providers ?? []}
                   sources={props.serverConfig?.usageLimitSources ?? []}
                   onOpen={showUsageLimits}
+                />
+                <PersistentContextWindow
+                  usage={contextWindow}
+                  unavailableMessage={contextWindowUnavailableMessage}
+                  modelDisplayName={contextWindowModelDisplayName}
+                  providerDisplayName={contextWindowProviderDisplayName}
                 />
                 {props.feedbackSubmissions.map((submission) => (
                   <ComposerFeedback

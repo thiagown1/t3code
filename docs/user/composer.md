@@ -134,6 +134,18 @@ Provider commands must start the message to run. T3 Code commands such as
 Send `/compact` in an existing conversation to reduce context usage when the
 provider supports it. Web and desktop also offer compaction from the context meter.
 
+## Monitor context usage
+
+After a provider reports context telemetry, T3 Code keeps a compact context row
+above the composer on web, desktop, and mobile. The row shows the active context
+percentage and rounded token counts so it stays readable while you work.
+
+Open the row for the provider's exact active and maximum token counts, total
+tokens processed, model, source, update time, and the last turn's input, cache,
+output, and reasoning counts. A missing value is shown as **Not reported**; T3
+Code does not estimate provider measurements. Web and desktop also offer
+**Compact context** there when the provider supports manual compaction.
+
 ## Context in your message
 
 Context you attach lands where your cursor is, as a chip inside your text: a terminal excerpt,

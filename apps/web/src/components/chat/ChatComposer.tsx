@@ -134,6 +134,7 @@ import {
 import type { ThreadSyncPhase } from "../../threadSync";
 import { ComposerBanner } from "./ComposerBanner";
 import { PersistentUsageLimits } from "./PersistentUsageLimits";
+import { PersistentContextWindow } from "./PersistentContextWindow";
 import { ComposerSurface } from "./ComposerSurface";
 import {
   ComposerBannerStack,
@@ -313,6 +314,7 @@ import {
   suppressActiveComposerScrollGesture,
 } from "./composerScrollGesture";
 import { prepareVideoFirstFrame } from "../../lib/videoFirstFrame";
+import { formatProviderDriverKindLabel } from "../../providerModels";
 
 function ComposerVideoThumbnail({ file }: { file: File }) {
   const setVideo = useCallback(
@@ -1148,6 +1150,7 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
   activeContextWindow: ContextWindowSnapshot | null;
   reserveContextWindowMeter: boolean;
   activeThreadModelDisplayName: string | null;
+  activeThreadProviderDisplayName: string | null;
   isPreparingWorktree: boolean;
   pendingAction: {
     questionIndex: number;
@@ -1179,6 +1182,7 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
         <ContextWindowMeter
           usage={props.activeContextWindow}
           modelDisplayName={props.activeThreadModelDisplayName}
+          providerDisplayName={props.activeThreadProviderDisplayName}
           onCompact={props.onCompactContext}
           compactDisabled={props.compactDisabled}
           compactDisabledReason={props.compactDisabledReason}
@@ -2022,14 +2026,26 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     () => resolveContextWindowModelDisplayName(activeThreadModelSelection, modelOptionsByInstance),
     [activeThreadModelSelection, modelOptionsByInstance],
   );
+  const activeThreadProviderDisplayName = selectedProviderStatus
+    ? selectedProviderStatus.displayName?.trim() ||
+      formatProviderDriverKindLabel(selectedProviderStatus.driver)
+    : null;
+  const activeThreadStarted = threadShellHasStarted(props.activeThreadShell);
+  const providerReportsContextWindow = selectedProviderStatus
+    ? selectedProviderStatus.reportsContextWindow === true
+    : null;
   const reserveContextWindowMeter = shouldReserveContextWindowMeter({
     meterEnabled: settings.contextWindowMeterEnabled,
     detailLoading: props.threadSyncPhase === "loading",
-    threadStarted: threadShellHasStarted(props.activeThreadShell),
-    providerReportsContextWindow: selectedProviderStatus
-      ? selectedProviderStatus.reportsContextWindow === true
-      : null,
+    threadStarted: activeThreadStarted,
+    providerReportsContextWindow,
   });
+  const contextWindowUnavailableMessage =
+    activeContextWindow === null && activeThreadStarted && providerReportsContextWindow === true
+      ? props.threadSyncPhase === "loading" || phase === "running"
+        ? "Waiting for provider context telemetry…"
+        : "Context has not been reported by this provider."
+      : null;
 
   // ------------------------------------------------------------------
   // Composer-local state
@@ -5966,6 +5982,18 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               onOpen={props.onUsageLimitsCommand}
             />
           ) : null}
+          {!settings.contextWindowMeterEnabled &&
+          (activeContextWindow !== null || contextWindowUnavailableMessage !== null) ? (
+            <PersistentContextWindow
+              usage={activeContextWindow}
+              unavailableMessage={contextWindowUnavailableMessage}
+              modelDisplayName={activeThreadModelDisplayName}
+              providerDisplayName={activeThreadProviderDisplayName}
+              onCompact={onCompactContext}
+              compactDisabled={compactDisabled}
+              compactDisabledReason={compactDisabledReason}
+            />
+          ) : null}
           <ComposerBannerStack
             key={activeThreadId}
             className="relative z-0"
@@ -6812,6 +6840,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     }
                     reserveContextWindowMeter={reserveContextWindowMeter}
                     activeThreadModelDisplayName={activeThreadModelDisplayName}
+                    activeThreadProviderDisplayName={activeThreadProviderDisplayName}
                     pendingAction={pendingPrimaryAction}
                     isRunning={phase === "running"}
                     showPlanFollowUpPrompt={

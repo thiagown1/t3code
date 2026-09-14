@@ -9,6 +9,11 @@ A driver kind identifies an integration; an instance identifies one configuratio
 lifecycle. Route work by instance, so two accounts using the same driver do not share mutable
 session or catalog state.
 
+Context-window telemetry follows the same boundary. Adapters normalize provider usage into
+`context-window.updated` activities; clients derive the newest valid snapshot and share one
+presentation model across web and mobile. Compact surfaces may round counts, but detail surfaces
+must preserve exact provider values and label omitted fields instead of estimating them.
+
 ## Process and account isolation
 
 T3-managed OpenCode chat uses one server per thread. Its MCP registrations are directory-scoped, while
