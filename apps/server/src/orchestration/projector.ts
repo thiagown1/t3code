@@ -436,6 +436,7 @@ export function projectEvent(
             createdAt: payload.createdAt,
             updatedAt: payload.updatedAt,
             archivedAt: null,
+            deliveryStatus: null,
             settledOverride: null,
             settledAt: null,
             unsettledAt: null,
@@ -489,6 +490,7 @@ export function projectEvent(
           ...nextBase,
           threads: updateThread(nextBase.threads, payload.threadId, {
             archivedAt: null,
+            deliveryStatus: null,
             updatedAt: payload.updatedAt,
           }),
         })),
@@ -628,6 +630,9 @@ export function projectEvent(
                 : {}),
               ...(payload.branchPullRequest !== undefined
                 ? { branchPullRequest: payload.branchPullRequest }
+                : {}),
+              ...(payload.deliveryStatus !== undefined
+                ? { deliveryStatus: payload.deliveryStatus }
                 : {}),
               ...legacyLinkPatch,
               updatedAt: payload.updatedAt,

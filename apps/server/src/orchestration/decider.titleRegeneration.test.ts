@@ -117,4 +117,38 @@ it.layer(NodeServices.layer)("title regeneration decider", (it) => {
       });
     }),
   );
+
+  it.effect("persists and clears an operator delivery gate through metadata", () =>
+    Effect.gen(function* () {
+      const waiting = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.meta.update",
+          commandId: CommandId.make("cmd-waiting-deploy"),
+          threadId: ThreadId.make("thread-1"),
+          deliveryStatus: "waiting-deploy",
+        },
+        readModel,
+      });
+      const waitingEvent = Array.isArray(waiting) ? waiting[0] : waiting;
+      expect(waitingEvent).toMatchObject({
+        type: "thread.meta-updated",
+        payload: { threadId: ThreadId.make("thread-1"), deliveryStatus: "waiting-deploy" },
+      });
+
+      const cleared = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.meta.update",
+          commandId: CommandId.make("cmd-clear-delivery-status"),
+          threadId: ThreadId.make("thread-1"),
+          deliveryStatus: null,
+        },
+        readModel,
+      });
+      const clearedEvent = Array.isArray(cleared) ? cleared[0] : cleared;
+      expect(clearedEvent).toMatchObject({
+        type: "thread.meta-updated",
+        payload: { threadId: ThreadId.make("thread-1"), deliveryStatus: null },
+      });
+    }),
+  );
 });

@@ -168,6 +168,22 @@ describe("resolveThreadListV2Status", () => {
       "ready",
     );
   });
+
+  it("shows a delivery status after active provider states", () => {
+    const waiting = makeThread({
+      id: ThreadId.make("waiting"),
+      title: "Waiting",
+      deliveryStatus: "waiting-deploy",
+    });
+    expect(resolveThreadListV2Status(waiting)).toBe("waiting-deploy");
+
+    expect(
+      resolveThreadListV2Status({
+        ...waiting,
+        hasPendingUserInput: true,
+      }),
+    ).toBe("input");
+  });
 });
 
 describe("queued messages keep a settled thread active", () => {

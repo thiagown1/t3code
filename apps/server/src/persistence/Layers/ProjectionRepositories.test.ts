@@ -354,6 +354,7 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
         createdAt: "2026-03-24T00:00:00.000Z",
         updatedAt: "2026-03-24T00:00:00.000Z",
         archivedAt: null,
+        deliveryStatus: null,
         settledOverride: null,
         settledAt: null,
         unsettledAt: null,
@@ -418,6 +419,7 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
         createdAt: "2026-03-24T00:00:00.000Z",
         updatedAt: "2026-03-25T00:00:00.000Z",
         archivedAt: null,
+        deliveryStatus: "waiting-deploy",
         settledOverride: "settled",
         settledAt: "2026-03-25T00:00:00.000Z",
         unsettledAt: null,
@@ -443,6 +445,7 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
       assert.strictEqual(row.snoozedUntil, "2026-03-26T09:00:00.000Z");
       assert.strictEqual(row.snoozedAt, "2026-03-25T00:00:00.000Z");
       assert.strictEqual(row.pinnedAt, "2026-03-25T00:00:00.000Z");
+      assert.strictEqual(row.deliveryStatus, "waiting-deploy");
 
       // Un-settle to the keep-active pin and wake the snooze; confirm the
       // flips persist.
@@ -501,6 +504,7 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
         createdAt: "2026-03-24T00:00:00.000Z",
         updatedAt: "2026-03-24T00:00:00.000Z",
         archivedAt: null,
+        deliveryStatus: null,
         settledOverride: null,
         settledAt: null,
         unsettledAt: null,

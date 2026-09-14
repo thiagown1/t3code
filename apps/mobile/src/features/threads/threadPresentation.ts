@@ -8,7 +8,8 @@ export type ThreadStatusKind =
   | "working"
   | "connecting"
   | "error"
-  | "plan-ready";
+  | "plan-ready"
+  | "delivery";
 
 export interface ThreadStatusPresentation extends StatusTone {
   readonly kind: ThreadStatusKind;
@@ -95,6 +96,28 @@ export function resolveThreadStatus(
       pillClassName: "bg-adaptive-violet-500-a12-a16",
       textClassName: "text-adaptive-violet-600-400",
       pulse: false,
+    };
+  }
+
+  const deliveryLabel =
+    thread.deliveryStatus === "waiting-ci"
+      ? "Waiting for CI"
+      : thread.deliveryStatus === "waiting-deploy"
+        ? "Waiting for deploy"
+        : thread.deliveryStatus === "validating-deploy"
+          ? "Validating deploy"
+          : thread.deliveryStatus === "waiting-activation"
+            ? "Waiting for activation"
+            : null;
+  if (deliveryLabel) {
+    return {
+      kind: "delivery",
+      label: deliveryLabel,
+      pillClassName: "bg-primary/10",
+      textClassName: "text-foreground-secondary",
+      iconColor: "#bf5af2",
+      iconBackground: "rgba(191,90,242,0.22)",
+      pulse: thread.deliveryStatus === "validating-deploy",
     };
   }
 
