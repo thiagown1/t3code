@@ -28,7 +28,7 @@ the whole message. The field is optional on `OrchestrationMessage`, both turn-st
 
 ### Parallel-thread snapshots
 
-`/paralelo <objective>` creates a separate thread and stores its source link and
+`/parallel <objective>` creates a separate thread and stores its source link and
 fork snapshot as the forward-compatible unknown context kind `parallel-thread`.
 The first user message contains the matching canonical reference, so provider
 projection includes the JSON payload while normal message persistence keeps it
@@ -36,6 +36,7 @@ available after restart. The payload is bounded below the unknown-record limit a
 contains only completed user/assistant text, attachment metadata, the active plan,
 the fork point, and source timestamps. It never copies attachment bytes, pending
 approvals, processes, credentials, or runtime locks.
+The legacy `/paralelo` spelling remains accepted as an alias.
 
 The web client reads the source id from that record to render persistent return
 navigation. Comparing the recorded source `updatedAt` with the current source shell

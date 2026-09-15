@@ -131,11 +131,12 @@ Show skills in slash menu**. Only skills enabled for the provider are listed.
 Provider commands must start the message to run. T3 Code commands such as
 `/model` and `/plan`, and skill mentions, work on any line.
 
-Use `/paralelo <objective>` (or `/parallel <objective>`) in an existing thread to
+Use `/parallel <objective>` in an existing thread to
 start linked work without leaving or interrupting the current conversation. The
 new thread receives a bounded snapshot of completed messages and the active plan,
 runs with independent state, and keeps a **Back to source** link. If the original
 conversation advances afterward, the linked thread marks its snapshot as stale.
+The legacy `/paralelo` spelling remains accepted as an alias.
 
 ## Choose how the agent works
 

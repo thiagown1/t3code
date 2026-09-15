@@ -2316,7 +2316,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           id: "slash:parallel",
           type: "slash-command",
           command: "parallel",
-          label: "/paralelo",
+          label: "/parallel",
           description: "Start a linked task without interrupting this thread",
         },
         {
@@ -3566,7 +3566,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       }
       if (item.type === "slash-command") {
         if (item.command === "parallel") {
-          const replacement = "/paralelo ";
+          const replacement = "/parallel ";
           const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
             snapshot.value,
             trigger.rangeEnd,

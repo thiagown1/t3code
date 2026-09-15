@@ -7285,7 +7285,7 @@ export default function ChatView(props: ChatViewProps) {
         toastManager.add({
           type: "warning",
           title: "Add an objective",
-          description: "Use /paralelo followed by what the new thread should do.",
+          description: "Use /parallel followed by what the new thread should do.",
         });
         return;
       }
