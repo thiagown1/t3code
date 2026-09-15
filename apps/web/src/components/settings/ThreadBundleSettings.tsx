@@ -1,4 +1,8 @@
-import type { EnvironmentId, ThreadBundleImportPlan } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  ThreadBundleImportPlan,
+  ThreadBundleImportResult,
+} from "@t3tools/contracts";
 import { parseThreadBundleJson } from "@t3tools/shared/threadBundle";
 import { FileJsonIcon, UploadIcon } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
@@ -16,6 +20,7 @@ import {
   DialogTitle,
 } from "../ui/dialog";
 import { Textarea } from "../ui/textarea";
+import { toastManager } from "../ui/toast";
 import {
   summarizeThreadBundleImportPlan,
   threadBundleImportStatusLabel,
@@ -78,8 +83,8 @@ function ThreadBundleImportReview({ plan }: { plan: ThreadBundleImportPlan }) {
       </ul>
       {plan.canImport ? (
         <div className="rounded-lg border border-success/30 bg-success/5 p-3 text-xs text-muted-foreground">
-          Every thread has a unique project and an available provider. This dry run is ready, but
-          persistence is not enabled in this build yet.
+          Every thread has a unique project and an available provider. Applying this plan creates
+          independent settled copies without starting provider sessions.
         </div>
       ) : (
         <div className="rounded-lg border border-warning/30 bg-warning/5 p-3 text-xs text-muted-foreground">
@@ -102,9 +107,13 @@ function ThreadBundleImportDialog({
   const requestId = useRef(0);
   const [json, setJson] = useState("");
   const [plan, setPlan] = useState<ThreadBundleImportPlan | null>(null);
+  const [importResult, setImportResult] = useState<ThreadBundleImportResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const planImport = useAtomCommand(serverEnvironment.planThreadBundleImport, {
+    reportFailure: false,
+  });
+  const applyImport = useAtomCommand(serverEnvironment.importThreadBundle, {
     reportFailure: false,
   });
   const parsed = useMemo(() => {
@@ -137,19 +146,67 @@ function ThreadBundleImportDialog({
     setError("Could not compare this bundle with the selected environment. Nothing was changed.");
   };
 
+  const importThreads = async () => {
+    if (!parsed.bundle || !plan?.canImport) return;
+    const currentRequest = ++requestId.current;
+    setError(null);
+    setPending(true);
+    const result = await applyImport({
+      environmentId,
+      input: { bundle: parsed.bundle, expectedPlan: plan },
+    });
+    if (currentRequest !== requestId.current) return;
+    setPending(false);
+    if (result._tag === "Success") {
+      setImportResult(result.value);
+      toastManager.add({
+        type: "success",
+        title: `${result.value.importedThreads.length} thread${result.value.importedThreads.length === 1 ? "" : "s"} imported`,
+        description: "Independent copies were created without starting provider sessions.",
+      });
+      return;
+    }
+    setError(
+      "The import was rejected or could not be persisted. No partial import was committed; generate a new dry run before retrying.",
+    );
+  };
+
   return (
     <Dialog open onOpenChange={onOpenChange}>
       <DialogPopup className="w-full sm:max-w-2xl">
         <DialogHeader>
-          <DialogTitle>{plan ? "Thread Bundle dry run" : "Review Thread Bundle"}</DialogTitle>
+          <DialogTitle>
+            {importResult
+              ? "Thread Bundle imported"
+              : plan
+                ? "Thread Bundle dry run"
+                : "Review Thread Bundle"}
+          </DialogTitle>
           <p className="text-sm text-muted-foreground">
-            {plan
-              ? "Authoritative comparison against the selected environment."
-              : "Choose a portable conversation bundle. Parsing and review never write target state."}
+            {importResult
+              ? "The imported conversations are independent from their source installation."
+              : plan
+                ? "Authoritative comparison against the selected environment."
+                : "Choose a portable conversation bundle. Parsing and review never write target state."}
           </p>
         </DialogHeader>
         <DialogPanel className="space-y-4">
-          {plan ? (
+          {importResult ? (
+            <div className="space-y-3">
+              <div className="rounded-lg border border-success/30 bg-success/5 p-3 text-sm">
+                Imported {importResult.importedThreads.length} settled conversation
+                {importResult.importedThreads.length === 1 ? "" : "s"}. Provider sessions,
+                approvals, credentials, locks, processes, and attachment content were not copied.
+              </div>
+              <ul className="max-h-64 space-y-1 overflow-auto rounded-lg border border-border/60 p-3 font-mono text-xs text-muted-foreground">
+                {importResult.importedThreads.map((thread) => (
+                  <li key={thread.threadId}>
+                    {thread.threadId} · {thread.projectId}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : plan ? (
             <ThreadBundleImportReview plan={plan} />
           ) : (
             <>
@@ -190,26 +247,42 @@ function ThreadBundleImportDialog({
                 rows={16}
                 spellCheck={false}
               />
-              {error ? (
-                <p className="text-sm text-destructive-foreground" role="alert">
-                  {error}
-                </p>
-              ) : null}
               <p className="text-xs text-muted-foreground">
                 Runtime sessions, approvals, credentials, locks, processes, attachment content, and
                 worktree paths are not importable. Unknown schema versions fail validation.
               </p>
             </>
           )}
+          {error ? (
+            <p className="text-sm text-destructive-foreground" role="alert">
+              {error}
+            </p>
+          ) : null}
         </DialogPanel>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
-            {plan ? "Close review" : "Cancel"}
+            {importResult ? "Close" : plan ? "Close review" : "Cancel"}
           </Button>
-          {plan ? (
-            <Button variant="outline" onClick={() => setPlan(null)}>
-              Back
-            </Button>
+          {importResult ? null : plan ? (
+            <>
+              <Button
+                variant="outline"
+                disabled={pending}
+                onClick={() => {
+                  setPlan(null);
+                  setError(null);
+                }}
+              >
+                Back
+              </Button>
+              {plan.canImport ? (
+                <Button disabled={pending} onClick={() => void importThreads()}>
+                  {pending
+                    ? "Importing…"
+                    : `Import ${plan.items.length} thread${plan.items.length === 1 ? "" : "s"}`}
+                </Button>
+              ) : null}
+            </>
           ) : (
             <Button disabled={pending} onClick={() => void generatePlan()}>
               {pending ? "Checking…" : "Generate dry run"}

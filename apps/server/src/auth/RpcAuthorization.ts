@@ -53,6 +53,7 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.serverResolveEnvironmentBundleCredentials]: AuthOrchestrationReadScope,
   [WS_METHODS.serverExportThreadBundle]: AuthOrchestrationReadScope,
   [WS_METHODS.serverPlanThreadBundleImport]: AuthOrchestrationReadScope,
+  [WS_METHODS.serverImportThreadBundle]: AuthOrchestrationOperateScope,
   [WS_METHODS.serverDiscoverSourceControl]: AuthOrchestrationReadScope,
   [WS_METHODS.serverGetTraceDiagnostics]: AuthOrchestrationReadScope,
   [WS_METHODS.serverGetProcessDiagnostics]: AuthOrchestrationReadScope,

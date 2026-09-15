@@ -29,9 +29,11 @@ import {
   ThreadBundle,
   ThreadBundleExportError,
   ThreadBundleExportInput,
+  ThreadBundleImportApplyInput,
   ThreadBundleImportError,
   ThreadBundleImportPlan,
   ThreadBundleImportPlanInput,
+  ThreadBundleImportResult,
 } from "./threadBundle.ts";
 import {
   FilesystemBrowseInput,
@@ -380,6 +382,7 @@ export const WS_METHODS = {
   serverResolveEnvironmentBundleCredentials: "server.resolveEnvironmentBundleCredentials",
   serverExportThreadBundle: "server.exportThreadBundle",
   serverPlanThreadBundleImport: "server.planThreadBundleImport",
+  serverImportThreadBundle: "server.importThreadBundle",
   serverDiscoverSourceControl: "server.discoverSourceControl",
   serverGetTraceDiagnostics: "server.getTraceDiagnostics",
   serverGetProcessDiagnostics: "server.getProcessDiagnostics",
@@ -613,6 +616,12 @@ const WsServerExportThreadBundleRpc = Rpc.make(WS_METHODS.serverExportThreadBund
 const WsServerPlanThreadBundleImportRpc = Rpc.make(WS_METHODS.serverPlanThreadBundleImport, {
   payload: ThreadBundleImportPlanInput,
   success: ThreadBundleImportPlan,
+  error: Schema.Union([ThreadBundleImportError, EnvironmentAuthorizationError]),
+});
+
+const WsServerImportThreadBundleRpc = Rpc.make(WS_METHODS.serverImportThreadBundle, {
+  payload: ThreadBundleImportApplyInput,
+  success: ThreadBundleImportResult,
   error: Schema.Union([ThreadBundleImportError, EnvironmentAuthorizationError]),
 });
 
@@ -1430,6 +1439,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerResolveEnvironmentBundleCredentialsRpc,
   WsServerExportThreadBundleRpc,
   WsServerPlanThreadBundleImportRpc,
+  WsServerImportThreadBundleRpc,
   WsServerDiscoverSourceControlRpc,
   WsServerGetTraceDiagnosticsRpc,
   WsServerGetProcessDiagnosticsRpc,

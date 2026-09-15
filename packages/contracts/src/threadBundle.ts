@@ -182,7 +182,29 @@ export type ThreadBundleImportPlan = typeof ThreadBundleImportPlan.Type;
 export const ThreadBundleImportPlanInput = Schema.Struct({ bundle: ThreadBundle });
 export type ThreadBundleImportPlanInput = typeof ThreadBundleImportPlanInput.Type;
 
-export const ThreadBundleImportErrorReason = Schema.Literals(["snapshot-failed"]);
+export const ThreadBundleImportApplyInput = Schema.Struct({
+  bundle: ThreadBundle,
+  expectedPlan: ThreadBundleImportPlan,
+});
+export type ThreadBundleImportApplyInput = typeof ThreadBundleImportApplyInput.Type;
+
+export const ThreadBundleImportResult = Schema.Struct({
+  bundleId: StableReference,
+  importedThreads: Schema.Array(
+    Schema.Struct({
+      threadId: ThreadId,
+      projectId: ProjectId,
+    }),
+  ),
+});
+export type ThreadBundleImportResult = typeof ThreadBundleImportResult.Type;
+
+export const ThreadBundleImportErrorReason = Schema.Literals([
+  "snapshot-failed",
+  "plan-changed",
+  "blocked",
+  "persistence-failed",
+]);
 export type ThreadBundleImportErrorReason = typeof ThreadBundleImportErrorReason.Type;
 
 export class ThreadBundleImportError extends Schema.TaggedError<ThreadBundleImportError>()(

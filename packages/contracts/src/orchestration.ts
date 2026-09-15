@@ -4,7 +4,14 @@ import * as SchemaIssue from "effect/SchemaIssue";
 import * as SchemaTransformation from "effect/SchemaTransformation";
 import * as Struct from "effect/Struct";
 import { OrchestrationMessageContext } from "./composerContext.ts";
-import { FirstMateCommand, FirstMateEvent, FirstMateWorkspaceState } from "./firstMate.ts";
+import {
+  FirstMateCommand,
+  FirstMateDecisionId,
+  FirstMateDecisionOption,
+  FirstMateEvent,
+  FirstMateTopicId,
+  FirstMateWorkspaceState,
+} from "./firstMate.ts";
 import { ProviderOptionSelections } from "./model.ts";
 import { RepositoryIdentity, ThreadEnvMode } from "./environment.ts";
 import {
@@ -1459,11 +1466,58 @@ const ThreadHistoryImportCommand = Schema.Struct({
   messages: Schema.Array(
     Schema.Struct({
       messageId: MessageId,
-      role: Schema.Literals(["user", "assistant"]),
+      role: OrchestrationMessageRole,
       text: Schema.String,
       createdAt: IsoDateTime,
+      updatedAt: Schema.optional(IsoDateTime),
     }),
   ).check(Schema.isNonEmpty()),
+});
+
+const ThreadBundleImportCommand = Schema.Struct({
+  type: Schema.Literal("thread.bundle.import"),
+  commandId: CommandId,
+  // The final imported thread is the receipt aggregate. The decider always
+  // emits its final event on this thread, even when earlier entries span projects.
+  threadId: ThreadId,
+  entries: Schema.Array(
+    Schema.Struct({
+      sourceEnvironmentId: TrimmedNonEmptyString,
+      sourceThreadId: ThreadId,
+      targetThreadId: ThreadId,
+      projectId: ProjectId,
+      title: TrimmedNonEmptyString,
+      modelSelection: ModelSelection,
+      runtimeMode: RuntimeMode,
+      interactionMode: ProviderInteractionMode,
+      branch: Schema.NullOr(TrimmedNonEmptyString),
+      messages: Schema.Array(
+        Schema.Struct({
+          messageId: MessageId,
+          role: OrchestrationMessageRole,
+          text: Schema.String,
+          createdAt: IsoDateTime,
+          updatedAt: IsoDateTime,
+        }),
+      ),
+      proposedPlans: Schema.Array(OrchestrationProposedPlan),
+      resolvedDecisions: Schema.Array(
+        Schema.Struct({
+          topicId: FirstMateTopicId,
+          decisionId: FirstMateDecisionId,
+          sourceId: TrimmedNonEmptyString,
+          question: TrimmedNonEmptyString,
+          options: Schema.Array(FirstMateDecisionOption),
+          recommendedOptionId: Schema.NullOr(TrimmedNonEmptyString),
+          selectedOptionId: TrimmedNonEmptyString,
+          blocking: Schema.Boolean,
+          resolvedAt: IsoDateTime,
+        }),
+      ),
+      createdAt: IsoDateTime,
+      updatedAt: IsoDateTime,
+    }),
+  ).check(Schema.isMinLength(1), Schema.isMaxLength(50)),
 });
 
 /**
@@ -1581,6 +1635,7 @@ const InternalOrchestrationCommand = Schema.Union([
   ThreadMessageAssistantDeltaCommand,
   ThreadMessageAssistantCompleteCommand,
   ThreadHistoryImportCommand,
+  ThreadBundleImportCommand,
   ThreadMessageUserAppendCommand,
   ThreadProposedPlanUpsertCommand,
   ThreadTurnDiffCompleteCommand,

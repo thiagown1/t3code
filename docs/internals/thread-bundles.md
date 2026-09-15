@@ -33,7 +33,15 @@ server persistence and UI confirmation remain separate adapters.
 Settings > Integrations exposes this dry run under **Conversation portability**. The review accepts a
 Thread Bundle v1 file or pasted JSON, validates it locally, and then requests the authoritative plan.
 It shows every source thread and destination status rather than collapsing a blocked batch into one
-generic error. A ready plan still has no apply action until the atomic persistence adapter exists.
+generic error.
+
+Applying a ready plan sends the exact reviewed bundle and plan back to the server. The server
+recomputes the plan and rejects a stale or blocked confirmation. One internal orchestration command
+then creates every selected thread, completed message, proposed plan, generated completed FirstMate
+topic, and resolved decision. The event store and projection pipeline persist all events inside the
+engine's existing SQL transaction, so a rejection or persistence failure commits no partial batch.
+Imported threads are settled independent copies and do not create or bind provider sessions.
+Attachment metadata remains review-only because v1 has no integrity-checked content adapter.
 
 The read-only `server.exportThreadBundle` RPC accepts one to fifty unique thread IDs. It reads each
 full persisted projection snapshot, resolves its project, selects only FirstMate decisions whose

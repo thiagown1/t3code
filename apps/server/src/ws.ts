@@ -159,6 +159,10 @@ import {
 } from "./environment/EnvironmentBundleInventory.ts";
 import { resolveEnvironmentBundleCredentialReferences } from "./environment/EnvironmentBundleCredentials.ts";
 import { exportThreadBundleFromProjection } from "./orchestration/ThreadBundleExport.ts";
+import {
+  buildThreadBundleImportCommand,
+  threadBundleImportPlansMatch,
+} from "./orchestration/ThreadBundleImport.ts";
 import { planThreadBundleImportFromProjection } from "./orchestration/ThreadBundleImportPlan.ts";
 import { summarizeResourceTelemetry } from "./resourceTelemetry/ResourceTelemetrySummary.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
@@ -2608,6 +2612,80 @@ const makeWsRpcLayer = (
                   )
                   .map((provider) => provider.instanceId),
               );
+            }),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.serverImportThreadBundle]: ({ bundle, expectedPlan }) =>
+          observeRpcEffect(
+            WS_METHODS.serverImportThreadBundle,
+            Effect.gen(function* () {
+              const providers = yield* providerRegistry.getProviders.pipe(
+                Effect.mapError(
+                  () =>
+                    new ThreadBundleImportError({
+                      reason: "snapshot-failed",
+                      message: "Failed to read provider availability for Thread Bundle import",
+                    }),
+                ),
+              );
+              const currentPlan = yield* planThreadBundleImportFromProjection(
+                bundle,
+                projectionSnapshotQuery,
+                providers
+                  .filter(
+                    (provider) =>
+                      provider.enabled &&
+                      provider.status !== "disabled" &&
+                      provider.availability !== "unavailable",
+                  )
+                  .map((provider) => provider.instanceId),
+              );
+              if (!threadBundleImportPlansMatch(expectedPlan, currentPlan)) {
+                return yield* new ThreadBundleImportError({
+                  reason: "plan-changed",
+                  message: "Thread Bundle import plan changed; generate a new dry run",
+                });
+              }
+              if (!currentPlan.canImport) {
+                return yield* new ThreadBundleImportError({
+                  reason: "blocked",
+                  message: "Thread Bundle import is blocked until every thread is ready",
+                });
+              }
+              const commandId = yield* crypto.randomUUIDv4.pipe(
+                Effect.map((uuid) => CommandId.make(`server:thread-bundle-import:${uuid}`)),
+                Effect.mapError(
+                  () =>
+                    new ThreadBundleImportError({
+                      reason: "persistence-failed",
+                      message: "Failed to prepare the Thread Bundle import",
+                    }),
+                ),
+              );
+              const command = yield* Effect.try({
+                try: () => buildThreadBundleImportCommand({ bundle, plan: currentPlan, commandId }),
+                catch: () =>
+                  new ThreadBundleImportError({
+                    reason: "plan-changed",
+                    message: "Thread Bundle import plan no longer matches this bundle",
+                  }),
+              });
+              yield* dispatchFromClient(command).pipe(
+                Effect.mapError(
+                  () =>
+                    new ThreadBundleImportError({
+                      reason: "persistence-failed",
+                      message: "Thread Bundle import was not persisted",
+                    }),
+                ),
+              );
+              return {
+                bundleId: bundle.bundleId,
+                importedThreads: currentPlan.items.map((item) => ({
+                  threadId: item.targetThreadId,
+                  projectId: item.targetProjectId!,
+                })),
+              };
             }),
             { "rpc.aggregate": "server" },
           ),

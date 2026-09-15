@@ -2059,7 +2059,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             turnId: null,
             streaming: false,
             createdAt: message.createdAt,
-            updatedAt: message.createdAt,
+            updatedAt: message.updatedAt ?? message.createdAt,
           },
         });
       }
@@ -2084,6 +2084,90 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         },
       });
       return events;
+    }
+
+    case "thread.bundle.import": {
+      const commands: OrchestrationCommand[] = [];
+      for (const entry of command.entries) {
+        commands.push({
+          type: "thread.create",
+          commandId: command.commandId,
+          threadId: entry.targetThreadId,
+          projectId: entry.projectId,
+          title: entry.title,
+          modelSelection: entry.modelSelection,
+          runtimeMode: entry.runtimeMode,
+          interactionMode: entry.interactionMode,
+          branch: entry.branch,
+          worktreePath: null,
+          createdAt: entry.createdAt,
+          historyImport: true,
+        });
+        if (entry.resolvedDecisions.length > 0) {
+          commands.push({
+            type: "firstmate.topic.create",
+            commandId: command.commandId,
+            projectId: entry.projectId,
+            topicId: entry.resolvedDecisions[0]!.topicId,
+            title: entry.title,
+            summary: "Resolved decisions imported with this conversation.",
+            stage: "completed",
+            threadId: entry.targetThreadId,
+            responsibleAgentId: null,
+            createdAt: entry.createdAt,
+          });
+          for (const decision of entry.resolvedDecisions) {
+            commands.push(
+              {
+                type: "firstmate.decision.open",
+                commandId: command.commandId,
+                projectId: entry.projectId,
+                decisionId: decision.decisionId,
+                topicId: decision.topicId,
+                source: { kind: "firstmate", sourceId: decision.sourceId },
+                question: decision.question,
+                options: decision.options,
+                recommendedOptionId: decision.recommendedOptionId,
+                blocking: decision.blocking,
+                createdAt: decision.resolvedAt,
+              },
+              {
+                type: "firstmate.decision.resolve",
+                commandId: command.commandId,
+                projectId: entry.projectId,
+                decisionId: decision.decisionId,
+                selectedOptionId: decision.selectedOptionId,
+                createdAt: decision.resolvedAt,
+              },
+            );
+          }
+        }
+        if (entry.messages.length > 0) {
+          commands.push({
+            type: "thread.history.import",
+            commandId: command.commandId,
+            threadId: entry.targetThreadId,
+            messages: entry.messages,
+          });
+        }
+        for (const proposedPlan of entry.proposedPlans) {
+          commands.push({
+            type: "thread.proposed-plan.upsert",
+            commandId: command.commandId,
+            threadId: entry.targetThreadId,
+            proposedPlan,
+            createdAt: proposedPlan.updatedAt,
+          });
+        }
+        if (entry.messages.length === 0) {
+          commands.push({
+            type: "thread.settle",
+            commandId: command.commandId,
+            threadId: entry.targetThreadId,
+          });
+        }
+      }
+      return yield* decideCommandSequence({ commands, readModel });
     }
 
     case "thread.proposed-plan.upsert": {
