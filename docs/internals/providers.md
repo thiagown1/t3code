@@ -43,8 +43,10 @@ paths to relative logical paths and infers plugin/app identities without seriali
 installation paths. Import always starts with a canonical dry run that lists each add, update, and
 remove operation and marks provider reloads and required health checks. The reviewed bundle can
 apply its capability profile only when no other environment component would change; MCPs, skills,
-plugins/apps, providers, instructions, and context budgets remain atomic blockers until their safe
-destination adapters exist. The server hashes known
+plugins/apps, instructions, and context budgets remain atomic blockers until their safe destination
+adapters exist. An existing provider instance may be disabled in the same atomic settings patch;
+its opaque local configuration is preserved. Provider creation, removal, metadata changes, and
+enablement remain blocked until a health-checked adapter with rollback exists. The server hashes known
 root instruction files without returning their contents or absolute paths, and marks that coverage
 as partial until provider adapters report the exact files loaded by a session. MCP inventory stays
 explicit about coverage. The Codex adapter scans only MCP table names, `enabled`, `enabled_tools`,

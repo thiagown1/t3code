@@ -1,4 +1,9 @@
-import type { EnvironmentBundle, EnvironmentBundleInventoryCoverage } from "@t3tools/contracts";
+import type {
+  EnvironmentBundle,
+  EnvironmentBundleInventoryCoverage,
+  ServerSettings,
+  ServerSettingsPatch,
+} from "@t3tools/contracts";
 import {
   parseEnvironmentBundleJson,
   serializeEnvironmentBundle,
@@ -19,6 +24,7 @@ import {
 import { Textarea } from "../ui/textarea";
 import { Switch } from "../ui/switch";
 import {
+  buildEnvironmentBundleSettingsPatch,
   buildEnvironmentBundleInventory,
   environmentBundleCapabilityId,
   environmentBundleDownloadName,
@@ -195,13 +201,17 @@ function EnvironmentBundleReview({
   current,
   incoming,
   onIncomingChange,
+  providerInstances,
 }: {
   current: EnvironmentBundle;
   incoming: EnvironmentBundle;
   onIncomingChange: (incoming: EnvironmentBundle) => void;
+  providerInstances: ServerSettings["providerInstances"];
 }) {
   const summary = summarizeEnvironmentBundleDiff(current, incoming);
-  const applyReadiness = getEnvironmentBundleApplyReadiness(current, incoming);
+  const applyReadiness = getEnvironmentBundleApplyReadiness(current, incoming, {
+    providerInstances,
+  });
   const enablementEntries: ReadonlyArray<{
     readonly target: EnvironmentBundleEnablementTarget;
     readonly label: string;
@@ -324,8 +334,10 @@ function EnvironmentBundleReview({
       )}
       {applyReadiness.canApply ? (
         <div className="rounded-lg border border-success/30 bg-success/5 p-3 text-xs text-muted-foreground">
-          This bundle can atomically apply its capability profile. It does not install, restart, or
-          change provider, MCP, skill, plugin/app, or instruction configuration.
+          This bundle can atomically apply its supported settings. T3 can update the capability
+          profile and disable existing providers while preserving their local configuration. It
+          cannot enable providers or change MCP, skill, plugin/app, or instruction configuration
+          yet.
         </div>
       ) : (
         <div className="space-y-2 rounded-lg border border-warning/30 bg-warning/5 p-3 text-xs text-muted-foreground">
@@ -347,11 +359,13 @@ function EnvironmentBundleReview({
 function EnvironmentBundleImportDialog({
   current,
   onOpenChange,
-  onApplyCapabilityProfile,
+  onApplySettings,
+  providerInstances,
 }: {
   current: EnvironmentBundle;
   onOpenChange: (open: boolean) => void;
-  onApplyCapabilityProfile: (profile: EnvironmentBundle["capabilityProfile"]) => void;
+  onApplySettings: (patch: ServerSettingsPatch) => void;
+  providerInstances: ServerSettings["providerInstances"];
 }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [json, setJson] = useState(() => serializeEnvironmentBundle(current));
@@ -369,7 +383,7 @@ function EnvironmentBundleImportDialog({
     }
   }, [json]);
   const applyReadiness = reviewBundle
-    ? getEnvironmentBundleApplyReadiness(current, reviewBundle)
+    ? getEnvironmentBundleApplyReadiness(current, reviewBundle, { providerInstances })
     : null;
 
   return (
@@ -429,6 +443,7 @@ function EnvironmentBundleImportDialog({
               current={current}
               incoming={reviewBundle}
               onIncomingChange={setReviewBundle}
+              providerInstances={providerInstances}
             />
           ) : null}
         </DialogPanel>
@@ -454,11 +469,15 @@ function EnvironmentBundleImportDialog({
                 disabled={!reviewBundle || applyReadiness?.canApply !== true}
                 onClick={() => {
                   if (!reviewBundle || applyReadiness?.canApply !== true) return;
-                  onApplyCapabilityProfile(reviewBundle.capabilityProfile);
+                  onApplySettings(
+                    buildEnvironmentBundleSettingsPatch(current, reviewBundle, {
+                      providerInstances,
+                    }),
+                  );
                   onOpenChange(false);
                 }}
               >
-                Apply capability profile
+                Apply supported settings
               </Button>
             </>
           ) : (
@@ -484,6 +503,7 @@ function EnvironmentBundleImportDialog({
 
 export function EnvironmentBundleSettings() {
   const capabilityProfile = useScopedSettings((settings) => settings.capabilityProfile);
+  const providerInstances = useScopedSettings((settings) => settings.providerInstances);
   const mixed = useScopedSettingsMixed(["capabilityProfile"]);
   const updateSettings = useUpdateScopedSettings();
   const { environment, target, targets } = useSettingsScope();
@@ -557,9 +577,8 @@ export function EnvironmentBundleSettings() {
         <EnvironmentBundleImportDialog
           current={bundle}
           onOpenChange={setImportOpen}
-          onApplyCapabilityProfile={(profile) => {
-            updateSettings({ capabilityProfile: profile });
-          }}
+          onApplySettings={updateSettings}
+          providerInstances={providerInstances}
         />
       ) : null}
       {inventoryOpen && bundle ? (

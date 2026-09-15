@@ -1,7 +1,8 @@
-import type { PortableCapabilityProfile } from "@t3tools/contracts";
+import type { PortableCapabilityProfile, ServerSettings } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  buildEnvironmentBundleSettingsPatch,
   buildEnvironmentBundleInventory,
   environmentBundleDownloadName,
   getEnvironmentBundleApplyReadiness,
@@ -257,16 +258,100 @@ describe("Environment Bundle settings", () => {
       canApply: true,
       capabilityProfileChanged: true,
       blockers: [],
+      providerInstancesToDisable: [],
     });
     expect(getEnvironmentBundleApplyReadiness(current, withUnsupportedSkill)).toEqual({
       canApply: false,
       capabilityProfileChanged: true,
       blockers: ["skill:a requires an application adapter"],
+      providerInstancesToDisable: [],
     });
     expect(getEnvironmentBundleApplyReadiness(current, current)).toEqual({
       canApply: false,
       capabilityProfileChanged: false,
       blockers: ["The bundle does not contain any supported changes to apply"],
+      providerInstancesToDisable: [],
+    });
+  });
+
+  it("prepares a provider disable while preserving its local configuration", () => {
+    const providerInstance = {
+      driver: "codex",
+      displayName: "Work Codex",
+      enabled: true,
+      config: { homePath: "C:/secret-local-path", apiKey: "never-export" },
+    };
+    const providerInstances = {
+      codex_work: providerInstance,
+    } as unknown as ServerSettings["providerInstances"];
+    const current = buildEnvironmentBundleInventory({
+      environmentId: "desk",
+      environmentLabel: "Desk",
+      cwd: null,
+      capabilityProfile: profile,
+      providers: [
+        {
+          instanceId: "codex_work",
+          driver: "codex",
+          enabled: true,
+          version: "1.2.3",
+          skills: [],
+        },
+      ],
+    });
+    const incoming = {
+      ...current,
+      providers: [{ ...current.providers[0]!, enabled: false }],
+    };
+
+    expect(getEnvironmentBundleApplyReadiness(current, incoming, { providerInstances })).toEqual({
+      canApply: true,
+      capabilityProfileChanged: false,
+      blockers: [],
+      providerInstancesToDisable: ["codex_work"],
+    });
+    expect(buildEnvironmentBundleSettingsPatch(current, incoming, { providerInstances })).toEqual({
+      providerInstances: {
+        codex_work: {
+          ...providerInstance,
+          enabled: false,
+        },
+      },
+    });
+    expect(providerInstance.enabled).toBe(true);
+  });
+
+  it("keeps provider enablement blocked until a health-checked adapter exists", () => {
+    const providerInstances = {
+      codex_work: { driver: "codex", enabled: false, config: { homePath: "C:/local" } },
+    } as unknown as ServerSettings["providerInstances"];
+    const current = buildEnvironmentBundleInventory({
+      environmentId: "desk",
+      environmentLabel: "Desk",
+      cwd: null,
+      capabilityProfile: profile,
+      providers: [
+        {
+          instanceId: "codex_work",
+          driver: "codex",
+          enabled: false,
+          version: null,
+          skills: [],
+        },
+      ],
+    });
+    const incoming = {
+      ...current,
+      providers: [{ ...current.providers[0]!, enabled: true }],
+    };
+
+    expect(getEnvironmentBundleApplyReadiness(current, incoming, { providerInstances })).toEqual({
+      canApply: false,
+      capabilityProfileChanged: false,
+      blockers: [
+        "provider:codex_work cannot be enabled before a provider health-check adapter is available",
+      ],
+      providerInstancesToDisable: [],
     });
   });
 });

@@ -2,8 +2,11 @@ import {
   type EnvironmentBundle,
   type EnvironmentBundleServerInventory,
   type PortableCapabilityProfile,
+  type ProviderInstanceConfig,
   type ServerProviderSkill,
   type ServerProviderWorkspaceSnapshot,
+  type ServerSettings,
+  type ServerSettingsPatch,
 } from "@t3tools/contracts";
 import { resolveProviderSkillSourceKind } from "@t3tools/client-runtime/providerSkills";
 import {
@@ -306,6 +309,11 @@ export interface EnvironmentBundleApplyReadiness {
   readonly canApply: boolean;
   readonly capabilityProfileChanged: boolean;
   readonly blockers: ReadonlyArray<string>;
+  readonly providerInstancesToDisable: ReadonlyArray<string>;
+}
+
+interface EnvironmentBundleApplyContext {
+  readonly providerInstances: ServerSettings["providerInstances"];
 }
 
 function environmentBundleApplicationStepLabel(
@@ -329,25 +337,90 @@ function environmentBundleApplicationStepLabel(
 export function getEnvironmentBundleApplyReadiness(
   current: EnvironmentBundle,
   incoming: EnvironmentBundle,
+  context?: EnvironmentBundleApplyContext,
 ): EnvironmentBundleApplyReadiness {
   const steps = buildEnvironmentBundleApplicationPlan(current, incoming);
+  const diff = diffEnvironmentBundles(current, incoming);
   const capabilityProfileChanged =
     current.capabilityProfile.profileId !== incoming.capabilityProfile.profileId ||
     current.capabilityProfile.name !== incoming.capabilityProfile.name ||
     steps.some((step) => step.component === "capability");
+  const localProviderInstances = context?.providerInstances as
+    | Readonly<Record<string, ProviderInstanceConfig>>
+    | undefined;
+  const providerInstancesToDisable = diff.providers.changed
+    .filter(({ before, after }) => {
+      const { enabled: beforeEnabled, ...beforeMetadata } = before;
+      const { enabled: afterEnabled, ...afterMetadata } = after;
+      const local = localProviderInstances?.[after.instanceId];
+      return (
+        beforeEnabled &&
+        !afterEnabled &&
+        JSON.stringify(beforeMetadata) === JSON.stringify(afterMetadata) &&
+        local?.driver === after.driver
+      );
+    })
+    .map(({ after }) => after.instanceId);
+  const providerDisableSet = new Set(providerInstancesToDisable);
   const blockers = steps
-    .filter((step) => step.component !== "bundle" && step.component !== "capability")
-    .map(
+    .filter(
       (step) =>
-        `${environmentBundleApplicationStepLabel(current, incoming, step.component, step.id)} requires an application adapter`,
-    );
+        step.component !== "bundle" &&
+        step.component !== "capability" &&
+        !(step.component === "provider" && providerDisableSet.has(step.id)),
+    )
+    .map((step) => {
+      if (step.component === "provider") {
+        const changed = diff.providers.changed.find(({ after }) => after.instanceId === step.id);
+        if (changed?.before.enabled === false && changed.after.enabled === true) {
+          return `provider:${step.id} cannot be enabled before a provider health-check adapter is available`;
+        }
+      }
+      return `${environmentBundleApplicationStepLabel(current, incoming, step.component, step.id)} requires an application adapter`;
+    });
 
-  if (!capabilityProfileChanged && blockers.length === 0) {
+  const hasSupportedChanges = capabilityProfileChanged || providerInstancesToDisable.length > 0;
+  if (!hasSupportedChanges && blockers.length === 0) {
     blockers.push("The bundle does not contain any supported changes to apply");
   }
   return {
-    canApply: capabilityProfileChanged && blockers.length === 0,
+    canApply: hasSupportedChanges && blockers.length === 0,
     capabilityProfileChanged,
     blockers,
+    providerInstancesToDisable,
+  };
+}
+
+export function buildEnvironmentBundleSettingsPatch(
+  current: EnvironmentBundle,
+  incoming: EnvironmentBundle,
+  context: EnvironmentBundleApplyContext,
+): ServerSettingsPatch {
+  const readiness = getEnvironmentBundleApplyReadiness(current, incoming, context);
+  if (!readiness.canApply) {
+    throw new Error(`Environment Bundle cannot be applied: ${readiness.blockers.join("; ")}`);
+  }
+  const providerInstances = context.providerInstances as Readonly<
+    Record<string, ProviderInstanceConfig>
+  >;
+  const nextProviderInstances: Record<string, ProviderInstanceConfig> = { ...providerInstances };
+  for (const instanceId of readiness.providerInstancesToDisable) {
+    const instance = providerInstances[instanceId];
+    if (!instance) {
+      throw new Error(`Environment Bundle provider settings not found: ${instanceId}`);
+    }
+    nextProviderInstances[instanceId] = { ...instance, enabled: false };
+  }
+
+  return {
+    ...(readiness.capabilityProfileChanged
+      ? { capabilityProfile: incoming.capabilityProfile }
+      : {}),
+    ...(readiness.providerInstancesToDisable.length > 0
+      ? {
+          providerInstances:
+            nextProviderInstances as unknown as ServerSettings["providerInstances"],
+        }
+      : {}),
   };
 }
