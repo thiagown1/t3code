@@ -22,8 +22,19 @@ describe("Environment Bundle settings", () => {
       cwd: "C:\\work\\turbo",
       capabilityProfile: profile,
       serverInventory: {
-        mcpServers: [],
-        mcpCoverage: "unavailable",
+        mcpServers: [
+          {
+            serverId: "codex:codex:logs",
+            origin: "codex:codex:effective-config",
+            enabled: false,
+            configurationRef: "codex:codex:mcp:logs",
+            configurationHash: "b".repeat(64),
+            credentialRefs: [],
+            allowedTools: ["query"],
+            blockedTools: ["delete"],
+          },
+        ],
+        mcpCoverage: "partial",
         projectInstructions: [
           { logicalPath: "AGENTS.md", contentHash: "a".repeat(64), enabled: true },
         ],
@@ -85,6 +96,9 @@ describe("Environment Bundle settings", () => {
     ]);
     expect(bundle.projectInstructions).toEqual([
       { logicalPath: "AGENTS.md", contentHash: "a".repeat(64), enabled: true },
+    ]);
+    expect(bundle.mcpServers).toEqual([
+      expect.objectContaining({ serverId: "codex:codex:logs", enabled: false }),
     ]);
     expect(JSON.stringify(bundle)).not.toContain("C:\\\\Users");
   });

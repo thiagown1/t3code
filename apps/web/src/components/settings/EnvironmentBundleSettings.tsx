@@ -1,9 +1,9 @@
-import type { EnvironmentBundle } from "@t3tools/contracts";
+import type { EnvironmentBundle, EnvironmentBundleInventoryCoverage } from "@t3tools/contracts";
 import {
   parseEnvironmentBundleJson,
   serializeEnvironmentBundle,
 } from "@t3tools/shared/environmentBundle";
-import { DownloadIcon, FileJsonIcon, UploadIcon } from "lucide-react";
+import { DownloadIcon, EyeIcon, FileJsonIcon, UploadIcon } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 
 import { Badge } from "../ui/badge";
@@ -45,6 +45,140 @@ function InventoryCount({ label, value }: { label: string; value: number }) {
       <p className="text-lg font-medium text-foreground">{value}</p>
       <p className="text-xs text-muted-foreground">{label}</p>
     </div>
+  );
+}
+
+function InventoryList({
+  empty,
+  items,
+}: {
+  empty: string;
+  items: ReadonlyArray<{
+    readonly id: string;
+    readonly label: string;
+    readonly detail: string;
+    readonly enabled: boolean;
+  }>;
+}) {
+  if (items.length === 0) return <p className="text-xs text-muted-foreground">{empty}</p>;
+  return (
+    <ul className="max-h-44 space-y-1 overflow-auto pr-1">
+      {items.map((item) => (
+        <li
+          key={item.id}
+          className="flex items-start justify-between gap-3 rounded-md border border-border/50 px-2.5 py-2"
+        >
+          <span className="min-w-0">
+            <span className="block truncate text-sm text-foreground">{item.label}</span>
+            <span className="block truncate text-xs text-muted-foreground">{item.detail}</span>
+          </span>
+          <Badge variant={item.enabled ? "success" : "secondary"}>
+            {item.enabled ? "Enabled" : "Disabled"}
+          </Badge>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function CoverageBadge({ value }: { value: EnvironmentBundleInventoryCoverage }) {
+  return <Badge variant={value === "complete" ? "success" : "secondary"}>{value}</Badge>;
+}
+
+function EnvironmentBundleInventoryDialog({
+  bundle,
+  mcpCoverage,
+  projectInstructionsCoverage,
+  onOpenChange,
+}: {
+  bundle: EnvironmentBundle;
+  mcpCoverage: EnvironmentBundleInventoryCoverage;
+  projectInstructionsCoverage: EnvironmentBundleInventoryCoverage;
+  onOpenChange: (open: boolean) => void;
+}) {
+  return (
+    <Dialog open onOpenChange={onOpenChange}>
+      <DialogPopup className="w-full sm:max-w-3xl">
+        <DialogHeader>
+          <DialogTitle>Environment inventory</DialogTitle>
+          <p className="text-sm text-muted-foreground">
+            Sanitized metadata only. This view never displays commands, credentials, URLs, or
+            absolute paths.
+          </p>
+        </DialogHeader>
+        <DialogPanel className="grid gap-4 sm:grid-cols-2">
+          <section className="space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <h3 className="text-sm font-medium">MCP servers ({bundle.mcpServers.length})</h3>
+              <CoverageBadge value={mcpCoverage} />
+            </div>
+            <InventoryList
+              empty="No MCP metadata is safely available."
+              items={bundle.mcpServers.map((server) => ({
+                id: server.serverId,
+                label: server.serverId,
+                detail: `${server.origin} · ${server.allowedTools.length} allowed · ${server.blockedTools.length} blocked`,
+                enabled: server.enabled,
+              }))}
+            />
+          </section>
+          <section className="space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <h3 className="text-sm font-medium">Project instructions</h3>
+              <CoverageBadge value={projectInstructionsCoverage} />
+            </div>
+            <InventoryList
+              empty="No known project instructions were detected."
+              items={bundle.projectInstructions.map((instruction) => ({
+                id: instruction.logicalPath,
+                label: instruction.logicalPath,
+                detail: `SHA-256 ${instruction.contentHash.slice(0, 12)}…`,
+                enabled: instruction.enabled,
+              }))}
+            />
+          </section>
+          <section className="space-y-2">
+            <h3 className="text-sm font-medium">Skills ({bundle.skills.length})</h3>
+            <InventoryList
+              empty="No skills were reported."
+              items={bundle.skills.map((skill) => ({
+                id: skill.skillId,
+                label: skill.name,
+                detail: `${skill.origin}${skill.providedByPluginId ? ` · ${skill.providedByPluginId}` : ""}`,
+                enabled: skill.enabled,
+              }))}
+            />
+          </section>
+          <section className="space-y-2">
+            <h3 className="text-sm font-medium">
+              Providers and integrations ({bundle.providers.length + bundle.pluginsAndApps.length})
+            </h3>
+            <InventoryList
+              empty="No providers or integrations were reported."
+              items={[
+                ...bundle.providers.map((provider) => ({
+                  id: `provider:${provider.instanceId}`,
+                  label: provider.instanceId,
+                  detail: `provider · ${provider.driver}${provider.version ? ` · ${provider.version}` : ""}`,
+                  enabled: provider.enabled,
+                })),
+                ...bundle.pluginsAndApps.map((integration) => ({
+                  id: `integration:${integration.integrationId}`,
+                  label: integration.integrationId,
+                  detail: integration.kind,
+                  enabled: integration.enabled,
+                })),
+              ]}
+            />
+          </section>
+        </DialogPanel>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            Close
+          </Button>
+        </DialogFooter>
+      </DialogPopup>
+    </Dialog>
   );
 }
 
@@ -212,6 +346,7 @@ export function EnvironmentBundleSettings() {
   const mixed = useScopedSettingsMixed(["capabilityProfile"]);
   const { environment, target, targets } = useSettingsScope();
   const [importOpen, setImportOpen] = useState(false);
+  const [inventoryOpen, setInventoryOpen] = useState(false);
   const serverConfig = environment?.serverConfig ?? null;
   const bundle = useMemo(
     () =>
@@ -250,6 +385,14 @@ export function EnvironmentBundleSettings() {
               variant="outline"
               size="sm"
               disabled={bundle === null || targets.length !== 1}
+              onClick={() => setInventoryOpen(true)}
+            >
+              <EyeIcon /> View inventory
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={bundle === null || targets.length !== 1}
               onClick={() => bundle && downloadBundle(bundle)}
             >
               <DownloadIcon /> Export bundle
@@ -270,6 +413,16 @@ export function EnvironmentBundleSettings() {
       />
       {importOpen && bundle ? (
         <EnvironmentBundleImportDialog current={bundle} onOpenChange={setImportOpen} />
+      ) : null}
+      {inventoryOpen && bundle ? (
+        <EnvironmentBundleInventoryDialog
+          bundle={bundle}
+          mcpCoverage={serverConfig?.environmentBundleInventory?.mcpCoverage ?? "unavailable"}
+          projectInstructionsCoverage={
+            serverConfig?.environmentBundleInventory?.projectInstructionsCoverage ?? "unavailable"
+          }
+          onOpenChange={setInventoryOpen}
+        />
       ) : null}
     </SettingsSection>
   );
