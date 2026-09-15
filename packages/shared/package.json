@@ -311,6 +311,10 @@
       "types": "./src/capabilityProfile.ts",
       "import": "./src/capabilityProfile.ts"
     },
+    "./environmentBundle": {
+      "types": "./src/environmentBundle.ts",
+      "import": "./src/environmentBundle.ts"
+    },
     "./desktopAppControl": {
       "types": "./src/desktopAppControl.ts",
       "import": "./src/desktopAppControl.ts"

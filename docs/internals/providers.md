@@ -28,6 +28,15 @@ Import replaces the complete profile so removed declarations cannot survive unno
 profile grants no capabilities. Import/export does not resolve credentials or prove availability
 or authorization, which remain independent runtime gates.
 
+Environment Bundles extend that policy with a versioned, canonical inventory of MCP servers,
+skills, plugins/apps, provider instances, project-instruction hashes, and the initial skill-context
+budget. Bundles contain only logical paths, configuration references, credential references, and
+content hashes. Absolute or escaping paths, duplicate identities, and conflicting MCP allow/block
+rules are rejected. A bundle dry run compares every inventory independently; it is not permission
+to install, enable, restart, or mutate an environment. Runtime health remains explicit as
+`configured`, `missing-credential`, `unavailable`, `disabled`, or `ready`, and only a completed
+health check can produce `ready`.
+
 ## Process and account isolation
 
 T3-managed OpenCode chat uses one server per thread. Its MCP registrations are directory-scoped, while

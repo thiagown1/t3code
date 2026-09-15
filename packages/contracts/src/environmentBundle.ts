@@ -1,0 +1,94 @@
+import * as Schema from "effect/Schema";
+
+import { PositiveInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { PortableCapabilityProfile, PortableCredentialReference } from "./capabilityProfile.ts";
+
+const StableId = TrimmedNonEmptyString.check(Schema.isMaxLength(256));
+const LogicalPath = TrimmedNonEmptyString.check(Schema.isMaxLength(2_048));
+const ContentHash = TrimmedNonEmptyString.check(Schema.isPattern(/^[a-f0-9]{64}$/i));
+
+export const EnvironmentBundleMcpServer = Schema.Struct({
+  serverId: StableId,
+  origin: TrimmedNonEmptyString,
+  enabled: Schema.Boolean,
+  configurationRef: StableId,
+  configurationHash: Schema.optionalKey(ContentHash),
+  credentialRefs: Schema.Array(PortableCredentialReference),
+  allowedTools: Schema.Array(TrimmedNonEmptyString),
+  blockedTools: Schema.Array(TrimmedNonEmptyString),
+});
+export type EnvironmentBundleMcpServer = typeof EnvironmentBundleMcpServer.Type;
+
+export const EnvironmentBundleSkillOrigin = Schema.Literals([
+  "local",
+  "project",
+  "provider",
+  "plugin",
+]);
+export type EnvironmentBundleSkillOrigin = typeof EnvironmentBundleSkillOrigin.Type;
+
+export const EnvironmentBundleSkill = Schema.Struct({
+  skillId: StableId,
+  name: TrimmedNonEmptyString,
+  origin: EnvironmentBundleSkillOrigin,
+  enabled: Schema.Boolean,
+  logicalPath: Schema.optionalKey(LogicalPath),
+  version: Schema.optionalKey(TrimmedNonEmptyString),
+  contentHash: Schema.optionalKey(ContentHash),
+  providedByPluginId: Schema.optionalKey(StableId),
+});
+export type EnvironmentBundleSkill = typeof EnvironmentBundleSkill.Type;
+
+export const EnvironmentBundlePluginAppKind = Schema.Literals(["plugin", "app"]);
+export type EnvironmentBundlePluginAppKind = typeof EnvironmentBundlePluginAppKind.Type;
+
+export const EnvironmentBundlePluginApp = Schema.Struct({
+  integrationId: StableId,
+  kind: EnvironmentBundlePluginAppKind,
+  enabled: Schema.Boolean,
+  version: Schema.optionalKey(TrimmedNonEmptyString),
+});
+export type EnvironmentBundlePluginApp = typeof EnvironmentBundlePluginApp.Type;
+
+export const EnvironmentBundleProvider = Schema.Struct({
+  instanceId: StableId,
+  driver: StableId,
+  enabled: Schema.Boolean,
+  version: Schema.optionalKey(TrimmedNonEmptyString),
+  profileRef: Schema.optionalKey(StableId),
+});
+export type EnvironmentBundleProvider = typeof EnvironmentBundleProvider.Type;
+
+export const EnvironmentBundleProjectInstruction = Schema.Struct({
+  logicalPath: LogicalPath,
+  contentHash: ContentHash,
+  enabled: Schema.Boolean,
+});
+export type EnvironmentBundleProjectInstruction = typeof EnvironmentBundleProjectInstruction.Type;
+
+/**
+ * A portable description of an environment's intended integrations.
+ * It contains references and hashes, never executable configuration or secrets.
+ */
+export const EnvironmentBundle = Schema.Struct({
+  schemaVersion: Schema.Literal(1),
+  bundleId: StableId,
+  name: TrimmedNonEmptyString,
+  capabilityProfile: PortableCapabilityProfile,
+  mcpServers: Schema.Array(EnvironmentBundleMcpServer),
+  skills: Schema.Array(EnvironmentBundleSkill),
+  pluginsAndApps: Schema.Array(EnvironmentBundlePluginApp),
+  providers: Schema.Array(EnvironmentBundleProvider),
+  projectInstructions: Schema.Array(EnvironmentBundleProjectInstruction),
+  initialSkillContextBudgetTokens: Schema.optionalKey(PositiveInt),
+});
+export type EnvironmentBundle = typeof EnvironmentBundle.Type;
+
+export const EnvironmentBundleHealthStatus = Schema.Literals([
+  "configured",
+  "missing-credential",
+  "unavailable",
+  "disabled",
+  "ready",
+]);
+export type EnvironmentBundleHealthStatus = typeof EnvironmentBundleHealthStatus.Type;
