@@ -66,6 +66,8 @@ import {
 import { createPortal, flushSync } from "react-dom";
 import {
   clampCollapsedComposerCursor,
+  composerQueueTimingForEnter,
+  type ComposerQueueTiming,
   type ComposerSubmissionIntent,
   type ComposerTrigger,
   collapseExpandedComposerCursor,
@@ -1406,7 +1408,11 @@ export interface ChatComposerProps {
 
   // Callbacks
   onCompactContext: () => void;
-  onSend: (e?: { preventDefault: () => void }, intent?: ComposerSubmissionIntent) => void;
+  onSend: (
+    e?: { preventDefault: () => void },
+    intent?: ComposerSubmissionIntent,
+    queueTiming?: ComposerQueueTiming,
+  ) => void;
   onInterrupt: () => void;
   onImplementPlanInNewThread: () => void;
   onRespondToApproval: (
@@ -3763,7 +3769,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   ]);
 
   const submitComposer = useCallback(
-    (event?: { preventDefault: () => void }, intent: ComposerSubmissionIntent = "foreground") => {
+    (
+      event?: { preventDefault: () => void },
+      intent: ComposerSubmissionIntent = "foreground",
+      queueTiming?: ComposerQueueTiming,
+    ) => {
       if (noProviderAvailable || isSendDisabled) {
         event?.preventDefault();
         return;
@@ -3803,7 +3813,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           // ChatView reports its final composed-input preflight through the
           // composer handle before its first asynchronous send step.
           providerInputRejectedRef.current = false;
-          onSend(sendEvent, intent);
+          onSend(sendEvent, intent, queueTiming);
           return !providerInputRejectedRef.current;
         },
       });
@@ -3994,17 +4004,29 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     if (key === "ArrowUp" || key === "ArrowDown") {
       return navigatePromptHistory(key === "ArrowUp" ? "backward" : "forward", event);
     }
-    const submissionIntent =
+    const modifierKey = event.metaKey || event.ctrlKey;
+    const queueTiming =
       key === "Enter"
-        ? composerSubmissionIntentForEnter({
-            isMobileViewport,
+        ? composerQueueTimingForEnter({
+            altKey: event.altKey,
             shiftKey: event.shiftKey,
-            modifierKey: event.metaKey || event.ctrlKey,
-            isDraftThread: routeKind === "draft",
+            modifierKey,
+            isRunning: phase === "running",
           })
         : null;
+    const submissionIntent =
+      key !== "Enter"
+        ? null
+        : queueTiming
+          ? "foreground"
+          : composerSubmissionIntentForEnter({
+              isMobileViewport,
+              shiftKey: event.shiftKey,
+              modifierKey,
+              isDraftThread: routeKind === "draft",
+            });
     if (submissionIntent) {
-      submitComposer(undefined, submissionIntent);
+      submitComposer(undefined, submissionIntent, queueTiming ?? undefined);
       return true;
     }
     return false;

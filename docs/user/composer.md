@@ -37,6 +37,10 @@ call, or when the turn ends. Use the arrow under the bubble to send it right
 away, or the X to move it back into the composer. Stop returns every queued
 message to the composer.
 
+On web and desktop, press `Alt+Enter` while the agent is working to keep the
+message queued until the current turn finishes. Tool calls during that turn do
+not send it early.
+
 ## Queue messages offline on mobile
 
 Mobile keeps local copies of draft attachments, so you can preview them and queue

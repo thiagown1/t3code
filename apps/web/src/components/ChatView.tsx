@@ -121,6 +121,7 @@ import { readLocalApi } from "../localApi";
 import { useDiffPanelStore } from "../diffPanelStore";
 import {
   collapseExpandedComposerCursor,
+  type ComposerQueueTiming,
   type ComposerSubmissionIntent,
   parseStandaloneComposerSlashCommand,
 } from "../composer-logic";
@@ -7495,6 +7496,7 @@ export default function ChatView(props: ChatViewProps) {
         previewAnnotations: [],
         reviewComments: [],
         submissionIntent: "foreground",
+        dispatchTiming: "after-current-turn",
         queuedAfterToolActivityId: latestCompletedToolActivityId(threadActivities),
         // Restoration is not a send. The user decides when the overflow goes.
         holdUntilUserAction: true,
@@ -7539,6 +7541,7 @@ export default function ChatView(props: ChatViewProps) {
     },
     /** A queued message being sent now instead of the live composer draft. */
     queuedMessage?: QueuedComposerMessage,
+    queueTiming?: ComposerQueueTiming,
   ) => {
     e?.preventDefault();
     const parallelCommand =
@@ -7898,6 +7901,7 @@ export default function ChatView(props: ChatViewProps) {
         previewAnnotations: [...composerPreviewAnnotations],
         reviewComments: [...composerReviewComments],
         submissionIntent,
+        dispatchTiming: queueTiming ?? "next-boundary",
         queuedAfterToolActivityId: latestCompletedToolActivityId(threadActivities),
         createdAt: new Date().toISOString(),
       });
@@ -10111,7 +10115,9 @@ export default function ChatView(props: ChatViewProps) {
                             onPageScrollKeyUp={onComposerPageScrollKeyUp}
                             onPageScrollRelease={onComposerPageScrollRelease}
                             onCompactContext={onCompactContext}
-                            onSend={onSend}
+                            onSend={(event, intent, queueTiming) =>
+                              onSend(event, intent, undefined, undefined, queueTiming)
+                            }
                             onInterrupt={onInterrupt}
                             onImplementPlanInNewThread={onImplementPlanInNewThread}
                             onRespondToApproval={onRespondToApproval}

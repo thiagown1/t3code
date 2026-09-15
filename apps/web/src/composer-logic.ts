@@ -11,6 +11,7 @@ import {
 export type ComposerTriggerKind = "path" | "pull-request" | "slash-command" | "skill";
 export type ComposerSlashCommand = "model" | "plan" | "default" | "parallel";
 export type ComposerSubmissionIntent = "foreground" | "background";
+export type ComposerQueueTiming = "next-boundary" | "after-current-turn";
 
 export interface ComposerTrigger {
   kind: ComposerTriggerKind;
@@ -33,6 +34,17 @@ export function composerSubmissionIntentForEnter(input: {
     return null;
   }
   return input.modifierKey && input.isDraftThread ? "background" : "foreground";
+}
+
+export function composerQueueTimingForEnter(input: {
+  altKey: boolean;
+  shiftKey: boolean;
+  modifierKey: boolean;
+  isRunning: boolean;
+}): ComposerQueueTiming | null {
+  return input.isRunning && input.altKey && !input.shiftKey && !input.modifierKey
+    ? "after-current-turn"
+    : null;
 }
 
 const isInlineTokenSegment = (segment: ComposerPromptSegment): boolean => segment.type !== "text";

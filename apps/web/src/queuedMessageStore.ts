@@ -1,7 +1,7 @@
 import type { PreviewAnnotationPayload } from "@t3tools/contracts";
 import { create } from "zustand";
 
-import type { ComposerSubmissionIntent } from "./composer-logic";
+import type { ComposerQueueTiming, ComposerSubmissionIntent } from "./composer-logic";
 import type { ComposerFileAttachment, ComposerImageAttachment } from "./composerDraftStore";
 import type { TerminalContextDraft } from "./lib/terminalContext";
 import { randomUUID } from "./lib/utils";
@@ -21,6 +21,7 @@ export interface QueuedComposerMessage {
   previewAnnotations: PreviewAnnotationPayload[];
   reviewComments: ReviewCommentContext[];
   submissionIntent: ComposerSubmissionIntent;
+  dispatchTiming: ComposerQueueTiming;
   /**
    * The newest completed tool activity at queue time. A different id later
    * means a tool call finished after the user queued, which is the boundary
@@ -186,13 +187,17 @@ export function latestCompletedToolActivityId(
  * between a send and the provider picking it up, so nothing is due there.
  */
 export function isQueuedMessageDue(input: {
-  message: Pick<QueuedComposerMessage, "queuedAfterToolActivityId" | "holdUntilUserAction">;
+  message: Pick<
+    QueuedComposerMessage,
+    "dispatchTiming" | "queuedAfterToolActivityId" | "holdUntilUserAction"
+  >;
   phase: "connecting" | "running" | "ready" | "disconnected";
   latestToolActivityId: string | null;
 }): boolean {
   if (input.message.holdUntilUserAction) return false;
   if (input.phase === "connecting") return false;
   if (input.phase !== "running") return true;
+  if (input.message.dispatchTiming === "after-current-turn") return false;
   return input.latestToolActivityId !== input.message.queuedAfterToolActivityId;
 }
 

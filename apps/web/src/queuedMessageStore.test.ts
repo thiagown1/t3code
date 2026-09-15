@@ -16,6 +16,7 @@ function makeMessage(prompt: string): Omit<QueuedComposerMessage, "id"> {
     previewAnnotations: [],
     reviewComments: [],
     submissionIntent: "foreground",
+    dispatchTiming: "next-boundary",
     queuedAfterToolActivityId: null,
     createdAt: "2026-09-11T00:00:00.000Z",
   };
@@ -119,7 +120,7 @@ describe("queued message dispatch timing", () => {
   });
 
   it("waits mid-turn until a tool call finishes after the message was queued", () => {
-    const message = { queuedAfterToolActivityId: "a2" };
+    const message = { dispatchTiming: "next-boundary" as const, queuedAfterToolActivityId: "a2" };
     expect(isQueuedMessageDue({ message, phase: "running", latestToolActivityId: "a2" })).toBe(
       false,
     );
@@ -129,15 +130,30 @@ describe("queued message dispatch timing", () => {
   });
 
   it("never auto-sends a message held for user action", () => {
-    const message = { queuedAfterToolActivityId: null, holdUntilUserAction: true };
+    const message = {
+      dispatchTiming: "next-boundary" as const,
+      queuedAfterToolActivityId: null,
+      holdUntilUserAction: true,
+    };
     expect(isQueuedMessageDue({ message, phase: "ready", latestToolActivityId: "a4" })).toBe(false);
   });
 
   it("is due as soon as the turn is over, but not while a send is connecting", () => {
-    const message = { queuedAfterToolActivityId: "a2" };
+    const message = { dispatchTiming: "next-boundary" as const, queuedAfterToolActivityId: "a2" };
     expect(isQueuedMessageDue({ message, phase: "ready", latestToolActivityId: "a2" })).toBe(true);
     expect(isQueuedMessageDue({ message, phase: "connecting", latestToolActivityId: "a4" })).toBe(
       false,
     );
+  });
+
+  it("keeps an after-current-turn message queued across tool boundaries", () => {
+    const message = {
+      dispatchTiming: "after-current-turn" as const,
+      queuedAfterToolActivityId: "a2",
+    };
+    expect(isQueuedMessageDue({ message, phase: "running", latestToolActivityId: "a4" })).toBe(
+      false,
+    );
+    expect(isQueuedMessageDue({ message, phase: "ready", latestToolActivityId: "a4" })).toBe(true);
   });
 });

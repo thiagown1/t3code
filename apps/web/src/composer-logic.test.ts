@@ -10,6 +10,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   clampCollapsedComposerCursor,
   collapseExpandedComposerCursor,
+  composerQueueTimingForEnter,
   composerSubmissionIntentForEnter,
   detectComposerTrigger,
   expandCollapsedComposerCursor,
@@ -114,6 +115,49 @@ describe("composerSubmissionIntentForEnter", () => {
         isDraftThread: false,
       }),
     ).toBe("foreground");
+  });
+});
+
+describe("composerQueueTimingForEnter", () => {
+  it("queues Alt+Enter until the active turn is over", () => {
+    expect(
+      composerQueueTimingForEnter({
+        altKey: true,
+        shiftKey: false,
+        modifierKey: false,
+        isRunning: true,
+      }),
+    ).toBe("after-current-turn");
+  });
+
+  it("does not change Enter behavior when no turn is running", () => {
+    expect(
+      composerQueueTimingForEnter({
+        altKey: true,
+        shiftKey: false,
+        modifierKey: false,
+        isRunning: false,
+      }),
+    ).toBeNull();
+  });
+
+  it("leaves modified Alt combinations available to the editor", () => {
+    expect(
+      composerQueueTimingForEnter({
+        altKey: true,
+        shiftKey: true,
+        modifierKey: false,
+        isRunning: true,
+      }),
+    ).toBeNull();
+    expect(
+      composerQueueTimingForEnter({
+        altKey: true,
+        shiftKey: false,
+        modifierKey: true,
+        isRunning: true,
+      }),
+    ).toBeNull();
   });
 });
 

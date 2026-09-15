@@ -1510,9 +1510,13 @@ function QueuedMessageTimelineRow({
   const text = queuedMessage.prompt.trim();
   const statusLabel = queuedMessage.holdUntilUserAction
     ? "Waits for Send now"
-    : row.isNext
-      ? "Sends after the next tool call or when the turn ends"
-      : "Sends after the messages above it";
+    : queuedMessage.dispatchTiming === "after-current-turn"
+      ? row.isNext
+        ? "Sends when the current turn ends"
+        : "Sends after the messages above it finish"
+      : row.isNext
+        ? "Sends after the next tool call or when the turn ends"
+        : "Sends after the messages above it";
   return (
     <div className="flex flex-col items-end" data-queued-message-id={queuedMessage.id}>
       <div className="max-w-[80%] rounded-2xl border border-dashed border-border p-3 text-message-foreground/80">
