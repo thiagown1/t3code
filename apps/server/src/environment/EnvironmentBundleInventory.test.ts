@@ -7,7 +7,9 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 
 import {
+  claudeMcpInventorySourcesFromSettings,
   loadEnvironmentBundleServerInventory,
+  parseSanitizedJsonMcpConfig,
   parseSanitizedCodexMcpConfig,
 } from "./EnvironmentBundleInventory.ts";
 
@@ -172,6 +174,98 @@ command = "do-not-export"
         expect(exportedValues).not.toContain("secret-token");
         expect(exportedValues).not.toContain(homePath);
       }
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it("discovers Claude instances without exposing provider configuration", () => {
+    const settings = {
+      providerInstances: {
+        work: {
+          driver: "claudeAgent",
+          enabled: true,
+          config: { enabled: false, homePath: "C:/private/claude", apiKey: "never-export" },
+        },
+      },
+      providers: { claudeAgent: { enabled: true } },
+    } as never;
+
+    expect(claudeMcpInventorySourcesFromSettings(settings)).toEqual([
+      { instanceId: "work", enabled: false },
+      { instanceId: "claudeAgent", enabled: true },
+    ]);
+  });
+
+  it("extracts only credential references from JSON MCP configuration", () => {
+    const parsed = parseSanitizedJsonMcpConfig(
+      JSON.stringify({
+        mcpServers: {
+          firebase: {
+            command: "C:/private/bin/server.exe",
+            args: ["--token", "do-not-export", "${FIREBASE_PROJECT:-demo}"],
+            env: { FIREBASE_TOKEN: "do-not-export" },
+            headers: { Authorization: "Bearer ${FIREBASE_API_KEY}" },
+          },
+          "logs.remote": { url: "https://example.invalid/${LOG_TENANT}/mcp?token=secret" },
+          "C:/private": { command: "do-not-export" },
+        },
+      }),
+    );
+
+    expect([...parsed.entries()]).toEqual([
+      [
+        "firebase",
+        {
+          credentialRefs: [
+            { kind: "environment-variable", id: "FIREBASE_API_KEY" },
+            { kind: "environment-variable", id: "FIREBASE_PROJECT" },
+            { kind: "environment-variable", id: "FIREBASE_TOKEN" },
+          ],
+        },
+      ],
+      ["logs.remote", { credentialRefs: [{ kind: "environment-variable", id: "LOG_TENANT" }] }],
+    ]);
+  });
+
+  it.effect("inventories Claude project MCPs without exporting executable configuration", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-environment-bundle-" });
+      yield* fileSystem.makeDirectory(path.join(root, ".git"), { recursive: true });
+      yield* fileSystem.writeFileString(
+        path.join(root, ".mcp.json"),
+        JSON.stringify({
+          mcpServers: {
+            firebase: {
+              command: "C:/private/bin/server.exe",
+              args: ["--token", "do-not-export"],
+              env: { FIREBASE_TOKEN: "secret-token" },
+            },
+          },
+        }),
+      );
+
+      const inventory = yield* loadEnvironmentBundleServerInventory({
+        cwd: root,
+        claudeMcpSources: [{ instanceId: "claude-work", enabled: true }],
+      });
+
+      expect(inventory.mcpCoverage).toBe("partial");
+      expect(inventory.mcpServers).toEqual([
+        expect.objectContaining({
+          serverId: "claude:claude-work:firebase",
+          origin: "claude:claude-work:project-config",
+          enabled: true,
+          configurationRef: "claude:claude-work:mcp:firebase",
+          credentialRefs: [{ kind: "environment-variable", id: "FIREBASE_TOKEN" }],
+          allowedTools: [],
+          blockedTools: [],
+          configurationHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+        }),
+      ]);
+      expect(JSON.stringify(inventory)).not.toContain("private/bin");
+      expect(JSON.stringify(inventory)).not.toContain("secret-token");
+      expect(JSON.stringify(inventory)).not.toContain("do-not-export");
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 });

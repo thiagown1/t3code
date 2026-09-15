@@ -22,6 +22,11 @@ export interface CodexMcpInventorySource {
   readonly homePath?: string;
 }
 
+export interface ClaudeMcpInventorySource {
+  readonly instanceId: string;
+  readonly enabled: boolean;
+}
+
 interface ParsedCodexMcpServer {
   readonly enabled?: boolean;
   readonly allowedTools?: ReadonlyArray<string>;
@@ -59,6 +64,25 @@ export function codexMcpInventorySourcesFromSettings(
       enabled: legacy.enabled,
       ...(legacy.homePath.trim().length > 0 ? { homePath: legacy.homePath } : {}),
     });
+  }
+  return sources;
+}
+
+export function claudeMcpInventorySourcesFromSettings(
+  settings: ServerSettings,
+): ReadonlyArray<ClaudeMcpInventorySource> {
+  const sources = Object.entries(settings.providerInstances)
+    .filter(([, instance]) => instance.driver === "claudeAgent")
+    .map(([instanceId, instance]) => {
+      const configEnabled = recordValue(instance.config, "enabled");
+      return {
+        instanceId,
+        enabled: instance.enabled !== false && configEnabled !== false,
+      } satisfies ClaudeMcpInventorySource;
+    });
+
+  if (!("claudeAgent" in settings.providerInstances)) {
+    sources.push({ instanceId: "claudeAgent", enabled: settings.providers.claudeAgent.enabled });
   }
   return sources;
 }
@@ -215,6 +239,63 @@ export function parseSanitizedCodexMcpConfig(
   return servers;
 }
 
+function jsonRecord(value: unknown): Readonly<Record<string, unknown>> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Readonly<Record<string, unknown>>)
+    : null;
+}
+
+function addEnvironmentReferences(value: unknown, references: Set<string>): void {
+  if (typeof value !== "string") return;
+  for (const match of value.matchAll(/\$\{([a-zA-Z_][a-zA-Z0-9_]{0,255})(?::-[^}]*)?}/g)) {
+    references.add(match[1]!);
+  }
+}
+
+/**
+ * Reads only identities and environment-variable reference names from the
+ * common JSON MCP shape. Executables, arguments, URLs, headers, and values
+ * are inspected in memory but never returned or hashed.
+ */
+export function parseSanitizedJsonMcpConfig(
+  contents: string,
+): ReadonlyMap<string, Pick<ParsedCodexMcpServer, "credentialRefs">> {
+  const root = jsonRecord(JSON.parse(contents));
+  const mcpServers = jsonRecord(root?.mcpServers);
+  if (!mcpServers) return new Map();
+
+  const servers = new Map<string, Pick<ParsedCodexMcpServer, "credentialRefs">>();
+  for (const [name, unknownServer] of Object.entries(mcpServers).sort(([left], [right]) =>
+    left.localeCompare(right),
+  )) {
+    if (!/^[a-zA-Z0-9_.-]{1,256}$/.test(name)) continue;
+    const server = jsonRecord(unknownServer);
+    if (!server) continue;
+    const references = new Set<string>();
+    const environment = jsonRecord(server.env);
+    if (environment) {
+      for (const key of Object.keys(environment)) {
+        if (/^[a-zA-Z_][a-zA-Z0-9_]{0,255}$/.test(key)) references.add(key);
+      }
+    }
+    addEnvironmentReferences(server.command, references);
+    addEnvironmentReferences(server.url, references);
+    if (Array.isArray(server.args)) {
+      for (const argument of server.args) addEnvironmentReferences(argument, references);
+    }
+    const headers = jsonRecord(server.headers);
+    if (headers) {
+      for (const value of Object.values(headers)) addEnvironmentReferences(value, references);
+    }
+    servers.set(name, {
+      credentialRefs: [...references]
+        .sort((left, right) => left.localeCompare(right))
+        .map((id) => ({ kind: "environment-variable" as const, id })),
+    });
+  }
+  return servers;
+}
+
 const readCodexMcpConfig = Effect.fn("readEnvironmentBundleCodexMcpConfig")(function* (
   filePath: string,
 ) {
@@ -222,6 +303,19 @@ const readCodexMcpConfig = Effect.fn("readEnvironmentBundleCodexMcpConfig")(func
   const info = yield* fileSystem.stat(filePath);
   if (info.type !== "File" || info.size > MAX_MCP_CONFIG_BYTES) return new Map();
   return parseSanitizedCodexMcpConfig(yield* fileSystem.readFileString(filePath));
+});
+
+const readJsonMcpConfig = Effect.fn("readEnvironmentBundleJsonMcpConfig")(function* (
+  filePath: string,
+) {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const info = yield* fileSystem.stat(filePath);
+  if (info.type !== "File" || info.size > MAX_MCP_CONFIG_BYTES) return new Map();
+  const contents = yield* fileSystem.readFileString(filePath);
+  return yield* Effect.try({
+    try: () => parseSanitizedJsonMcpConfig(contents),
+    catch: (cause) => cause,
+  });
 });
 
 function mergeMcpConfigs(
@@ -318,6 +412,30 @@ const loadCodexMcpInventory = Effect.fn("loadEnvironmentBundleCodexMcpInventory"
   );
 });
 
+const loadClaudeMcpInventory = Effect.fn("loadEnvironmentBundleClaudeMcpInventory")(function* (
+  root: string,
+  sources: ReadonlyArray<ClaudeMcpInventorySource>,
+) {
+  const path = yield* Path.Path;
+  const projectConfig = yield* readJsonMcpConfig(path.join(root, ".mcp.json")).pipe(
+    Effect.orElseSucceed(() => new Map()),
+  );
+  return sources.flatMap((source) =>
+    [...projectConfig.entries()].map(([name, config]) => {
+      const server = {
+        serverId: boundedMcpId(`claude:${source.instanceId}`, name),
+        origin: `claude:${source.instanceId}:project-config`,
+        enabled: source.enabled,
+        configurationRef: boundedMcpId(`claude:${source.instanceId}:mcp`, name),
+        credentialRefs: [...(config.credentialRefs ?? [])],
+        allowedTools: [],
+        blockedTools: [],
+      } satisfies EnvironmentBundleMcpServer;
+      return { ...server, configurationHash: sanitizedConfigurationHash(server) };
+    }),
+  );
+});
+
 const readProjectInstruction = Effect.fn("readEnvironmentBundleProjectInstruction")(function* (
   root: string,
   logicalPath: (typeof ROOT_PROJECT_INSTRUCTION_PATHS)[number],
@@ -341,6 +459,7 @@ export const loadEnvironmentBundleServerInventory = Effect.fn(
 )(function* (input: {
   readonly cwd: string;
   readonly codexMcpSources?: ReadonlyArray<CodexMcpInventorySource>;
+  readonly claudeMcpSources?: ReadonlyArray<ClaudeMcpInventorySource>;
 }): Effect.fn.Return<EnvironmentBundleServerInventory, never, FileSystem.FileSystem | Path.Path> {
   const root = yield* resolveProjectRoot(input.cwd);
   const projectInstructions = yield* Effect.forEach(
@@ -350,13 +469,17 @@ export const loadEnvironmentBundleServerInventory = Effect.fn(
     { concurrency: "unbounded" },
   );
   const availableProjectInstructions = projectInstructions.filter((entry) => entry !== null);
-  const mcpServers = yield* loadCodexMcpInventory(root, input.codexMcpSources ?? []);
+  const mcpServers = [
+    ...(yield* loadCodexMcpInventory(root, input.codexMcpSources ?? [])),
+    ...(yield* loadClaudeMcpInventory(root, input.claudeMcpSources ?? [])),
+  ].sort((left, right) => left.serverId.localeCompare(right.serverId));
 
   return {
     mcpServers,
     // Only Codex's known, safe fields are currently inventoried. Commands,
     // URLs, environment values, and provider-native secrets are never copied.
-    mcpCoverage: input.codexMcpSources?.length ? "partial" : "unavailable",
+    mcpCoverage:
+      input.codexMcpSources?.length || input.claudeMcpSources?.length ? "partial" : "unavailable",
     projectInstructions: availableProjectInstructions,
     projectInstructionsCoverage: "partial",
   };

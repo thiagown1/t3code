@@ -154,6 +154,7 @@ import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import * as HostResources from "./resourceTelemetry/HostResources.ts";
 import {
+  claudeMcpInventorySourcesFromSettings,
   codexMcpInventorySourcesFromSettings,
   loadEnvironmentBundleServerInventory,
 } from "./environment/EnvironmentBundleInventory.ts";
@@ -1788,6 +1789,7 @@ const makeWsRpcLayer = (
           const environmentBundleInventory = yield* loadEnvironmentBundleServerInventory({
             cwd: config.cwd,
             codexMcpSources: codexMcpInventorySourcesFromSettings(rawSettings),
+            claudeMcpSources: claudeMcpInventorySourcesFromSettings(rawSettings),
           });
 
           return {

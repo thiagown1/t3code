@@ -52,12 +52,19 @@ as partial until provider adapters report the exact files loaded by a session. M
 explicit about coverage. The Codex adapter scans only MCP table names, `enabled`, `enabled_tools`,
 and `disabled_tools` from the configured user home and root project config. Commands, arguments,
 URLs, environment values, tokens, absolute paths, and unrecognized fields are discarded before the
-inventory or its hash is built. Single-line allow/block lists are supported; other providers and
-more complex TOML remain partial. The browser must not derive inventory from raw provider config.
+inventory or its hash is built. Single-line allow/block lists are supported; unhandled
+provider-native scopes and more complex TOML remain partial. The browser must not derive inventory
+from raw provider config.
 Nested Codex MCP `env` tables contribute only their variable names as portable
 `environment-variable` credential references. Values are never returned or hashed; destinations
 must resolve each name from their own environment before any future enablement adapter may report
 the MCP as ready. Inline or provider-specific credential layouts remain outside the partial scan.
+Claude instances also contribute project-scoped servers from the repository's `.mcp.json`. That
+adapter accepts only safe server names and returns environment-variable reference names found in
+the declared `env` keys or `${VAR}` placeholders in standard command, argument, URL, and header
+fields. It discards all corresponding values and executable configuration before hashing. User and
+local Claude scopes, approval state, managed MCPs, plugins, and runtime health are not inferred, so
+coverage remains partial.
 The read-only credential-resolution RPC accepts only explicitly requested references. It reports
 `resolved`, `missing`, or `unsupported`, never returns a value, and does not enumerate the host
 environment. The first resolver supports environment variables; native keychains, credential
