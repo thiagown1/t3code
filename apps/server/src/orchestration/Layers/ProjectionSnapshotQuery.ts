@@ -400,7 +400,10 @@ function mapProjectShellRow(
     faviconPath: row.faviconPath ?? null,
     projectIcon: row.projectIcon ?? null,
     scripts: row.scripts,
-    ...(row.firstMate === null ? {} : { firstMate: row.firstMate }),
+    // `undefined` is reserved for older servers that do not support FirstMate.
+    // A migrated row is `null` until its first fact, which the current client
+    // presents as an available, empty workspace.
+    firstMate: row.firstMate,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };

@@ -46,3 +46,20 @@ payload metadata disagrees.
 Shell clients receive a project upsert when a FirstMate fact commits. Clients
 consume the projected workspace and derived topic summaries; they do not replay
 an independent client-side history.
+
+## Web topic panel
+
+The web sidebar derives its FirstMate topic rows directly from project and
+thread shell snapshots. A linked thread contributes session state, pending user
+input, approvals, background liveness, and delivery status; pending FirstMate
+decisions come from the project workspace. This lets a topic move to states such
+as `waiting-user` or `waiting-deploy` in place when the shell stream updates.
+
+The compact panel distinguishes three states: an older server omits the
+FirstMate field and is unavailable, a current server returns `null` for a
+migrated workspace with no facts yet, and a populated workspace supplies the
+topic list. Topic rows expose title, summary, responsible agent, project when
+needed, last update, pending-decision count, and a link to the delegated thread.
+Resource-alert counts remain zero until environment telemetry is joined into
+this read model; the panel must not imply that machine coverage exists before
+that integration is present.

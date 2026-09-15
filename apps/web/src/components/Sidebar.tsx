@@ -234,6 +234,7 @@ import {
 import { SidebarContent, SidebarGroup, useSidebar } from "./ui/sidebar";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
 import { SidebarHeaderIconButton, SidebarThreadHeader } from "./sidebar/SidebarThreadHeader";
+import { FirstMateTopicsPanel } from "./firstMate/FirstMateTopicsPanel";
 import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
 import { Tooltip, TooltipPopup, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 import {
@@ -4527,6 +4528,13 @@ export default function Sidebar() {
           </SidebarGroup>
         }
       >
+        <FirstMateTopicsPanel
+          projects={projects}
+          threads={threads}
+          scopedProjectKeys={scopedProjectKeys}
+          hidden={isSearchingThreads}
+          onOpenThread={navigateToThread}
+        />
         <SidebarGroup className="ps-[calc(var(--sidebar-content-inset)+1px)] pe-[var(--sidebar-content-inset)] pb-1 pt-0 flex-1">
           {isSearchingThreads ? (
             threadSearchResults.length > 0 ? (
