@@ -2,6 +2,7 @@ import type {
   FirstMateCommand,
   FirstMateDecision,
   FirstMateEvent,
+  FirstMateRoutingEvaluation,
   FirstMateTopic,
   FirstMateTopicId,
   FirstMateTopicOperationalStatus,
@@ -40,6 +41,7 @@ export function createEmptyFirstMateWorkspace(
     topics: [],
     decisions: [],
     routingReceipts: [],
+    routingEvaluationMode: "off",
     updatedAt: now,
   };
 }
@@ -168,6 +170,20 @@ export function decideFirstMateCommand(
             topicId: command.topicId,
             destinationThreadId: command.destinationThreadId,
             reason: command.reason,
+            evaluation: command.evaluation,
+            occurredAt: command.createdAt,
+          },
+        ],
+      };
+
+    case "firstmate.routing-evaluation-mode.set":
+      return {
+        accepted: true,
+        events: [
+          {
+            type: "firstmate.routing-evaluation-mode-set",
+            projectId: command.projectId,
+            mode: command.mode,
             occurredAt: command.createdAt,
           },
         ],
@@ -318,9 +334,17 @@ export function projectFirstMateEvent(
             topicId: event.topicId,
             destinationThreadId: event.destinationThreadId,
             reason: event.reason,
+            evaluation: event.evaluation,
             routedAt: event.occurredAt,
           },
         ].slice(-FIRST_MATE_ROUTING_RECEIPT_LIMIT),
+        updatedAt: event.occurredAt,
+      };
+
+    case "firstmate.routing-evaluation-mode-set":
+      return {
+        ...state,
+        routingEvaluationMode: event.mode,
         updatedAt: event.occurredAt,
       };
 
@@ -474,6 +498,70 @@ export function routeFirstMateMessage(
         candidateTopicIds: state.topics.map((topic) => topic.id),
       }
     : routeToTopic(state, selectedTopic, "selected-topic", message);
+}
+
+const FIRST_MATE_ROUTING_STOP_WORDS = new Set([
+  "and",
+  "com",
+  "continue",
+  "das",
+  "dos",
+  "for",
+  "para",
+  "por",
+  "please",
+  "the",
+  "uma",
+]);
+
+function firstMateRoutingTokens(value: string): ReadonlySet<string> {
+  const normalized = value
+    .replaceAll(/(?:^|\s)@topic:[^\s]+/gu, " ")
+    .normalize("NFKD")
+    .replaceAll(/\p{M}/gu, "")
+    .toLocaleLowerCase("en-US");
+  return new Set(
+    (normalized.match(/[\p{L}\p{N}]+/gu) ?? []).filter(
+      (token) => token.length >= 3 && !FIRST_MATE_ROUTING_STOP_WORDS.has(token),
+    ),
+  );
+}
+
+/**
+ * Score an automatic route in shadow mode. The result is evidence only: callers
+ * must keep the deterministic or user-confirmed topic as the real destination.
+ */
+export function evaluateFirstMateAutomaticRouting(
+  state: FirstMateWorkspaceState,
+  message: string,
+  authoritativeTopicId: FirstMateTopicId,
+): FirstMateRoutingEvaluation | null {
+  if (state.routingEvaluationMode !== "shadow") return null;
+
+  const messageTokens = firstMateRoutingTokens(message);
+  const scored = state.topics
+    .filter((topic) => topic.threadId !== null && topic.threadId !== state.supervisorThreadId)
+    .map((topic) => {
+      const titleTokens = firstMateRoutingTokens(topic.title);
+      const summaryTokens = firstMateRoutingTokens(topic.summary);
+      let score = 0;
+      for (const token of messageTokens) {
+        if (titleTokens.has(token)) score += 3;
+        if (summaryTokens.has(token)) score += 1;
+      }
+      return { topicId: topic.id, score };
+    })
+    .sort((left, right) => right.score - left.score || left.topicId.localeCompare(right.topicId));
+  const best = scored[0];
+  const runnerUp = scored[1];
+  if (best === undefined || best.score < 3 || best.score === runnerUp?.score) {
+    return { candidateTopicId: null, score: best?.score ?? 0, outcome: "no-candidate" };
+  }
+  return {
+    candidateTopicId: best.topicId,
+    score: best.score,
+    outcome: best.topicId === authoritativeTopicId ? "matched" : "different",
+  };
 }
 
 const stageStatus: Record<FirstMateTopic["stage"], FirstMateTopicOperationalStatus> = {

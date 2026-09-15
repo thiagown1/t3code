@@ -55,6 +55,7 @@ function project(
       ],
       decisions,
       routingReceipts: [],
+      routingEvaluationMode: "off",
       updatedAt: now,
     },
     createdAt: now,

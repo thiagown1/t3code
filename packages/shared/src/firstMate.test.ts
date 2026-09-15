@@ -15,6 +15,7 @@ import {
   decideFirstMateCommand,
   deriveFirstMateTopicReadModel,
   deriveFirstMateTopicStatus,
+  evaluateFirstMateAutomaticRouting,
   firstMateTopicMention,
   replayFirstMateEvents,
   routeFirstMateMessage,
@@ -323,6 +324,7 @@ describe("FirstMate routing audit", () => {
         topicId,
         destinationThreadId: ThreadId.make("thread-1"),
         reason: "selected-topic",
+        evaluation: null,
       }),
     );
 
@@ -334,6 +336,7 @@ describe("FirstMate routing audit", () => {
         topicId: "topic-1",
         destinationThreadId: "thread-1",
         reason: "selected-topic",
+        evaluation: null,
         routedAt: "2026-09-14T20:00:00.000Z",
       },
     ]);
@@ -349,6 +352,7 @@ describe("FirstMate routing audit", () => {
       topicId,
       destinationThreadId: ThreadId.make("thread-1"),
       reason: "explicit-mention" as const,
+      evaluation: null,
     };
 
     expect(decideFirstMateCommand(state, command(base))).toEqual({
@@ -379,6 +383,7 @@ describe("FirstMate routing audit", () => {
           topicId,
           destinationThreadId: ThreadId.make("thread-1"),
           reason: "selected-topic",
+          evaluation: null,
           createdAt: `2026-09-14T20:00:${String(index).padStart(2, "0")}.000Z`,
         }),
       );
@@ -387,6 +392,84 @@ describe("FirstMate routing audit", () => {
     expect(state.routingReceipts).toHaveLength(50);
     expect(state.routingReceipts[0]?.messageId).toBe("message-1");
     expect(state.routingReceipts[49]?.messageId).toBe("message-50");
+  });
+});
+
+describe("FirstMate automatic routing evaluation", () => {
+  function evaluationWorkspace() {
+    let state = createEmptyFirstMateWorkspace(projectId, "2026-09-14T19:00:00.000Z");
+    state = accept(state, topicCreate());
+    state = accept(
+      state,
+      command({
+        type: "firstmate.topic.create",
+        topicId: secondTopicId,
+        title: "CI checks",
+        summary: "Re-run GitHub validation and inspect failures.",
+        stage: "testing",
+        threadId: ThreadId.make("thread-2"),
+        responsibleAgentId: "agent-2",
+      }),
+    );
+    return state;
+  }
+
+  it("is off by default and never changes the authoritative destination", () => {
+    const state = evaluationWorkspace();
+    expect(
+      evaluateFirstMateAutomaticRouting(state, "Please re-run the CI checks.", secondTopicId),
+    ).toBeNull();
+  });
+
+  it("records a shadow suggestion as agreement or disagreement", () => {
+    const selected = accept(
+      evaluationWorkspace(),
+      command({ type: "firstmate.topic.select", topicId }),
+    );
+    const state = accept(
+      selected,
+      command({ type: "firstmate.routing-evaluation-mode.set", mode: "shadow" }),
+    );
+    const agreed = evaluateFirstMateAutomaticRouting(
+      state,
+      "Please re-run the CI checks and inspect failures.",
+      secondTopicId,
+    );
+    const disagreed = evaluateFirstMateAutomaticRouting(
+      state,
+      "Please re-run the CI checks and inspect failures.",
+      topicId,
+    );
+
+    expect(agreed).toMatchObject({
+      candidateTopicId: secondTopicId,
+      outcome: "matched",
+    });
+    expect(disagreed).toMatchObject({
+      candidateTopicId: secondTopicId,
+      outcome: "different",
+    });
+    expect(agreed?.score).toBeGreaterThan(0);
+    expect(
+      routeFirstMateMessage(state, "Please re-run the CI checks and inspect failures."),
+    ).toMatchObject({
+      status: "routed",
+      topicId,
+      reason: "selected-topic",
+    });
+  });
+
+  it("abstains when no topic has a unique meaningful score", () => {
+    const state = accept(
+      evaluationWorkspace(),
+      command({ type: "firstmate.routing-evaluation-mode.set", mode: "shadow" }),
+    );
+
+    expect(evaluateFirstMateAutomaticRouting(state, "Continue.", topicId)).toEqual({
+      candidateTopicId: null,
+      score: 0,
+      outcome: "no-candidate",
+    });
   });
 });
 

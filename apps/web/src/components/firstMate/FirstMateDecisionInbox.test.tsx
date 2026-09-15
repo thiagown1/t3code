@@ -66,6 +66,7 @@ const project: EnvironmentProject = {
       },
     ],
     routingReceipts: [],
+    routingEvaluationMode: "off",
     updatedAt: now,
   },
   createdAt: now,

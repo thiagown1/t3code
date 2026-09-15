@@ -104,6 +104,7 @@ describe("FirstMate contracts", () => {
 
     expect(workspace.selectedTopicId).toBeNull();
     expect(workspace.routingReceipts).toEqual([]);
+    expect(workspace.routingEvaluationMode).toBe("off");
   });
 
   it("decodes a routing receipt without persisting the message body", () => {
@@ -116,6 +117,7 @@ describe("FirstMate contracts", () => {
       topicId: FirstMateTopicId.make("topic-1"),
       destinationThreadId: ThreadId.make("thread-worker"),
       reason: "user-confirmed",
+      evaluation: null,
       createdAt: "2026-09-14T21:01:00.000Z",
     });
 
@@ -125,5 +127,32 @@ describe("FirstMate contracts", () => {
       reason: "user-confirmed",
     });
     expect(command).not.toHaveProperty("message");
+  });
+
+  it("decodes the opt-in shadow evaluation mode", () => {
+    expect(
+      decodeCommand({
+        type: "firstmate.routing-evaluation-mode.set",
+        commandId: CommandId.make("command-routing-mode"),
+        projectId: ProjectId.make("project-1"),
+        mode: "shadow",
+        createdAt: "2026-09-14T21:02:00.000Z",
+      }),
+    ).toMatchObject({ type: "firstmate.routing-evaluation-mode.set", mode: "shadow" });
+  });
+
+  it("decodes routing events created before shadow evaluation existed", () => {
+    const event = decodeEvent({
+      type: "firstmate.routing-recorded",
+      messageId: "message-legacy",
+      projectId: "project-1",
+      sourceThreadId: "thread-supervisor",
+      topicId: "topic-1",
+      destinationThreadId: "thread-worker",
+      reason: "selected-topic",
+      occurredAt: "2026-09-14T21:03:00.000Z",
+    });
+
+    expect(event).toMatchObject({ type: "firstmate.routing-recorded", evaluation: null });
   });
 });

@@ -88,6 +88,16 @@ export const FirstMateRoutingReason = Schema.Literals([
 ]);
 export type FirstMateRoutingReason = typeof FirstMateRoutingReason.Type;
 
+export const FirstMateRoutingEvaluationMode = Schema.Literals(["off", "shadow"]);
+export type FirstMateRoutingEvaluationMode = typeof FirstMateRoutingEvaluationMode.Type;
+
+export const FirstMateRoutingEvaluation = Schema.Struct({
+  candidateTopicId: Schema.NullOr(FirstMateTopicId),
+  score: NonNegativeInt,
+  outcome: Schema.Literals(["matched", "different", "no-candidate"]),
+});
+export type FirstMateRoutingEvaluation = typeof FirstMateRoutingEvaluation.Type;
+
 export const FirstMateRoutingReceipt = Schema.Struct({
   messageId: MessageId,
   projectId: ProjectId,
@@ -95,6 +105,9 @@ export const FirstMateRoutingReceipt = Schema.Struct({
   topicId: FirstMateTopicId,
   destinationThreadId: ThreadId,
   reason: FirstMateRoutingReason,
+  evaluation: Schema.NullOr(FirstMateRoutingEvaluation).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
   routedAt: IsoDateTime,
 });
 export type FirstMateRoutingReceipt = typeof FirstMateRoutingReceipt.Type;
@@ -109,6 +122,9 @@ export const FirstMateWorkspaceState = Schema.Struct({
   decisions: Schema.Array(FirstMateDecision),
   routingReceipts: Schema.Array(FirstMateRoutingReceipt).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
+  ),
+  routingEvaluationMode: FirstMateRoutingEvaluationMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed("off" as const)),
   ),
   updatedAt: IsoDateTime,
 });
@@ -168,12 +184,18 @@ export const FirstMateCommand = Schema.Union([
   }),
   Schema.Struct({
     ...FirstMateCommandBase,
+    type: Schema.Literal("firstmate.routing-evaluation-mode.set"),
+    mode: FirstMateRoutingEvaluationMode,
+  }),
+  Schema.Struct({
+    ...FirstMateCommandBase,
     type: Schema.Literal("firstmate.routing.record"),
     messageId: MessageId,
     sourceThreadId: ThreadId,
     topicId: FirstMateTopicId,
     destinationThreadId: ThreadId,
     reason: FirstMateRoutingReason,
+    evaluation: Schema.NullOr(FirstMateRoutingEvaluation),
   }),
   Schema.Struct({
     ...FirstMateCommandBase,
@@ -236,6 +258,12 @@ export const FirstMateEvent = Schema.Union([
     occurredAt: IsoDateTime,
   }),
   Schema.Struct({
+    type: Schema.Literal("firstmate.routing-evaluation-mode-set"),
+    projectId: ProjectId,
+    mode: FirstMateRoutingEvaluationMode,
+    occurredAt: IsoDateTime,
+  }),
+  Schema.Struct({
     type: Schema.Literal("firstmate.routing-recorded"),
     messageId: MessageId,
     projectId: ProjectId,
@@ -243,6 +271,9 @@ export const FirstMateEvent = Schema.Union([
     topicId: FirstMateTopicId,
     destinationThreadId: ThreadId,
     reason: FirstMateRoutingReason,
+    evaluation: Schema.NullOr(FirstMateRoutingEvaluation).pipe(
+      Schema.withDecodingDefault(Effect.succeed(null)),
+    ),
     occurredAt: IsoDateTime,
   }),
   Schema.Struct({

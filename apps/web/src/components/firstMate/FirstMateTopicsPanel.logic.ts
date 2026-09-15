@@ -6,6 +6,7 @@ import type {
   EnvironmentId,
   FirstMateTopicId,
   FirstMateTopicOperationalStatus,
+  FirstMateRoutingEvaluationMode,
   ProjectId,
   ThreadId,
 } from "@t3tools/contracts";
@@ -33,6 +34,11 @@ export interface FirstMatePanelModel {
   readonly availability: FirstMatePanelAvailability;
   readonly projectCount: number;
   readonly items: ReadonlyArray<FirstMatePanelItem>;
+  readonly routingEvaluation: {
+    readonly environmentId: EnvironmentId;
+    readonly projectId: ProjectId;
+    readonly mode: FirstMateRoutingEvaluationMode;
+  } | null;
 }
 
 const ZERO_MACHINE_ALERTS = {
@@ -74,6 +80,7 @@ export function buildFirstMatePanelModel(input: {
       availability: "unavailable",
       projectCount: visibleProjects.length,
       items: [],
+      routingEvaluation: null,
     };
   }
 
@@ -124,10 +131,22 @@ export function buildFirstMatePanelModel(input: {
     return recency !== 0 ? recency : left.key.localeCompare(right.key);
   });
 
+  const evaluationProject =
+    firstMateProjects.find((project) => project.firstMate?.selectedTopicId != null) ??
+    (firstMateProjects.length === 1 ? firstMateProjects[0] : undefined);
+
   return {
     availability: items.length === 0 ? "empty" : "ready",
     projectCount: visibleProjects.length,
     items,
+    routingEvaluation:
+      evaluationProject?.firstMate != null
+        ? {
+            environmentId: evaluationProject.environmentId,
+            projectId: evaluationProject.id,
+            mode: evaluationProject.firstMate.routingEvaluationMode,
+          }
+        : null,
   };
 }
 

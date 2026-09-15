@@ -61,6 +61,8 @@ export type LinkFirstMateSupervisorInput = CommandInput<"firstmate.supervisor.li
 export type CreateFirstMateTopicInput = CommandInput<"firstmate.topic.create">;
 export type SelectFirstMateTopicInput = CommandInput<"firstmate.topic.select">;
 export type RecordFirstMateRoutingInput = CommandInput<"firstmate.routing.record">;
+export type SetFirstMateRoutingEvaluationModeInput =
+  CommandInput<"firstmate.routing-evaluation-mode.set">;
 export type OpenFirstMateDecisionInput = CommandInput<"firstmate.decision.open">;
 export type ResolveFirstMateDecisionInput = CommandInput<"firstmate.decision.resolve">;
 export type CancelFirstMateDecisionInput = CommandInput<"firstmate.decision.cancel">;
@@ -144,6 +146,20 @@ export const recordFirstMateRouting: (input: RecordFirstMateRoutingInput) => Com
       createdAt: metadata.createdAt,
     });
   });
+
+export const setFirstMateRoutingEvaluationMode: (
+  input: SetFirstMateRoutingEvaluationModeInput,
+) => CommandEffect = Effect.fn("EnvironmentCommands.setFirstMateRoutingEvaluationMode")(
+  function* (input) {
+    const metadata = yield* timestampedCommandMetadata(input);
+    return yield* dispatch({
+      ...input,
+      type: "firstmate.routing-evaluation-mode.set",
+      commandId: metadata.commandId,
+      createdAt: metadata.createdAt,
+    });
+  },
+);
 
 export const openFirstMateDecision: (input: OpenFirstMateDecisionInput) => CommandEffect =
   Effect.fn("EnvironmentCommands.openFirstMateDecision")(function* (input) {

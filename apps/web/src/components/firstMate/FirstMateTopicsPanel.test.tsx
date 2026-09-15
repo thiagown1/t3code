@@ -38,6 +38,7 @@ const baseProject: EnvironmentProject = {
     topics: [],
     decisions: [],
     routingReceipts: [],
+    routingEvaluationMode: "off",
     updatedAt: now,
   },
   createdAt: now,
@@ -77,6 +78,7 @@ describe("FirstMateTopicsPanel", () => {
         threads={[]}
         scopedProjectKeys={null}
         onSelectTopic={async () => true}
+        onSetRoutingEvaluationMode={async () => true}
         onOpenThread={() => {}}
       />,
     );
@@ -114,6 +116,7 @@ describe("FirstMateTopicsPanel", () => {
         threads={[linkedThread]}
         scopedProjectKeys={null}
         onSelectTopic={async () => true}
+        onSetRoutingEvaluationMode={async () => true}
         onOpenThread={() => {}}
       />,
     );
@@ -124,5 +127,6 @@ describe("FirstMateTopicsPanel", () => {
     expect(markup).toContain("firstmate");
     expect(markup).toContain("FirstMate panel is the active topic");
     expect(markup).toContain('aria-pressed="true"');
+    expect(markup).toContain("Automatic routing evaluation: Off");
   });
 });

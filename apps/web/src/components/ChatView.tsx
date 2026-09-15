@@ -494,6 +494,7 @@ import {
 } from "./firstMate/FirstMateRouteConfirmation";
 import { planFirstMateSupervisorSubmission } from "./firstMate/FirstMateSupervisorRouting.logic";
 import { finalizeFirstMateShellCommand } from "./firstMate/firstMateShellCommand";
+import { evaluateFirstMateAutomaticRouting } from "@t3tools/shared/firstMate";
 import {
   AlertDialog,
   AlertDialogClose,
@@ -7184,6 +7185,14 @@ export default function ChatView(props: ChatViewProps) {
           topicId: input.topic.id,
           destinationThreadId: target.id,
           reason: input.reason,
+          evaluation:
+            activeProject.firstMate === null || activeProject.firstMate === undefined
+              ? null
+              : evaluateFirstMateAutomaticRouting(
+                  activeProject.firstMate,
+                  input.message,
+                  input.topic.id,
+                ),
           createdAt,
         },
       });

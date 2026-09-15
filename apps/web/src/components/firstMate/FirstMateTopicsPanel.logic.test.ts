@@ -86,6 +86,7 @@ const workspace: NonNullable<EnvironmentProject["firstMate"]> = {
   ],
   decisions: [],
   routingReceipts: [],
+  routingEvaluationMode: "off",
   updatedAt: now,
 };
 
@@ -119,6 +120,11 @@ describe("FirstMate topics panel model", () => {
       selected: true,
       threadId,
       pendingDecisionCount: 0,
+    });
+    expect(model.routingEvaluation).toEqual({
+      environmentId,
+      projectId,
+      mode: "off",
     });
   });
 

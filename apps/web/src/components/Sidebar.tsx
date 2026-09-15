@@ -244,6 +244,7 @@ import {
 import {
   FirstMateTopicsPanel,
   type SelectFirstMateTopicRequest,
+  type SetFirstMateRoutingEvaluationModeRequest,
 } from "./firstMate/FirstMateTopicsPanel";
 import { finalizeFirstMateShellCommand } from "./firstMate/firstMateShellCommand";
 import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
@@ -2180,6 +2181,10 @@ export default function Sidebar() {
     orchestrationEnvironment.selectFirstMateTopic,
     "select FirstMate topic",
   );
+  const setFirstMateRoutingEvaluationMode = useAtomCommand(
+    orchestrationEnvironment.setFirstMateRoutingEvaluationMode,
+    "set FirstMate routing evaluation mode",
+  );
   const { copyToClipboard: copyPathToClipboard } = useCopyToClipboard<{ path: string }>({
     onCopy: ({ path }) => {
       toastManager.add({
@@ -2912,6 +2917,24 @@ export default function Sidebar() {
       });
     },
     [selectFirstMateTopic],
+  );
+  const handleSetFirstMateRoutingEvaluationMode = useCallback(
+    async (request: SetFirstMateRoutingEvaluationModeRequest) => {
+      const result = await setFirstMateRoutingEvaluationMode({
+        environmentId: request.environmentId,
+        input: {
+          projectId: request.projectId,
+          mode: request.mode,
+        },
+      });
+      return finalizeFirstMateShellCommand({
+        result,
+        environmentId: request.environmentId,
+        refreshEnvironmentShell: (environmentId) =>
+          appAtomRegistry.refresh(environmentShell.stateAtom(environmentId)),
+      });
+    },
+    [setFirstMateRoutingEvaluationMode],
   );
 
   // Dropping files on a row opens that thread and attaches the files there.
@@ -4625,6 +4648,7 @@ export default function Sidebar() {
           scopedProjectKeys={scopedProjectKeys}
           hidden={isSearchingThreads}
           onSelectTopic={handleSelectFirstMateTopic}
+          onSetRoutingEvaluationMode={handleSetFirstMateRoutingEvaluationMode}
           onOpenThread={navigateToThread}
         />
         <SidebarGroup className="ps-[calc(var(--sidebar-content-inset)+1px)] pe-[var(--sidebar-content-inset)] pb-1 pt-0 flex-1">
