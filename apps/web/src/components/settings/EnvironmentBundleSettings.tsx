@@ -23,12 +23,17 @@ import {
   environmentBundleCapabilityId,
   environmentBundleDownloadName,
   type EnvironmentBundleEnablementTarget,
+  getEnvironmentBundleApplyReadiness,
   setEnvironmentBundleEntryEnabled,
   summarizeEnvironmentBundleDiff,
 } from "./EnvironmentBundleSettings.logic";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
 import { useSettingsScope } from "./SettingsScopeContext";
-import { useScopedSettings, useScopedSettingsMixed } from "./useScopedSettings";
+import {
+  useScopedSettings,
+  useScopedSettingsMixed,
+  useUpdateScopedSettings,
+} from "./useScopedSettings";
 
 const MAX_ENVIRONMENT_BUNDLE_BYTES = 1024 * 1024;
 
@@ -196,6 +201,7 @@ function EnvironmentBundleReview({
   onIncomingChange: (incoming: EnvironmentBundle) => void;
 }) {
   const summary = summarizeEnvironmentBundleDiff(current, incoming);
+  const applyReadiness = getEnvironmentBundleApplyReadiness(current, incoming);
   const enablementEntries: ReadonlyArray<{
     readonly target: EnvironmentBundleEnablementTarget;
     readonly label: string;
@@ -316,11 +322,24 @@ function EnvironmentBundleReview({
           ) : null}
         </ul>
       )}
-      <div className="rounded-lg border border-warning/30 bg-warning/5 p-3 text-xs text-muted-foreground">
-        Dry run only. T3 has not installed, enabled, restarted, or changed anything. Applying a
-        bundle stays unavailable until destination credential resolution and provider/MCP health
-        checks are implemented.
-      </div>
+      {applyReadiness.canApply ? (
+        <div className="rounded-lg border border-success/30 bg-success/5 p-3 text-xs text-muted-foreground">
+          This bundle can atomically apply its capability profile. It does not install, restart, or
+          change provider, MCP, skill, plugin/app, or instruction configuration.
+        </div>
+      ) : (
+        <div className="space-y-2 rounded-lg border border-warning/30 bg-warning/5 p-3 text-xs text-muted-foreground">
+          <p>Application is blocked until every requested component has a safe destination.</p>
+          <ul className="list-disc space-y-1 pl-4">
+            {applyReadiness.blockers.slice(0, 8).map((blocker) => (
+              <li key={blocker}>{blocker}</li>
+            ))}
+            {applyReadiness.blockers.length > 8 ? (
+              <li>{applyReadiness.blockers.length - 8} more blockers</li>
+            ) : null}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }
@@ -328,9 +347,11 @@ function EnvironmentBundleReview({
 function EnvironmentBundleImportDialog({
   current,
   onOpenChange,
+  onApplyCapabilityProfile,
 }: {
   current: EnvironmentBundle;
   onOpenChange: (open: boolean) => void;
+  onApplyCapabilityProfile: (profile: EnvironmentBundle["capabilityProfile"]) => void;
 }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [json, setJson] = useState(() => serializeEnvironmentBundle(current));
@@ -347,6 +368,9 @@ function EnvironmentBundleImportDialog({
       };
     }
   }, [json]);
+  const applyReadiness = reviewBundle
+    ? getEnvironmentBundleApplyReadiness(current, reviewBundle)
+    : null;
 
   return (
     <Dialog open onOpenChange={onOpenChange}>
@@ -426,6 +450,16 @@ function EnvironmentBundleImportDialog({
               <Button onClick={() => reviewBundle && downloadBundle(reviewBundle)}>
                 <DownloadIcon /> Export prepared bundle
               </Button>
+              <Button
+                disabled={!reviewBundle || applyReadiness?.canApply !== true}
+                onClick={() => {
+                  if (!reviewBundle || applyReadiness?.canApply !== true) return;
+                  onApplyCapabilityProfile(reviewBundle.capabilityProfile);
+                  onOpenChange(false);
+                }}
+              >
+                Apply capability profile
+              </Button>
             </>
           ) : (
             <Button
@@ -451,6 +485,7 @@ function EnvironmentBundleImportDialog({
 export function EnvironmentBundleSettings() {
   const capabilityProfile = useScopedSettings((settings) => settings.capabilityProfile);
   const mixed = useScopedSettingsMixed(["capabilityProfile"]);
+  const updateSettings = useUpdateScopedSettings();
   const { environment, target, targets } = useSettingsScope();
   const [importOpen, setImportOpen] = useState(false);
   const [inventoryOpen, setInventoryOpen] = useState(false);
@@ -519,7 +554,13 @@ export function EnvironmentBundleSettings() {
         mixed={mixed}
       />
       {importOpen && bundle ? (
-        <EnvironmentBundleImportDialog current={bundle} onOpenChange={setImportOpen} />
+        <EnvironmentBundleImportDialog
+          current={bundle}
+          onOpenChange={setImportOpen}
+          onApplyCapabilityProfile={(profile) => {
+            updateSettings({ capabilityProfile: profile });
+          }}
+        />
       ) : null}
       {inventoryOpen && bundle ? (
         <EnvironmentBundleInventoryDialog

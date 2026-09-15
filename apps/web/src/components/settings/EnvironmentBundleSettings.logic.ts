@@ -301,3 +301,53 @@ export function summarizeEnvironmentBundleDiff(
     steps: buildEnvironmentBundleApplicationPlan(current, incoming),
   };
 }
+
+export interface EnvironmentBundleApplyReadiness {
+  readonly canApply: boolean;
+  readonly capabilityProfileChanged: boolean;
+  readonly blockers: ReadonlyArray<string>;
+}
+
+function environmentBundleApplicationStepLabel(
+  current: EnvironmentBundle,
+  incoming: EnvironmentBundle,
+  component: ReturnType<typeof buildEnvironmentBundleApplicationPlan>[number]["component"],
+  id: string,
+): string {
+  if (component === "skill") {
+    const skill = [...incoming.skills, ...current.skills].find((entry) => entry.skillId === id);
+    return `${component}:${skill?.name ?? id}`;
+  }
+  return `${component}:${id}`;
+}
+
+/**
+ * Capability profiles already have a validated settings destination. Every
+ * other bundle component stays fail-closed until its destination adapter,
+ * credential resolution, and required health checks exist.
+ */
+export function getEnvironmentBundleApplyReadiness(
+  current: EnvironmentBundle,
+  incoming: EnvironmentBundle,
+): EnvironmentBundleApplyReadiness {
+  const steps = buildEnvironmentBundleApplicationPlan(current, incoming);
+  const capabilityProfileChanged =
+    current.capabilityProfile.profileId !== incoming.capabilityProfile.profileId ||
+    current.capabilityProfile.name !== incoming.capabilityProfile.name ||
+    steps.some((step) => step.component === "capability");
+  const blockers = steps
+    .filter((step) => step.component !== "bundle" && step.component !== "capability")
+    .map(
+      (step) =>
+        `${environmentBundleApplicationStepLabel(current, incoming, step.component, step.id)} requires an application adapter`,
+    );
+
+  if (!capabilityProfileChanged && blockers.length === 0) {
+    blockers.push("The bundle does not contain any supported changes to apply");
+  }
+  return {
+    canApply: capabilityProfileChanged && blockers.length === 0,
+    capabilityProfileChanged,
+    blockers,
+  };
+}

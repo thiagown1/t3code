@@ -4,6 +4,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   buildEnvironmentBundleInventory,
   environmentBundleDownloadName,
+  getEnvironmentBundleApplyReadiness,
   setEnvironmentBundleEntryEnabled,
   summarizeEnvironmentBundleDiff,
 } from "./EnvironmentBundleSettings.logic";
@@ -230,5 +231,42 @@ describe("Environment Bundle settings", () => {
     expect(() =>
       setEnvironmentBundleEntryEnabled(incoming, { component: "provider", id: "missing" }, false),
     ).toThrow("Environment Bundle provider not found: missing");
+  });
+
+  it("allows atomic apply only when the capability profile is the sole environment change", () => {
+    const current = buildEnvironmentBundleInventory({
+      environmentId: "desk",
+      environmentLabel: "Desk",
+      cwd: null,
+      capabilityProfile: profile,
+      providers: [],
+    });
+    const capabilityOnly = {
+      ...current,
+      capabilityProfile: {
+        ...profile,
+        capabilities: [{ capabilityId: "firebase.logs", state: "disabled" as const }],
+      },
+    };
+    const withUnsupportedSkill = {
+      ...capabilityOnly,
+      skills: [{ skillId: "codex:local:a", name: "a", origin: "local" as const, enabled: true }],
+    };
+
+    expect(getEnvironmentBundleApplyReadiness(current, capabilityOnly)).toEqual({
+      canApply: true,
+      capabilityProfileChanged: true,
+      blockers: [],
+    });
+    expect(getEnvironmentBundleApplyReadiness(current, withUnsupportedSkill)).toEqual({
+      canApply: false,
+      capabilityProfileChanged: true,
+      blockers: ["skill:a requires an application adapter"],
+    });
+    expect(getEnvironmentBundleApplyReadiness(current, current)).toEqual({
+      canApply: false,
+      capabilityProfileChanged: false,
+      blockers: ["The bundle does not contain any supported changes to apply"],
+    });
   });
 });
