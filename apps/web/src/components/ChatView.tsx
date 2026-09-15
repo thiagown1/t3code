@@ -7481,6 +7481,9 @@ export default function ChatView(props: ChatViewProps) {
     const overflow = attachments.slice(attachmentRoom);
     const restoredImages = restored.filter((attachment) => attachment.type === "image");
     const restoredFiles = restored.filter((attachment) => attachment.type === "file");
+    const overflowImageIds = new Set(
+      overflow.filter((attachment) => attachment.type === "image").map((image) => image.id),
+    );
     // The composer syncs these refs from the draft in an effect; a send before
     // that effect runs must already see the restored content.
     composerImagesRef.current = [...composerImagesRef.current, ...restoredImages];
@@ -7492,6 +7495,9 @@ export default function ChatView(props: ChatViewProps) {
         prompt: "",
         images: overflow.filter((attachment) => attachment.type === "image"),
         files: overflow.filter((attachment) => attachment.type === "file"),
+        persistedImages: messages
+          .flatMap((message) => message.persistedImages)
+          .filter((image) => overflowImageIds.has(image.id)),
         terminalContexts: [],
         previewAnnotations: [],
         reviewComments: [],
@@ -7897,6 +7903,13 @@ export default function ChatView(props: ChatViewProps) {
         prompt: promptForSend,
         images: [...composerImages],
         files: [...composerFiles],
+        persistedImages:
+          useComposerDraftStore
+            .getState()
+            .getComposerDraft(composerDraftTarget)
+            ?.persistedAttachments.filter((attachment) =>
+              composerImages.some((image) => image.id === attachment.id),
+            ) ?? [],
         terminalContexts: [...composerTerminalContexts],
         previewAnnotations: [...composerPreviewAnnotations],
         reviewComments: [...composerReviewComments],

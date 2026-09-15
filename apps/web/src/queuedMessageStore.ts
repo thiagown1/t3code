@@ -1,11 +1,32 @@
-import type { PreviewAnnotationPayload } from "@t3tools/contracts";
+import { PreviewAnnotationPayloadSchema, type PreviewAnnotationPayload } from "@t3tools/contracts";
+import * as Schema from "effect/Schema";
 import { create } from "zustand";
+import { persist, type PersistStorage, type StorageValue } from "zustand/middleware";
 
 import type { ComposerQueueTiming, ComposerSubmissionIntent } from "./composer-logic";
-import type { ComposerFileAttachment, ComposerImageAttachment } from "./composerDraftStore";
+import {
+  hydrateComposerFileAttachment,
+  hydrateImagesFromPersisted,
+  PersistedComposerDraftFileAttachment,
+  PersistedComposerImageAttachment,
+  persistComposerFileAttachment,
+  type ComposerFileAttachment,
+  type ComposerImageAttachment,
+} from "./composerDraftStore";
+import { createMemoryStorage, type StateStorage } from "./lib/storage";
 import type { TerminalContextDraft } from "./lib/terminalContext";
 import { randomUUID } from "./lib/utils";
-import type { ReviewCommentContext } from "./reviewCommentContext";
+import { ReviewCommentContextSchema, type ReviewCommentContext } from "./reviewCommentContext";
+
+export const QUEUED_MESSAGE_STORAGE_KEY = "t3code:queued-composer-messages:v1";
+const QUEUED_MESSAGE_STORAGE_VERSION = 1;
+const MAX_PERSISTED_QUEUE_THREADS = 100;
+const MAX_PERSISTED_MESSAGES_PER_THREAD = 50;
+
+const isPersistedImage = Schema.is(PersistedComposerImageAttachment);
+const isPersistedFile = Schema.is(PersistedComposerDraftFileAttachment);
+const isPreviewAnnotation = Schema.is(PreviewAnnotationPayloadSchema);
+const isReviewComment = Schema.is(ReviewCommentContextSchema);
 
 /**
  * A composer submission held back while the thread's turn is running. It
@@ -17,6 +38,7 @@ export interface QueuedComposerMessage {
   prompt: string;
   images: ComposerImageAttachment[];
   files: ComposerFileAttachment[];
+  persistedImages: PersistedComposerImageAttachment[];
   terminalContexts: TerminalContextDraft[];
   previewAnnotations: PreviewAnnotationPayload[];
   reviewComments: ReviewCommentContext[];
@@ -66,92 +88,265 @@ interface QueuedMessageStoreState {
   drain: (threadKey: string) => QueuedComposerMessage[];
 }
 
+interface PersistedQueuedComposerMessage extends Omit<
+  QueuedComposerMessage,
+  "files" | "images" | "persistedImages"
+> {
+  images: PersistedComposerImageAttachment[];
+  files: PersistedComposerDraftFileAttachment[];
+}
+
+interface PersistedQueuedMessageStoreState {
+  queuesByThreadKey: Record<string, PersistedQueuedComposerMessage[]>;
+}
+
+type QueuedMessagePersistState =
+  | { capturedState: QueuedMessageStoreState }
+  | PersistedQueuedMessageStoreState;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isTerminalContext(value: unknown): value is TerminalContextDraft {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.id === "string" &&
+    typeof value.threadId === "string" &&
+    typeof value.createdAt === "string" &&
+    typeof value.terminalId === "string" &&
+    typeof value.terminalLabel === "string" &&
+    typeof value.lineStart === "number" &&
+    typeof value.lineEnd === "number" &&
+    typeof value.text === "string"
+  );
+}
+
+function normalizePersistedMessage(value: unknown): PersistedQueuedComposerMessage | null {
+  if (!isRecord(value)) return null;
+  if (
+    typeof value.id !== "string" ||
+    typeof value.prompt !== "string" ||
+    (value.submissionIntent !== "foreground" && value.submissionIntent !== "background") ||
+    (value.dispatchTiming !== "next-boundary" && value.dispatchTiming !== "after-current-turn") ||
+    (value.queuedAfterToolActivityId !== null &&
+      typeof value.queuedAfterToolActivityId !== "string") ||
+    typeof value.createdAt !== "string"
+  ) {
+    return null;
+  }
+  return {
+    id: value.id,
+    prompt: value.prompt,
+    images: Array.isArray(value.images) ? value.images.filter(isPersistedImage) : [],
+    files: Array.isArray(value.files) ? value.files.filter(isPersistedFile) : [],
+    terminalContexts: Array.isArray(value.terminalContexts)
+      ? value.terminalContexts.filter(isTerminalContext)
+      : [],
+    previewAnnotations: Array.isArray(value.previewAnnotations)
+      ? value.previewAnnotations.filter(isPreviewAnnotation)
+      : [],
+    reviewComments: Array.isArray(value.reviewComments)
+      ? value.reviewComments.filter(isReviewComment)
+      : [],
+    submissionIntent: value.submissionIntent,
+    dispatchTiming: value.dispatchTiming,
+    queuedAfterToolActivityId: value.queuedAfterToolActivityId,
+    ...(typeof value.holdUntilUserAction === "boolean"
+      ? { holdUntilUserAction: value.holdUntilUserAction }
+      : {}),
+    createdAt: value.createdAt,
+  };
+}
+
+export function normalizePersistedQueuedMessageStoreState(
+  value: unknown,
+): PersistedQueuedMessageStoreState {
+  if (!isRecord(value) || !isRecord(value.queuesByThreadKey)) {
+    return { queuesByThreadKey: {} };
+  }
+  const entries = Object.entries(value.queuesByThreadKey)
+    .slice(-MAX_PERSISTED_QUEUE_THREADS)
+    .flatMap(([threadKey, queue]) => {
+      if (threadKey.length === 0 || !Array.isArray(queue)) return [];
+      const messages = queue
+        .slice(0, MAX_PERSISTED_MESSAGES_PER_THREAD)
+        .map(normalizePersistedMessage)
+        .filter((message): message is PersistedQueuedComposerMessage => message !== null);
+      return messages.length > 0 ? [[threadKey, messages] as const] : [];
+    });
+  return { queuesByThreadKey: Object.fromEntries(entries) };
+}
+
+export function partializeQueuedMessageStoreState(
+  state: QueuedMessageStoreState,
+): PersistedQueuedMessageStoreState {
+  return normalizePersistedQueuedMessageStoreState({
+    queuesByThreadKey: Object.fromEntries(
+      Object.entries(state.queuesByThreadKey).map(([threadKey, queue]) => [
+        threadKey,
+        queue.map((message) => ({
+          ...message,
+          images: message.persistedImages,
+          files: message.files.map(persistComposerFileAttachment),
+          persistedImages: undefined,
+        })),
+      ]),
+    ),
+  });
+}
+
+export function hydratePersistedQueuedMessageStoreState(
+  value: unknown,
+): Pick<QueuedMessageStoreState, "queuesByThreadKey"> {
+  const persisted = normalizePersistedQueuedMessageStoreState(value);
+  return {
+    queuesByThreadKey: Object.fromEntries(
+      Object.entries(persisted.queuesByThreadKey).map(([threadKey, queue]) => [
+        threadKey,
+        queue.map((message) => ({
+          ...message,
+          images: hydrateImagesFromPersisted(message.images),
+          persistedImages: [...message.images],
+          files: message.files.map(hydrateComposerFileAttachment),
+        })),
+      ]),
+    ),
+  };
+}
+
+function resolveQueuedMessageStorage(): StateStorage {
+  try {
+    return typeof localStorage === "undefined" ? createMemoryStorage() : localStorage;
+  } catch {
+    return createMemoryStorage();
+  }
+}
+
+const queuedMessageBaseStorage = resolveQueuedMessageStorage();
+const queuedMessagePersistStorage: PersistStorage<QueuedMessagePersistState> = {
+  getItem: (name) => {
+    const raw = queuedMessageBaseStorage.getItem(name);
+    if (typeof raw !== "string") return null;
+    try {
+      return JSON.parse(raw) as StorageValue<QueuedMessagePersistState>;
+    } catch {
+      return null;
+    }
+  },
+  setItem: (name, value) =>
+    queuedMessageBaseStorage.setItem(
+      name,
+      JSON.stringify({
+        state:
+          "capturedState" in value.state
+            ? partializeQueuedMessageStoreState(value.state.capturedState)
+            : value.state,
+        version: value.version,
+      }),
+    ),
+  removeItem: (name) => queuedMessageBaseStorage.removeItem(name),
+};
+
 const EMPTY_QUEUE: QueuedComposerMessage[] = [];
 
-/** In-memory only: a queued message is a live intent, not a draft worth persisting. */
-export const useQueuedMessageStore = create<QueuedMessageStoreState>()((set, get) => ({
-  queuesByThreadKey: {},
-  drainGeneration: 0,
-  enqueue: (threadKey, message) => {
-    const entry: QueuedComposerMessage = { ...message, id: randomUUID() };
-    set((state) => ({
-      queuesByThreadKey: {
-        ...state.queuesByThreadKey,
-        [threadKey]: [...(state.queuesByThreadKey[threadKey] ?? EMPTY_QUEUE), entry],
+export const useQueuedMessageStore = create<QueuedMessageStoreState>()(
+  persist(
+    (set, get) => ({
+      queuesByThreadKey: {},
+      drainGeneration: 0,
+      enqueue: (threadKey, message) => {
+        const entry: QueuedComposerMessage = { ...message, id: randomUUID() };
+        set((state) => ({
+          queuesByThreadKey: {
+            ...state.queuesByThreadKey,
+            [threadKey]: [...(state.queuesByThreadKey[threadKey] ?? EMPTY_QUEUE), entry],
+          },
+        }));
+        return entry;
       },
-    }));
-    return entry;
-  },
-  take: (threadKey, id, toolActivityId) => {
-    const queue = get().queuesByThreadKey[threadKey];
-    const entry = queue?.find((message) => message.id === id);
-    if (!queue || !entry) {
-      return null;
-    }
-    set((state) => {
-      const remaining = (state.queuesByThreadKey[threadKey] ?? EMPTY_QUEUE)
-        .filter((message) => message.id !== id)
-        .map((message) =>
-          message.queuedAfterToolActivityId === toolActivityId
-            ? message
-            : { ...message, queuedAfterToolActivityId: toolActivityId },
-        );
-      const queuesByThreadKey = { ...state.queuesByThreadKey };
-      if (remaining.length === 0) {
-        delete queuesByThreadKey[threadKey];
-      } else {
-        queuesByThreadKey[threadKey] = remaining;
-      }
-      return { queuesByThreadKey };
-    });
-    return entry;
-  },
-  remove: (threadKey, id) => {
-    const queue = get().queuesByThreadKey[threadKey];
-    const entry = queue?.find((message) => message.id === id);
-    if (!queue || !entry) {
-      return null;
-    }
-    set((state) => {
-      const remaining = (state.queuesByThreadKey[threadKey] ?? EMPTY_QUEUE).filter(
-        (message) => message.id !== id,
-      );
-      const queuesByThreadKey = { ...state.queuesByThreadKey };
-      if (remaining.length === 0) {
-        delete queuesByThreadKey[threadKey];
-      } else {
-        queuesByThreadKey[threadKey] = remaining;
-      }
-      return { queuesByThreadKey };
-    });
-    return entry;
-  },
-  holdAtFront: (threadKey, message) => {
-    set((state) => {
-      const rest = (state.queuesByThreadKey[threadKey] ?? EMPTY_QUEUE).filter(
-        (entry) => entry.id !== message.id,
-      );
-      return {
-        queuesByThreadKey: {
-          ...state.queuesByThreadKey,
-          [threadKey]: [{ ...message, holdUntilUserAction: true }, ...rest],
-        },
-      };
-    });
-  },
-  drain: (threadKey) => {
-    const queue = get().queuesByThreadKey[threadKey];
-    if (!queue || queue.length === 0) {
-      return EMPTY_QUEUE;
-    }
-    set((state) => {
-      const queuesByThreadKey = { ...state.queuesByThreadKey };
-      delete queuesByThreadKey[threadKey];
-      return { queuesByThreadKey, drainGeneration: state.drainGeneration + 1 };
-    });
-    return queue;
-  },
-}));
+      take: (threadKey, id, toolActivityId) => {
+        const queue = get().queuesByThreadKey[threadKey];
+        const entry = queue?.find((message) => message.id === id);
+        if (!queue || !entry) {
+          return null;
+        }
+        set((state) => {
+          const remaining = (state.queuesByThreadKey[threadKey] ?? EMPTY_QUEUE)
+            .filter((message) => message.id !== id)
+            .map((message) =>
+              message.queuedAfterToolActivityId === toolActivityId
+                ? message
+                : { ...message, queuedAfterToolActivityId: toolActivityId },
+            );
+          const queuesByThreadKey = { ...state.queuesByThreadKey };
+          if (remaining.length === 0) {
+            delete queuesByThreadKey[threadKey];
+          } else {
+            queuesByThreadKey[threadKey] = remaining;
+          }
+          return { queuesByThreadKey };
+        });
+        return entry;
+      },
+      remove: (threadKey, id) => {
+        const queue = get().queuesByThreadKey[threadKey];
+        const entry = queue?.find((message) => message.id === id);
+        if (!queue || !entry) {
+          return null;
+        }
+        set((state) => {
+          const remaining = (state.queuesByThreadKey[threadKey] ?? EMPTY_QUEUE).filter(
+            (message) => message.id !== id,
+          );
+          const queuesByThreadKey = { ...state.queuesByThreadKey };
+          if (remaining.length === 0) {
+            delete queuesByThreadKey[threadKey];
+          } else {
+            queuesByThreadKey[threadKey] = remaining;
+          }
+          return { queuesByThreadKey };
+        });
+        return entry;
+      },
+      holdAtFront: (threadKey, message) => {
+        set((state) => {
+          const rest = (state.queuesByThreadKey[threadKey] ?? EMPTY_QUEUE).filter(
+            (entry) => entry.id !== message.id,
+          );
+          return {
+            queuesByThreadKey: {
+              ...state.queuesByThreadKey,
+              [threadKey]: [{ ...message, holdUntilUserAction: true }, ...rest],
+            },
+          };
+        });
+      },
+      drain: (threadKey) => {
+        const queue = get().queuesByThreadKey[threadKey];
+        if (!queue || queue.length === 0) {
+          return EMPTY_QUEUE;
+        }
+        set((state) => {
+          const queuesByThreadKey = { ...state.queuesByThreadKey };
+          delete queuesByThreadKey[threadKey];
+          return { queuesByThreadKey, drainGeneration: state.drainGeneration + 1 };
+        });
+        return queue;
+      },
+    }),
+    {
+      name: QUEUED_MESSAGE_STORAGE_KEY,
+      version: QUEUED_MESSAGE_STORAGE_VERSION,
+      storage: queuedMessagePersistStorage,
+      partialize: (state): QueuedMessagePersistState => ({ capturedState: state }),
+      merge: (persistedState, currentState) => ({
+        ...currentState,
+        ...hydratePersistedQueuedMessageStoreState(persistedState),
+      }),
+    },
+  ),
+);
 
 /**
  * The newest finished tool call. Its id changing is the boundary a queued

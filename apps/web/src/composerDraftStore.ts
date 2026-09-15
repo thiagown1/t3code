@@ -214,6 +214,41 @@ export const PersistedComposerDraftFileAttachment = Schema.Struct({
 export type PersistedComposerDraftFileAttachment = typeof PersistedComposerDraftFileAttachment.Type;
 const isPersistedComposerDraftFileAttachment = Schema.is(PersistedComposerDraftFileAttachment);
 
+export function persistComposerFileAttachment(
+  file: ComposerFileAttachment,
+): PersistedComposerDraftFileAttachment {
+  return {
+    id: file.id,
+    name: file.name,
+    mimeType: file.mimeType,
+    sizeBytes: file.sizeBytes,
+    ...(file.source ? { source: file.source } : {}),
+    ...(file.uploadedAttachmentId && file.uploadEnvironmentId
+      ? {
+          attachmentId: file.uploadedAttachmentId,
+          environmentId: file.uploadEnvironmentId,
+        }
+      : {}),
+  };
+}
+
+export function hydrateComposerFileAttachment(
+  file: PersistedComposerDraftFileAttachment,
+): ComposerFileAttachment {
+  return {
+    type: "file",
+    id: file.id,
+    name: file.name,
+    mimeType: file.mimeType,
+    sizeBytes: file.sizeBytes,
+    file: null,
+    ...(file.source ? { source: file.source } : {}),
+    ...(file.attachmentId !== undefined && file.environmentId !== undefined
+      ? { uploadedAttachmentId: file.attachmentId, uploadEnvironmentId: file.environmentId }
+      : {}),
+  };
+}
+
 const PersistedTerminalContextDraft = Schema.Struct({
   id: Schema.String,
   threadId: ThreadId,
@@ -2142,19 +2177,7 @@ export function partializeComposerDraftStoreState(
             // A file whose upload has not finished has no serializable bytes.
             // It persists as a metadata-only marker so it can surface as a
             // needs-reattach row after reload instead of silently vanishing.
-            files: draft.files.map((file) => ({
-              id: file.id,
-              name: file.name,
-              mimeType: file.mimeType,
-              sizeBytes: file.sizeBytes,
-              ...(file.source ? { source: file.source } : {}),
-              ...(file.uploadedAttachmentId && file.uploadEnvironmentId
-                ? {
-                    attachmentId: file.uploadedAttachmentId,
-                    environmentId: file.uploadEnvironmentId,
-                  }
-                : {}),
-            })),
+            files: draft.files.map(persistComposerFileAttachment),
           }
         : {}),
       ...(draft.terminalContexts.length > 0
@@ -2419,22 +2442,10 @@ function toHydratedThreadDraft(
   const modelSelectionByProvider: Partial<Record<ProviderInstanceId, ModelSelection>> =
     persistedDraft.modelSelectionByProvider ?? {};
   const activeProvider = normalizeProviderInstanceId(persistedDraft.activeProvider) ?? null;
+  // A marker without an attachment id hydrates as needs-reattach: no bytes,
+  // no server-side upload, only the metadata to tell the user what to attach again.
   const files: ComposerFileAttachment[] =
-    persistedDraft.files?.map((file) => ({
-      type: "file" as const,
-      id: file.id,
-      name: file.name,
-      mimeType: file.mimeType,
-      sizeBytes: file.sizeBytes,
-      file: null,
-      ...(file.source ? { source: file.source } : {}),
-      // A marker without an attachment id hydrates as needs-reattach: no
-      // bytes, no server-side upload, only the metadata to tell the user
-      // what to attach again.
-      ...(file.attachmentId !== undefined && file.environmentId !== undefined
-        ? { uploadedAttachmentId: file.attachmentId, uploadEnvironmentId: file.environmentId }
-        : {}),
-    })) ?? [];
+    persistedDraft.files?.map(hydrateComposerFileAttachment) ?? [];
 
   return {
     // Files predating inline references get a chip appended; images stay shelf-only.

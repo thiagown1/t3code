@@ -41,6 +41,10 @@ On web and desktop, press `Alt+Enter` while the agent is working to keep the
 message queued until the current turn finishes. Tool calls during that turn do
 not send it early.
 
+Queued messages survive reloads and app restarts. Images and completed uploads
+remain attached. A file whose upload had not finished is restored as a
+needs-reattach item instead of being silently dropped.
+
 ## Queue messages offline on mobile
 
 Mobile keeps local copies of draft attachments, so you can preview them and queue

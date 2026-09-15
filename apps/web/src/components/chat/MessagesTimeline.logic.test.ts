@@ -1098,6 +1098,7 @@ describe("deriveMessagesTimelineRows", () => {
       prompt,
       images: [],
       files: [],
+      persistedImages: [],
       terminalContexts: [],
       previewAnnotations: [],
       reviewComments: [],

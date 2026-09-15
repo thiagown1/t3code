@@ -1,8 +1,12 @@
+import { EnvironmentId } from "@t3tools/contracts";
 import { beforeEach, describe, expect, it } from "vite-plus/test";
 
 import {
+  hydratePersistedQueuedMessageStoreState,
   isQueuedMessageDue,
   latestCompletedToolActivityId,
+  normalizePersistedQueuedMessageStoreState,
+  partializeQueuedMessageStoreState,
   useQueuedMessageStore,
   type QueuedComposerMessage,
 } from "./queuedMessageStore";
@@ -12,6 +16,7 @@ function makeMessage(prompt: string): Omit<QueuedComposerMessage, "id"> {
     prompt,
     images: [],
     files: [],
+    persistedImages: [],
     terminalContexts: [],
     previewAnnotations: [],
     reviewComments: [],
@@ -98,6 +103,62 @@ describe("queuedMessageStore", () => {
     expect(drain("thread-a")).toEqual([]);
     expect(useQueuedMessageStore.getState().drainGeneration).toBe(1);
     expect(useQueuedMessageStore.getState().queuesByThreadKey["thread-b"]).toHaveLength(1);
+  });
+
+  it("persists and hydrates text, timing, images, and uploaded files", () => {
+    const persistedImage = {
+      id: "image-1",
+      name: "pixel.png",
+      mimeType: "image/png",
+      sizeBytes: 1,
+      dataUrl: "data:image/png;base64,AA==",
+    };
+    useQueuedMessageStore.getState().enqueue("thread-a", {
+      ...makeMessage("after this turn"),
+      dispatchTiming: "after-current-turn",
+      persistedImages: [persistedImage],
+      files: [
+        {
+          type: "file",
+          id: "file-1",
+          name: "report.txt",
+          mimeType: "text/plain",
+          sizeBytes: 12,
+          file: new File(["hello"], "report.txt", { type: "text/plain" }),
+          uploadedAttachmentId: "attachment-1",
+          uploadEnvironmentId: EnvironmentId.make("environment-1"),
+        },
+      ],
+    });
+
+    const persisted = partializeQueuedMessageStoreState(useQueuedMessageStore.getState());
+    const hydrated = hydratePersistedQueuedMessageStoreState(persisted);
+    const [message] = hydrated.queuesByThreadKey["thread-a"] ?? [];
+
+    expect(message).toMatchObject({
+      prompt: "after this turn",
+      dispatchTiming: "after-current-turn",
+      images: [{ id: "image-1", previewUrl: persistedImage.dataUrl }],
+      files: [
+        {
+          id: "file-1",
+          file: null,
+          uploadedAttachmentId: "attachment-1",
+          uploadEnvironmentId: "environment-1",
+        },
+      ],
+    });
+    expect(message?.persistedImages).toEqual([persistedImage]);
+  });
+
+  it("drops malformed persisted messages instead of hydrating unsafe state", () => {
+    expect(
+      normalizePersistedQueuedMessageStoreState({
+        queuesByThreadKey: {
+          "thread-a": [{ id: "broken", prompt: 42 }],
+        },
+      }),
+    ).toEqual({ queuesByThreadKey: {} });
   });
 });
 
