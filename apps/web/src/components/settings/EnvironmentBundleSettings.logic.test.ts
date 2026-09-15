@@ -21,6 +21,14 @@ describe("Environment Bundle settings", () => {
       environmentLabel: "Desk 28",
       cwd: "C:\\work\\turbo",
       capabilityProfile: profile,
+      serverInventory: {
+        mcpServers: [],
+        mcpCoverage: "unavailable",
+        projectInstructions: [
+          { logicalPath: "AGENTS.md", contentHash: "a".repeat(64), enabled: true },
+        ],
+        projectInstructionsCoverage: "partial",
+      },
       providers: [
         {
           instanceId: "codex",
@@ -74,6 +82,9 @@ describe("Environment Bundle settings", () => {
     ]);
     expect(bundle.pluginsAndApps).toEqual([
       { integrationId: "openai-curated:github", kind: "app", enabled: true },
+    ]);
+    expect(bundle.projectInstructions).toEqual([
+      { logicalPath: "AGENTS.md", contentHash: "a".repeat(64), enabled: true },
     ]);
     expect(JSON.stringify(bundle)).not.toContain("C:\\\\Users");
   });

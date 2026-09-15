@@ -151,6 +151,7 @@ import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import * as HostResources from "./resourceTelemetry/HostResources.ts";
+import { loadEnvironmentBundleServerInventory } from "./environment/EnvironmentBundleInventory.ts";
 import { summarizeResourceTelemetry } from "./resourceTelemetry/ResourceTelemetrySummary.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
@@ -1773,6 +1774,9 @@ const makeWsRpcLayer = (
                 externalLauncher.resolveFileManagerRevealKind(),
               )
             : undefined;
+          const environmentBundleInventory = yield* loadEnvironmentBundleServerInventory(
+            config.cwd,
+          );
 
           return {
             environment,
@@ -1782,6 +1786,7 @@ const makeWsRpcLayer = (
             keybindings: keybindingsConfig.keybindings,
             issues: keybindingsConfig.issues,
             providers,
+            environmentBundleInventory,
             availableEditors,
             // Same discovery-with-timeout treatment as editors: a slow probe
             // must not stall server.getConfig, so it degrades to no targets.

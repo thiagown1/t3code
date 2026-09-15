@@ -1,5 +1,6 @@
 import {
   type EnvironmentBundle,
+  type EnvironmentBundleServerInventory,
   type PortableCapabilityProfile,
   type ServerProviderSkill,
   type ServerProviderWorkspaceSnapshot,
@@ -80,6 +81,7 @@ export function buildEnvironmentBundleInventory(input: {
   readonly cwd: string | null;
   readonly capabilityProfile: PortableCapabilityProfile | null;
   readonly providers: ReadonlyArray<InventoryProvider>;
+  readonly serverInventory?: EnvironmentBundleServerInventory;
 }): EnvironmentBundle {
   const skills = new Map<string, EnvironmentBundle["skills"][number]>();
   const pluginsAndApps = new Map<string, EnvironmentBundle["pluginsAndApps"][number]>();
@@ -120,9 +122,7 @@ export function buildEnvironmentBundleInventory(input: {
     capabilityProfile:
       input.capabilityProfile ??
       emptyCapabilityProfile(input.environmentId, input.environmentLabel),
-    // MCP configuration is intentionally absent until its adapter exposes a
-    // secret-free inventory. Raw provider config may contain executable args or tokens.
-    mcpServers: [],
+    mcpServers: input.serverInventory?.mcpServers ?? [],
     skills: [...skills.values()],
     pluginsAndApps: [...pluginsAndApps.values()],
     providers: input.providers.map((provider) => ({
@@ -131,8 +131,7 @@ export function buildEnvironmentBundleInventory(input: {
       enabled: provider.enabled,
       ...(provider.version ? { version: provider.version } : {}),
     })),
-    // Project instructions need server-side hashing; browser paths are not trusted.
-    projectInstructions: [],
+    projectInstructions: input.serverInventory?.projectInstructions ?? [],
   };
 }
 

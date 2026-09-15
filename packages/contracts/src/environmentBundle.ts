@@ -92,3 +92,23 @@ export const EnvironmentBundleHealthStatus = Schema.Literals([
   "ready",
 ]);
 export type EnvironmentBundleHealthStatus = typeof EnvironmentBundleHealthStatus.Type;
+
+export const EnvironmentBundleInventoryCoverage = Schema.Literals([
+  "complete",
+  "partial",
+  "unavailable",
+]);
+export type EnvironmentBundleInventoryCoverage = typeof EnvironmentBundleInventoryCoverage.Type;
+
+/**
+ * Secret-free inventory produced by the environment server. Coverage is
+ * explicit because provider-native MCP and instruction sources are not all
+ * observable without starting a session or reading unsafe raw config.
+ */
+export const EnvironmentBundleServerInventory = Schema.Struct({
+  mcpServers: Schema.Array(EnvironmentBundleMcpServer),
+  mcpCoverage: EnvironmentBundleInventoryCoverage,
+  projectInstructions: Schema.Array(EnvironmentBundleProjectInstruction),
+  projectInstructionsCoverage: EnvironmentBundleInventoryCoverage,
+});
+export type EnvironmentBundleServerInventory = typeof EnvironmentBundleServerInventory.Type;

@@ -41,9 +41,11 @@ The Integrations panel builds its export from the selected server's live provide
 when available, the workspace-scoped skill snapshot for that checkout. It converts project skill
 paths to relative logical paths and infers plugin/app identities without serializing user or
 installation paths. Import remains review-only: the canonical dry run lists each add, update, and
-remove operation and marks provider reloads and required health checks. MCP inventory and project
-instruction hashes stay visibly empty until server-side adapters can expose sanitized metadata;
-the browser must not derive them from raw provider configuration or local files.
+remove operation and marks provider reloads and required health checks. The server hashes known
+root instruction files without returning their contents or absolute paths, and marks that coverage
+as partial until provider adapters report the exact files loaded by a session. MCP inventory stays
+explicitly unavailable until those adapters can expose sanitized metadata; the browser must not
+derive it from raw provider configuration or local files.
 
 ## Process and account isolation
 
