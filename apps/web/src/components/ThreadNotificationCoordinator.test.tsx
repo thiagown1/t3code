@@ -17,6 +17,7 @@ const state = vi.hoisted(() => ({
   approval: false,
   sessionError: false,
   turnError: false,
+  readyPr: false,
   add: vi.fn(
     (_toast: { title: string; description: string; actionProps: { onClick: () => void } }) =>
       "toast-1",
@@ -46,6 +47,36 @@ vi.mock("@effect/atom-react", () => ({
             state: state.turnError ? "error" : state.completedAt ? "completed" : "running",
             completedAt: state.completedAt,
           },
+          pullRequests: [
+            {
+              host: "github.com",
+              repository: "acme/web",
+              number: 42,
+              url: "https://github.com/acme/web/pull/42",
+              source: "agent",
+              linkedAt: "2026-09-13T09:00:00.000Z",
+              stack: null,
+              snapshot: {
+                state: "open",
+                title: "Fix login",
+                headBranch: "fix/login",
+                headSha: "abc123def456",
+                baseBranch: "main",
+                isDraft: false,
+                updatedAt: "2026-09-13T10:00:00.000Z",
+                syncedAt: new Date().toISOString(),
+                checksState: state.readyPr ? "passing" : "pending",
+                checks: [
+                  {
+                    name: "CI",
+                    status: state.readyPr ? "success" : "pending",
+                    description: null,
+                    url: null,
+                  },
+                ],
+              },
+            },
+          ],
         },
       ],
     }),
@@ -109,6 +140,7 @@ beforeEach(() => {
     approval: false,
     sessionError: false,
     turnError: false,
+    readyPr: false,
   });
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("window", new EventTarget());
@@ -144,6 +176,23 @@ describe("thread notifications", () => {
       to: "/$environmentId/$threadId",
       params: { environmentId: "env-1", threadId: "thread-1" },
     });
+    expect(state.notification).not.toHaveBeenCalled();
+  });
+
+  it("alerts once when checks on the observed PR head become ready to merge", async () => {
+    await render();
+    state.readyPr = true;
+    await render();
+    await render();
+
+    expect(state.add).toHaveBeenCalledTimes(1);
+    expect(state.add).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "success",
+        title: "Pull request ready to merge",
+        description: "Fix the login form · #42",
+      }),
+    );
     expect(state.notification).not.toHaveBeenCalled();
   });
 

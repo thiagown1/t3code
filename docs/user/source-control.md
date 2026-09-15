@@ -158,7 +158,9 @@ In the FirstMate topic list, each linked pull request shows its number, exact ob
 check readiness. Pending checks keep the topic at **Waiting for CI**. A fresh head whose reported
 checks all passed becomes **Ready to merge**. Required action, failures, conflicts, cancelled/skipped
 checks, and stale evidence fail closed instead of appearing green. These statuses are informational:
-T3 Code does not merge, deploy, or activate a feature automatically.
+T3 Code does not merge, deploy, or activate a feature automatically. When a fresh head transitions
+to **Ready to merge**, the normal in-app or desktop notification settings alert you and open the
+owning thread; the same head does not notify repeatedly while it stays green.
 
 Cross-repository links use a project on the same host. Azure DevOps reviews require a project checked
 out from the matching organization and repository.
