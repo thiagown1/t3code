@@ -104,6 +104,8 @@ class FakeCodexRuntime implements CodexSessionRuntimeShape {
     }),
   );
 
+  public readonly archiveThreadImpl = vi.fn(() => Promise.resolve(undefined));
+
   public readonly uploadFeedbackImpl = vi.fn((_reason?: string) =>
     Promise.resolve({ threadId: "provider-thread-1" }),
   );
@@ -145,6 +147,8 @@ class FakeCodexRuntime implements CodexSessionRuntimeShape {
   rollbackThread(numTurns: number) {
     return Effect.promise(() => this.rollbackThreadImpl(numTurns));
   }
+
+  archiveThread = Effect.promise(() => this.archiveThreadImpl());
 
   uploadFeedback(reason?: string) {
     return Effect.promise(() => this.uploadFeedbackImpl(reason));
@@ -400,6 +404,25 @@ sessionErrorLayer("CodexAdapterLive session errors", (it) => {
       NodeAssert.deepStrictEqual(runtime.uploadFeedbackImpl.mock.calls, [
         ["The agent stopped early."],
       ]);
+    }),
+  );
+
+  it.effect("archives the active provider-native Codex thread", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const threadId = asThreadId("thread-archive");
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("codex"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const runtime = sessionRuntimeFactory.lastRuntime;
+      NodeAssert.ok(runtime);
+      NodeAssert.ok(adapter.archiveThread);
+
+      yield* adapter.archiveThread(threadId);
+
+      NodeAssert.equal(runtime.archiveThreadImpl.mock.calls.length, 1);
     }),
   );
 
