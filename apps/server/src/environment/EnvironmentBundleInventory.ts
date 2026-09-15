@@ -7,6 +7,7 @@ import type {
   EnvironmentBundleServerInventory,
   ServerSettings,
 } from "@t3tools/contracts";
+import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -16,6 +17,10 @@ import { expandHomePathWith } from "../pathExpansion.ts";
 const MAX_PROJECT_INSTRUCTION_BYTES = FileSystem.Size(256_000);
 const MAX_MCP_CONFIG_BYTES = FileSystem.Size(1_000_000);
 
+class InvalidJsonMcpConfigError extends Data.TaggedError("InvalidJsonMcpConfigError")<{
+  readonly cause: unknown;
+}> {}
+
 export interface CodexMcpInventorySource {
   readonly instanceId: string;
   readonly enabled: boolean;
@@ -23,6 +28,11 @@ export interface CodexMcpInventorySource {
 }
 
 export interface ClaudeMcpInventorySource {
+  readonly instanceId: string;
+  readonly enabled: boolean;
+}
+
+export interface CursorMcpInventorySource {
   readonly instanceId: string;
   readonly enabled: boolean;
 }
@@ -83,6 +93,25 @@ export function claudeMcpInventorySourcesFromSettings(
 
   if (!("claudeAgent" in settings.providerInstances)) {
     sources.push({ instanceId: "claudeAgent", enabled: settings.providers.claudeAgent.enabled });
+  }
+  return sources;
+}
+
+export function cursorMcpInventorySourcesFromSettings(
+  settings: ServerSettings,
+): ReadonlyArray<CursorMcpInventorySource> {
+  const sources = Object.entries(settings.providerInstances)
+    .filter(([, instance]) => instance.driver === "cursor")
+    .map(([instanceId, instance]) => {
+      const configEnabled = recordValue(instance.config, "enabled");
+      return {
+        instanceId,
+        enabled: instance.enabled !== false && configEnabled !== false,
+      } satisfies CursorMcpInventorySource;
+    });
+
+  if (!("cursor" in settings.providerInstances)) {
+    sources.push({ instanceId: "cursor", enabled: settings.providers.cursor.enabled });
   }
   return sources;
 }
@@ -314,7 +343,7 @@ const readJsonMcpConfig = Effect.fn("readEnvironmentBundleJsonMcpConfig")(functi
   const contents = yield* fileSystem.readFileString(filePath);
   return yield* Effect.try({
     try: () => parseSanitizedJsonMcpConfig(contents),
-    catch: (cause) => cause,
+    catch: (cause) => new InvalidJsonMcpConfigError({ cause }),
   });
 });
 
@@ -412,28 +441,54 @@ const loadCodexMcpInventory = Effect.fn("loadEnvironmentBundleCodexMcpInventory"
   );
 });
 
+const loadProjectJsonMcpInventory = Effect.fn("loadEnvironmentBundleProjectJsonMcpInventory")(
+  function* (
+    root: string,
+    sources: ReadonlyArray<ClaudeMcpInventorySource | CursorMcpInventorySource>,
+    adapter: {
+      readonly provider: "claude" | "cursor";
+      readonly relativeConfigPath: ReadonlyArray<string>;
+    },
+  ) {
+    const path = yield* Path.Path;
+    const projectConfig = yield* readJsonMcpConfig(
+      path.join(root, ...adapter.relativeConfigPath),
+    ).pipe(Effect.orElseSucceed(() => new Map()));
+    return sources.flatMap((source) =>
+      [...projectConfig.entries()].map(([name, config]) => {
+        const server = {
+          serverId: boundedMcpId(`${adapter.provider}:${source.instanceId}`, name),
+          origin: `${adapter.provider}:${source.instanceId}:project-config`,
+          enabled: source.enabled,
+          configurationRef: boundedMcpId(`${adapter.provider}:${source.instanceId}:mcp`, name),
+          credentialRefs: [...(config.credentialRefs ?? [])],
+          allowedTools: [],
+          blockedTools: [],
+        } satisfies EnvironmentBundleMcpServer;
+        return { ...server, configurationHash: sanitizedConfigurationHash(server) };
+      }),
+    );
+  },
+);
+
 const loadClaudeMcpInventory = Effect.fn("loadEnvironmentBundleClaudeMcpInventory")(function* (
   root: string,
   sources: ReadonlyArray<ClaudeMcpInventorySource>,
 ) {
-  const path = yield* Path.Path;
-  const projectConfig = yield* readJsonMcpConfig(path.join(root, ".mcp.json")).pipe(
-    Effect.orElseSucceed(() => new Map()),
-  );
-  return sources.flatMap((source) =>
-    [...projectConfig.entries()].map(([name, config]) => {
-      const server = {
-        serverId: boundedMcpId(`claude:${source.instanceId}`, name),
-        origin: `claude:${source.instanceId}:project-config`,
-        enabled: source.enabled,
-        configurationRef: boundedMcpId(`claude:${source.instanceId}:mcp`, name),
-        credentialRefs: [...(config.credentialRefs ?? [])],
-        allowedTools: [],
-        blockedTools: [],
-      } satisfies EnvironmentBundleMcpServer;
-      return { ...server, configurationHash: sanitizedConfigurationHash(server) };
-    }),
-  );
+  return yield* loadProjectJsonMcpInventory(root, sources, {
+    provider: "claude",
+    relativeConfigPath: [".mcp.json"],
+  });
+});
+
+const loadCursorMcpInventory = Effect.fn("loadEnvironmentBundleCursorMcpInventory")(function* (
+  root: string,
+  sources: ReadonlyArray<CursorMcpInventorySource>,
+) {
+  return yield* loadProjectJsonMcpInventory(root, sources, {
+    provider: "cursor",
+    relativeConfigPath: [".cursor", "mcp.json"],
+  });
 });
 
 const readProjectInstruction = Effect.fn("readEnvironmentBundleProjectInstruction")(function* (
@@ -460,6 +515,7 @@ export const loadEnvironmentBundleServerInventory = Effect.fn(
   readonly cwd: string;
   readonly codexMcpSources?: ReadonlyArray<CodexMcpInventorySource>;
   readonly claudeMcpSources?: ReadonlyArray<ClaudeMcpInventorySource>;
+  readonly cursorMcpSources?: ReadonlyArray<CursorMcpInventorySource>;
 }): Effect.fn.Return<EnvironmentBundleServerInventory, never, FileSystem.FileSystem | Path.Path> {
   const root = yield* resolveProjectRoot(input.cwd);
   const projectInstructions = yield* Effect.forEach(
@@ -472,14 +528,19 @@ export const loadEnvironmentBundleServerInventory = Effect.fn(
   const mcpServers = [
     ...(yield* loadCodexMcpInventory(root, input.codexMcpSources ?? [])),
     ...(yield* loadClaudeMcpInventory(root, input.claudeMcpSources ?? [])),
+    ...(yield* loadCursorMcpInventory(root, input.cursorMcpSources ?? [])),
   ].sort((left, right) => left.serverId.localeCompare(right.serverId));
 
   return {
     mcpServers,
-    // Only Codex's known, safe fields are currently inventoried. Commands,
-    // URLs, environment values, and provider-native secrets are never copied.
+    // Only adapter-declared safe fields are inventoried. Commands, URLs,
+    // environment values, and provider-native secrets are never copied.
     mcpCoverage:
-      input.codexMcpSources?.length || input.claudeMcpSources?.length ? "partial" : "unavailable",
+      input.codexMcpSources?.length ||
+      input.claudeMcpSources?.length ||
+      input.cursorMcpSources?.length
+        ? "partial"
+        : "unavailable",
     projectInstructions: availableProjectInstructions,
     projectInstructionsCoverage: "partial",
   };

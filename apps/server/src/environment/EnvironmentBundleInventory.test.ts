@@ -5,15 +5,18 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
 
 import {
   claudeMcpInventorySourcesFromSettings,
+  cursorMcpInventorySourcesFromSettings,
   loadEnvironmentBundleServerInventory,
   parseSanitizedJsonMcpConfig,
   parseSanitizedCodexMcpConfig,
 } from "./EnvironmentBundleInventory.ts";
 
 const sha256 = (value: string) => NodeCrypto.createHash("sha256").update(value).digest("hex");
+const encodeUnknownJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
 describe("EnvironmentBundleInventory", () => {
   it.effect("hashes supported project instructions without exposing their contents", () =>
@@ -234,7 +237,7 @@ command = "do-not-export"
       yield* fileSystem.makeDirectory(path.join(root, ".git"), { recursive: true });
       yield* fileSystem.writeFileString(
         path.join(root, ".mcp.json"),
-        JSON.stringify({
+        encodeUnknownJson({
           mcpServers: {
             firebase: {
               command: "C:/private/bin/server.exe",
@@ -263,9 +266,68 @@ command = "do-not-export"
           configurationHash: expect.stringMatching(/^[a-f0-9]{64}$/),
         }),
       ]);
-      expect(JSON.stringify(inventory)).not.toContain("private/bin");
-      expect(JSON.stringify(inventory)).not.toContain("secret-token");
-      expect(JSON.stringify(inventory)).not.toContain("do-not-export");
+      expect(encodeUnknownJson(inventory)).not.toContain("private/bin");
+      expect(encodeUnknownJson(inventory)).not.toContain("secret-token");
+      expect(encodeUnknownJson(inventory)).not.toContain("do-not-export");
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it("discovers Cursor instances without exposing provider configuration", () => {
+    const settings = {
+      providerInstances: {
+        cursor_work: {
+          driver: "cursor",
+          enabled: true,
+          config: { enabled: true, apiEndpoint: "https://private.invalid" },
+        },
+      },
+      providers: { cursor: { enabled: false } },
+    } as never;
+
+    expect(cursorMcpInventorySourcesFromSettings(settings)).toEqual([
+      { instanceId: "cursor_work", enabled: true },
+      { instanceId: "cursor", enabled: false },
+    ]);
+  });
+
+  it.effect("inventories Cursor project MCPs through the shared safe JSON parser", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-environment-bundle-" });
+      yield* fileSystem.makeDirectory(path.join(root, ".git"), { recursive: true });
+      yield* fileSystem.makeDirectory(path.join(root, ".cursor"), { recursive: true });
+      yield* fileSystem.writeFileString(
+        path.join(root, ".cursor", "mcp.json"),
+        encodeUnknownJson({
+          mcpServers: {
+            logs: {
+              url: "https://${LOG_HOST}/mcp?token=do-not-export",
+              headers: { Authorization: "Bearer ${LOG_TOKEN}" },
+            },
+          },
+        }),
+      );
+
+      const inventory = yield* loadEnvironmentBundleServerInventory({
+        cwd: root,
+        cursorMcpSources: [{ instanceId: "cursor-work", enabled: false }],
+      });
+
+      expect(inventory.mcpServers).toEqual([
+        expect.objectContaining({
+          serverId: "cursor:cursor-work:logs",
+          origin: "cursor:cursor-work:project-config",
+          enabled: false,
+          configurationRef: "cursor:cursor-work:mcp:logs",
+          credentialRefs: [
+            { kind: "environment-variable", id: "LOG_HOST" },
+            { kind: "environment-variable", id: "LOG_TOKEN" },
+          ],
+        }),
+      ]);
+      expect(encodeUnknownJson(inventory)).not.toContain("private.invalid");
+      expect(encodeUnknownJson(inventory)).not.toContain("do-not-export");
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 });

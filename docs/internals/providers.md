@@ -65,6 +65,11 @@ the declared `env` keys or `${VAR}` placeholders in standard command, argument, 
 fields. It discards all corresponding values and executable configuration before hashing. User and
 local Claude scopes, approval state, managed MCPs, plugins, and runtime health are not inferred, so
 coverage remains partial.
+Cursor instances use the same sanitized JSON parser for the repository's `.cursor/mcp.json`.
+Only project-scoped server identities and environment-variable reference names are exported;
+commands, arguments, URLs, headers, and values are discarded. User-scoped Cursor configuration,
+runtime health, approvals, and extension-managed MCPs remain outside the adapter, so coverage is
+still explicitly partial.
 The read-only credential-resolution RPC accepts only explicitly requested references. It reports
 `resolved`, `missing`, or `unsupported`, never returns a value, and does not enumerate the host
 environment. The first resolver supports environment variables; native keychains, credential

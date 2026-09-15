@@ -156,6 +156,7 @@ import * as HostResources from "./resourceTelemetry/HostResources.ts";
 import {
   claudeMcpInventorySourcesFromSettings,
   codexMcpInventorySourcesFromSettings,
+  cursorMcpInventorySourcesFromSettings,
   loadEnvironmentBundleServerInventory,
 } from "./environment/EnvironmentBundleInventory.ts";
 import { resolveEnvironmentBundleCredentialReferences } from "./environment/EnvironmentBundleCredentials.ts";
@@ -1790,6 +1791,7 @@ const makeWsRpcLayer = (
             cwd: config.cwd,
             codexMcpSources: codexMcpInventorySourcesFromSettings(rawSettings),
             claudeMcpSources: claudeMcpInventorySourcesFromSettings(rawSettings),
+            cursorMcpSources: cursorMcpInventorySourcesFromSettings(rawSettings),
           });
 
           return {
