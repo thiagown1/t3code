@@ -73,6 +73,8 @@ export interface ProviderChangeRequest {
   readonly url: string;
   readonly author: PullRequestActor | null;
   readonly headBranch: string;
+  /** Exact head commit where a provider returns it with the row/detail. */
+  readonly headSha?: string | null;
   readonly headRepositoryNameWithOwner?: string | null;
   readonly baseBranch: string;
   readonly state: PullRequestState;
@@ -99,6 +101,8 @@ export interface ProviderChangeRequestSummary {
   readonly title: string;
   readonly url: string;
   readonly headBranch: string;
+  /** Exact head observed by the same read as `checks`, where the provider exposes it. */
+  readonly headSha?: string | null;
   readonly baseBranch: string;
   readonly state: PullRequestState;
   /** Present when the host says an open pull request is still a draft. */
@@ -113,6 +117,7 @@ export interface ProviderChangeRequestSummary {
   readonly changedFiles?: number | undefined;
   readonly reviewDecision?: PullRequestReviewDecision | null | undefined;
   readonly checksState?: PullRequestChecksState | null | undefined;
+  readonly checks?: ReadonlyArray<PullRequestCheck> | undefined;
   readonly mergeability?: PullRequestMergeability | undefined;
 }
 

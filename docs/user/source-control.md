@@ -147,10 +147,18 @@ links. On mobile, the Git overview lists linked reviews and their stacks; tap a 
 Linking and unlinking are available in the web and desktop clients.
 
 The **Linked pull requests** panel lists every review and groups stacks. Unlink a review from its
-row menu. An unlinked stack layer stays out of later syncs. Open linked reviews refresh on the server;
-closed reviews refresh periodically so reopening one on the host is detected. Merged reviews refresh
-when requested. With **Auto-settle merged threads** enabled, a thread can settle after every linked
-review is terminal. An open or unsynced link keeps it active.
+row menu. An unlinked stack layer stays out of later syncs. Open linked reviews refresh on the server
+every minute, including after the agent session settles, so a completed check can still become an
+operator action. Unchanged snapshots receive a periodic freshness receipt; closed reviews refresh
+periodically so reopening one on the host is detected. Merged reviews refresh when requested. With
+**Auto-settle merged threads** enabled, a thread can settle after every linked review is terminal. An
+open or unsynced link keeps it active.
+
+In the FirstMate topic list, each linked pull request shows its number, exact observed head SHA and
+check readiness. Pending checks keep the topic at **Waiting for CI**. A fresh head whose reported
+checks all passed becomes **Ready to merge**. Required action, failures, conflicts, cancelled/skipped
+checks, and stale evidence fail closed instead of appearing green. These statuses are informational:
+T3 Code does not merge, deploy, or activate a feature automatically.
 
 Cross-repository links use a project on the same host. Azure DevOps reviews require a project checked
 out from the matching organization and repository.

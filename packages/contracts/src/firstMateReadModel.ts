@@ -11,6 +11,7 @@ export const FirstMateTopicOperationalStatus = Schema.Literals([
   "testing",
   "waiting-user",
   "waiting-ci",
+  "ready-to-merge",
   "waiting-deploy",
   "validating-deploy",
   "waiting-activation",

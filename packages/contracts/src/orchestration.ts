@@ -27,6 +27,7 @@ import {
 import { ProviderInstanceId } from "./providerInstance.ts";
 import {
   PullRequestActor,
+  PullRequestCheck,
   PullRequestChecksState,
   PullRequestMergeability,
   PullRequestReviewDecision,
@@ -666,6 +667,8 @@ export const ThreadPullRequestSnapshot = Schema.Struct({
   state: PullRequestState,
   title: TrimmedNonEmptyString,
   headBranch: TrimmedNonEmptyString,
+  /** Exact head observed together with this check snapshot, when the provider reports it. */
+  headSha: Schema.optional(TrimmedNonEmptyString),
   baseBranch: TrimmedNonEmptyString,
   isDraft: Schema.Boolean,
   updatedAt: Schema.NullOr(IsoDateTime),
@@ -678,6 +681,7 @@ export const ThreadPullRequestSnapshot = Schema.Struct({
   changedFiles: Schema.optional(NonNegativeInt),
   reviewDecision: Schema.optional(Schema.NullOr(PullRequestReviewDecision)),
   checksState: Schema.optional(Schema.NullOr(PullRequestChecksState)),
+  checks: Schema.optional(Schema.Array(PullRequestCheck)),
   mergeability: Schema.optional(PullRequestMergeability),
 });
 export type ThreadPullRequestSnapshot = typeof ThreadPullRequestSnapshot.Type;

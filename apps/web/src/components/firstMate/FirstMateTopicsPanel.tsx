@@ -12,6 +12,7 @@ import type {
 import {
   ChevronDownIcon,
   CircleDotIcon,
+  GitPullRequestIcon,
   Layers3Icon,
   MessageCircleQuestionIcon,
 } from "lucide-react";
@@ -63,6 +64,8 @@ function statusTone(status: FirstMatePanelItem["status"]): string {
     case "validating-deploy":
     case "waiting-activation":
       return "bg-violet-500";
+    case "ready-to-merge":
+      return "bg-emerald-500";
     case "completed":
       return "bg-emerald-500";
     case "monitoring":
@@ -71,6 +74,24 @@ function statusTone(status: FirstMatePanelItem["status"]): string {
       return "bg-sky-500";
   }
 }
+
+const PULL_REQUEST_STATUS_LABELS: Record<
+  FirstMatePanelItem["pullRequests"][number]["status"],
+  string
+> = {
+  syncing: "Syncing",
+  stale: "Stale",
+  "waiting-ci": "Checks running",
+  "action-required": "Action required",
+  failing: "Checks failed",
+  inconclusive: "Checks inconclusive",
+  draft: "Draft",
+  conflicting: "Conflicts",
+  "ready-to-merge": "Ready to merge",
+  merged: "Merged",
+  closed: "Closed",
+  "checks-unavailable": "Checks unavailable",
+};
 
 export function FirstMateTopicsPanel({
   projects,
@@ -174,6 +195,25 @@ export function FirstMateTopicsPanel({
                       <span className="block truncate text-[10px] leading-4 text-sidebar-muted-foreground/80">
                         {item.summary}
                       </span>
+                      {item.pullRequests.map((pullRequest) => (
+                        <span
+                          key={pullRequest.key}
+                          className="flex min-w-0 items-center gap-1 text-[10px] leading-4 text-sidebar-muted-foreground"
+                          title={`${pullRequest.repository}#${pullRequest.number}${pullRequest.headSha === null ? "" : ` at ${pullRequest.headSha}`}: ${PULL_REQUEST_STATUS_LABELS[pullRequest.status]}`}
+                        >
+                          <GitPullRequestIcon aria-hidden className="size-2.5 shrink-0" />
+                          <span className="shrink-0">#{pullRequest.number}</span>
+                          {pullRequest.headSha === null ? null : (
+                            <span className="shrink-0 font-mono">
+                              {pullRequest.headSha.slice(0, 7)}
+                            </span>
+                          )}
+                          <span aria-hidden>·</span>
+                          <span className="truncate">
+                            {PULL_REQUEST_STATUS_LABELS[pullRequest.status]}
+                          </span>
+                        </span>
+                      ))}
                       <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[10px] leading-4 text-sidebar-muted-foreground">
                         <span className="truncate">{FIRST_MATE_STATUS_LABELS[item.status]}</span>
                         {item.responsibleAgentId ? (

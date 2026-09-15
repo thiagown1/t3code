@@ -1451,6 +1451,7 @@ export const make = Effect.gen(function* () {
             url: changeRequest.url,
             state: changeRequest.state,
             headBranch: changeRequest.headBranch,
+            ...(changeRequest.headSha == null ? {} : { headSha: changeRequest.headSha }),
             baseBranch: changeRequest.baseBranch,
             closedAt: changeRequest.closedAt ?? null,
             mergedAt: changeRequest.mergedAt ?? null,
@@ -1472,6 +1473,7 @@ export const make = Effect.gen(function* () {
             ...(changeRequest.checksState === undefined
               ? {}
               : { checksState: changeRequest.checksState }),
+            checks: [...(changeRequest.checks ?? [])],
             ...(changeRequest.mergeability === undefined
               ? {}
               : { mergeability: changeRequest.mergeability }),
@@ -2661,7 +2663,8 @@ export const make = Effect.gen(function* () {
     detail: PullRequestDetail,
     previous: PullRequestSummary | undefined,
   ): PullRequestSummary => ({
-    // Detail does not carry review/check summaries. Keep the last summary observation.
+    // Detail carries individual checks, while review summary can still come from the last
+    // lightweight observation.
     ...previous,
     provider: detail.provider,
     projectId: detail.projectId,
@@ -2676,6 +2679,7 @@ export const make = Effect.gen(function* () {
     deletions: detail.deletions,
     changedFiles: detail.changedFiles,
     mergeability: detail.mergeability,
+    checks: detail.checks,
     headBranch: detail.headBranch,
     baseBranch: detail.baseBranch,
     closedAt: detail.closedAt,

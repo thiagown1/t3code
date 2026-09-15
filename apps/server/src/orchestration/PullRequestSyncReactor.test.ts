@@ -344,7 +344,15 @@ describe("PullRequestSyncReactor", () => {
         const fixture = yield* makeHarness({
           snapshot: makeSnapshot([makeThread("one", { pullRequests: [makeLink(42)] })]),
           summary: (input) =>
-            Effect.succeed(makeSummary(input, { title: "Ship it", isDraft: true })),
+            Effect.succeed(
+              makeSummary(input, {
+                title: "Ship it",
+                isDraft: true,
+                headSha: "abc123def456",
+                checksState: "pending",
+                checks: [{ name: "CI", status: "pending", description: null, url: null }],
+              }),
+            ),
         });
 
         yield* Effect.gen(function* () {
@@ -371,12 +379,15 @@ describe("PullRequestSyncReactor", () => {
                   state: "open",
                   title: "Ship it",
                   headBranch: "feature",
+                  headSha: "abc123def456",
                   baseBranch: "main",
                   isDraft: true,
                   updatedAt: "2026-08-27T00:00:00.000Z",
                   syncedAt: NOW,
                   closedAt: null,
                   mergedAt: null,
+                  checksState: "pending",
+                  checks: [{ name: "CI", status: "pending", description: null, url: null }],
                 },
                 stack: null,
               },
@@ -614,7 +625,7 @@ describe("PullRequestSyncReactor", () => {
     ),
   );
 
-  it.effect("polls open pull requests on settled threads every fifteen minutes", () =>
+  it.effect("keeps polling open pull requests after the agent session settles", () =>
     Effect.scoped(
       Effect.gen(function* () {
         yield* TestClock.setTime(Date.parse(NOW));
@@ -631,15 +642,20 @@ describe("PullRequestSyncReactor", () => {
         yield* Effect.gen(function* () {
           const reactor = yield* startAndSweep(fixture);
           assert.strictEqual((yield* Ref.get(fixture.summaryCalls)).length, 1);
-
-          yield* sweepAgain(fixture, reactor);
-          assert.strictEqual((yield* Ref.get(fixture.summaryCalls)).length, 1);
-
-          for (let index = 0; index < 13; index += 1) yield* sweepAgain(fixture, reactor);
-          assert.strictEqual((yield* Ref.get(fixture.summaryCalls)).length, 1);
+          const firstCommands = yield* Ref.get(fixture.syncCommands);
+          yield* Ref.update(fixture.snapshots, (snapshot) => applySync(snapshot, firstCommands));
 
           yield* sweepAgain(fixture, reactor);
           assert.strictEqual((yield* Ref.get(fixture.summaryCalls)).length, 2);
+          assert.strictEqual((yield* Ref.get(fixture.syncCommands)).length, 1);
+
+          yield* sweepAgain(fixture, reactor);
+          assert.strictEqual((yield* Ref.get(fixture.summaryCalls)).length, 3);
+          assert.strictEqual((yield* Ref.get(fixture.syncCommands)).length, 2);
+          assert.strictEqual(
+            (yield* Ref.get(fixture.syncCommands)).at(-1)?.snapshot.syncedAt,
+            "2026-08-28T12:02:00.000Z",
+          );
         }).pipe(Effect.provide(fixture.layer));
       }),
     ),

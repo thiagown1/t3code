@@ -30,6 +30,7 @@ import * as OrchestrationEngine from "./Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "./Services/ProjectionSnapshotQuery.ts";
 
 const SLOW_SYNC_INTERVAL_MS = 15 * 60 * 1_000;
+const SNAPSHOT_FRESHNESS_RECEIPT_MS = 2 * 60 * 1_000;
 
 type SnapshotFields = Omit<ThreadPullRequestSnapshot, "syncedAt">;
 
@@ -43,6 +44,7 @@ function snapshotFieldsOf(summary: PullRequestSummary): SnapshotFields {
     state: summary.state,
     title: summary.title,
     headBranch: summary.headBranch,
+    ...(summary.headSha === undefined ? {} : { headSha: summary.headSha }),
     baseBranch: summary.baseBranch,
     isDraft: summary.isDraft ?? false,
     updatedAt: summary.updatedAt,
@@ -54,6 +56,7 @@ function snapshotFieldsOf(summary: PullRequestSummary): SnapshotFields {
     ...(summary.changedFiles === undefined ? {} : { changedFiles: summary.changedFiles }),
     ...(summary.reviewDecision === undefined ? {} : { reviewDecision: summary.reviewDecision }),
     ...(summary.checksState === undefined ? {} : { checksState: summary.checksState }),
+    ...(summary.checks === undefined ? {} : { checks: [...summary.checks] }),
     ...(summary.mergeability === undefined ? {} : { mergeability: summary.mergeability }),
   };
 }
@@ -63,6 +66,7 @@ function snapshotFieldsEqual(left: SnapshotFields, right: SnapshotFields): boole
     left.state === right.state &&
     left.title === right.title &&
     left.headBranch === right.headBranch &&
+    left.headSha === right.headSha &&
     left.baseBranch === right.baseBranch &&
     left.isDraft === right.isDraft &&
     left.updatedAt === right.updatedAt &&
@@ -75,6 +79,7 @@ function snapshotFieldsEqual(left: SnapshotFields, right: SnapshotFields): boole
     left.changedFiles === right.changedFiles &&
     (left.reviewDecision ?? null) === (right.reviewDecision ?? null) &&
     (left.checksState ?? null) === (right.checksState ?? null) &&
+    JSON.stringify(left.checks ?? []) === JSON.stringify(right.checks ?? []) &&
     left.mergeability === right.mergeability
   );
 }
@@ -100,10 +105,6 @@ function stacksEqual(
       );
     })
   );
-}
-
-function isUnsettled(thread: OrchestrationThreadShell): boolean {
-  return thread.settledOverride !== "settled" && thread.settledAt === null;
 }
 
 /**
@@ -138,8 +139,9 @@ export const make = Effect.gen(function* () {
     if (requested.has(key) || retryStacks.has(key)) return true;
     if (entries.some((entry) => entry.link.snapshot === null)) return true;
     if (entries.every((entry) => entry.link.snapshot?.state === "merged")) return false;
-    if (entries.some((entry) => entry.link.snapshot?.state === "open" && isUnsettled(entry.thread)))
-      return true;
+    // An open PR remains actionable after its agent session settles: checks can finish later and
+    // the operator still needs the ready-to-merge notification. Archiving the thread stops it.
+    if (entries.some((entry) => entry.link.snapshot?.state === "open")) return true;
     // Closed requests can reopen on the host, including after the thread settles.
     const last = lastSyncedAt.get(key);
     return last === undefined || nowMs - last >= SLOW_SYNC_INTERVAL_MS;
@@ -182,10 +184,15 @@ export const make = Effect.gen(function* () {
     ) {
       const { thread, link } = entry;
       const nextStack = fetchedStack === null ? link.stack : fetchedStack.stack;
+      const lastSnapshotAt =
+        link.snapshot === null ? Number.NaN : Date.parse(link.snapshot.syncedAt);
+      const freshnessReceiptDue =
+        !Number.isFinite(lastSnapshotAt) || nowMs - lastSnapshotAt >= SNAPSHOT_FRESHNESS_RECEIPT_MS;
       const changed =
         link.snapshot === null ||
         !snapshotFieldsEqual(link.snapshot, fields) ||
-        !stacksEqual(link.stack, nextStack);
+        !stacksEqual(link.stack, nextStack) ||
+        freshnessReceiptDue;
       if (changed) {
         const uuid = yield* crypto.randomUUIDv4;
         yield* engine.dispatch({

@@ -703,6 +703,8 @@ export const PullRequestSummary = Schema.Struct({
   /** Present when the host says the open pull request is still a draft. */
   isDraft: Schema.optional(Schema.Boolean),
   headBranch: TrimmedNonEmptyString,
+  /** Exact head commit observed in the same host read as the checks, when available. */
+  headSha: Schema.optional(TrimmedNonEmptyString),
   baseBranch: TrimmedNonEmptyString,
   closedAt: Schema.optional(Schema.NullOr(Schema.String)),
   mergedAt: Schema.optional(Schema.NullOr(Schema.String)),
@@ -713,6 +715,8 @@ export const PullRequestSummary = Schema.Struct({
   changedFiles: Schema.optional(NonNegativeInt),
   reviewDecision: Schema.optional(Schema.NullOr(PullRequestReviewDecision)),
   checksState: Schema.optional(Schema.NullOr(PullRequestChecksState)),
+  /** Individual checks when the summary read already provides them without another host call. */
+  checks: Schema.optional(Schema.Array(PullRequestCheck)),
   mergeability: Schema.optional(PullRequestMergeability),
 });
 export type PullRequestSummary = typeof PullRequestSummary.Type;

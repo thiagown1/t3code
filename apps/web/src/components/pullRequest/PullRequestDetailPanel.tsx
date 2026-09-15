@@ -685,6 +685,8 @@ export function PullRequestDetailPanel({
         : {
             ...resolvedCoreDetail,
             ...sharedSummary,
+            // A summary may omit checks (or come from an older server). Keep detail complete.
+            checks: sharedSummary.checks ?? resolvedCoreDetail.checks,
             author: sharedSummary.author ?? resolvedCoreDetail.author,
             additions: sharedSummary.additions ?? resolvedCoreDetail.additions,
             deletions: sharedSummary.deletions ?? resolvedCoreDetail.deletions,

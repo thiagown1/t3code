@@ -1834,6 +1834,7 @@ export const make = Effect.gen(function* () {
               title: detail.title,
               url: detail.url,
               headBranch: detail.headBranch,
+              ...(detail.headSha == null ? {} : { headSha: detail.headSha }),
               baseBranch: detail.baseBranch,
               state: detail.state,
               updatedAt: detail.updatedAt,
@@ -1846,6 +1847,7 @@ export const make = Effect.gen(function* () {
               changedFiles: detail.changedFiles,
               reviewDecision: detail.reviewDecision,
               checksState: detail.checksState,
+              checks: detail.checks,
               mergeability: detail.mergeability,
             });
           }),

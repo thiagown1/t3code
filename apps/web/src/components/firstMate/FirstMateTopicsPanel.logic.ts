@@ -7,7 +7,9 @@ import type {
   FirstMateTopicId,
   FirstMateTopicOperationalStatus,
   FirstMateRoutingEvaluationMode,
+  PullRequestCheckStatus,
   ProjectId,
+  ThreadPullRequestLink,
   ThreadId,
 } from "@t3tools/contracts";
 import { deriveFirstMateTopicReadModel } from "@t3tools/shared/firstMate";
@@ -27,7 +29,34 @@ export interface FirstMatePanelItem {
   readonly pendingDecisionCount: number;
   readonly responsibleAgentId: string | null;
   readonly threadId: ThreadId | null;
+  readonly pullRequests: ReadonlyArray<FirstMatePanelPullRequest>;
   readonly updatedAt: string;
+}
+
+export type FirstMatePanelPullRequestStatus =
+  | "syncing"
+  | "stale"
+  | "waiting-ci"
+  | "action-required"
+  | "failing"
+  | "inconclusive"
+  | "draft"
+  | "conflicting"
+  | "ready-to-merge"
+  | "merged"
+  | "closed"
+  | "checks-unavailable";
+
+export interface FirstMatePanelPullRequest {
+  readonly key: string;
+  readonly repository: string;
+  readonly number: number;
+  readonly url: string;
+  readonly title: string | null;
+  readonly headSha: string | null;
+  readonly syncedAt: string | null;
+  readonly status: FirstMatePanelPullRequestStatus;
+  readonly checks: Readonly<Record<PullRequestCheckStatus, number>>;
 }
 
 export interface FirstMatePanelModel {
@@ -54,21 +83,107 @@ const statusPriority: Record<FirstMateTopicOperationalStatus, number> = {
   "validating-deploy": 3,
   "waiting-activation": 4,
   "waiting-ci": 5,
-  working: 6,
-  monitoring: 7,
-  testing: 8,
-  implementing: 9,
-  planning: 10,
-  researching: 11,
-  queued: 12,
-  completed: 13,
+  "ready-to-merge": 6,
+  working: 7,
+  monitoring: 8,
+  testing: 9,
+  implementing: 10,
+  planning: 11,
+  researching: 12,
+  queued: 13,
+  completed: 14,
 };
+
+export const FIRST_MATE_PULL_REQUEST_STALE_AFTER_MS = 3 * 60 * 1_000;
+
+const EMPTY_CHECK_COUNTS: Readonly<Record<PullRequestCheckStatus, number>> = {
+  pending: 0,
+  "action-required": 0,
+  success: 0,
+  failure: 0,
+  skipped: 0,
+  neutral: 0,
+  cancelled: 0,
+};
+
+function pullRequestStatus(
+  link: ThreadPullRequestLink,
+  checks: Readonly<Record<PullRequestCheckStatus, number>>,
+  nowMs: number,
+): FirstMatePanelPullRequestStatus {
+  const snapshot = link.snapshot;
+  if (snapshot === null) return "syncing";
+  if (snapshot.state === "merged") return "merged";
+  if (snapshot.state === "closed") return "closed";
+  const syncedAtMs = Date.parse(snapshot.syncedAt);
+  if (!Number.isFinite(syncedAtMs) || nowMs - syncedAtMs > FIRST_MATE_PULL_REQUEST_STALE_AFTER_MS) {
+    return "stale";
+  }
+  if (checks["action-required"] > 0) return "action-required";
+  if (checks.failure > 0 || snapshot.checksState === "failing") return "failing";
+  if (checks.pending > 0 || snapshot.checksState === "pending") return "waiting-ci";
+  if (checks.skipped + checks.neutral + checks.cancelled > 0) return "inconclusive";
+  if (snapshot.isDraft) return "draft";
+  if (snapshot.mergeability === "conflicting") return "conflicting";
+  if (checks.success > 0 || snapshot.checksState === "passing") return "ready-to-merge";
+  return "checks-unavailable";
+}
+
+export function firstMatePanelPullRequests(
+  links: ReadonlyArray<ThreadPullRequestLink>,
+  nowMs: number,
+): ReadonlyArray<FirstMatePanelPullRequest> {
+  return links
+    .filter((link) => link.source !== "stack-dismissed")
+    .map((link) => {
+      const counts = { ...EMPTY_CHECK_COUNTS };
+      for (const check of link.snapshot?.checks ?? []) counts[check.status] += 1;
+      return {
+        key: `${link.host}:${link.repository}#${link.number}`,
+        repository: link.repository,
+        number: link.number,
+        url: link.url,
+        title: link.snapshot?.title ?? null,
+        headSha: link.snapshot?.headSha ?? null,
+        syncedAt: link.snapshot?.syncedAt ?? null,
+        status: pullRequestStatus(link, counts, nowMs),
+        checks: counts,
+      };
+    });
+}
+
+function statusFromPullRequests(
+  current: FirstMateTopicOperationalStatus,
+  pullRequests: ReadonlyArray<FirstMatePanelPullRequest>,
+): FirstMateTopicOperationalStatus {
+  if (pullRequests.length === 0 || current === "waiting-user") return current;
+  if (
+    pullRequests.some((pullRequest) =>
+      ["action-required", "failing", "inconclusive", "conflicting", "stale"].includes(
+        pullRequest.status,
+      ),
+    )
+  ) {
+    return "blocked";
+  }
+  if (pullRequests.some((pullRequest) => ["syncing", "waiting-ci"].includes(pullRequest.status))) {
+    return "waiting-ci";
+  }
+  const open = pullRequests.filter(
+    (pullRequest) => pullRequest.status !== "merged" && pullRequest.status !== "closed",
+  );
+  return open.length > 0 && open.every((pullRequest) => pullRequest.status === "ready-to-merge")
+    ? "ready-to-merge"
+    : current;
+}
 
 export function buildFirstMatePanelModel(input: {
   readonly projects: ReadonlyArray<EnvironmentProject>;
   readonly threads: ReadonlyArray<EnvironmentThreadShell>;
   readonly scopedProjectKeys: ReadonlySet<string> | null;
+  readonly nowMs?: number;
 }): FirstMatePanelModel {
+  const nowMs = input.nowMs ?? Date.now();
   const visibleProjects = input.projects.filter(
     (project) =>
       input.scopedProjectKeys === null ||
@@ -107,6 +222,7 @@ export function buildFirstMatePanelModel(input: {
         deliveryStatus: thread?.deliveryStatus ?? null,
         machineAlerts: ZERO_MACHINE_ALERTS,
       });
+      const pullRequests = firstMatePanelPullRequests(thread?.pullRequests ?? [], nowMs);
       return {
         key: `${project.environmentId}:${project.id}:${topic.id}`,
         environmentId: project.environmentId,
@@ -116,10 +232,14 @@ export function buildFirstMatePanelModel(input: {
         selected: workspace.selectedTopicId === topic.id,
         title: topic.title,
         summary: topic.summary,
-        status: readModel.operationalStatus,
+        status:
+          thread?.deliveryStatus == null || thread.deliveryStatus === "waiting-ci"
+            ? statusFromPullRequests(readModel.operationalStatus, pullRequests)
+            : readModel.operationalStatus,
         pendingDecisionCount: readModel.pendingDecisionCount,
         responsibleAgentId: topic.responsibleAgentId,
         threadId: topic.threadId,
+        pullRequests,
         updatedAt: topic.updatedAt,
       };
     });
@@ -158,6 +278,7 @@ export const FIRST_MATE_STATUS_LABELS: Record<FirstMateTopicOperationalStatus, s
   testing: "Testing",
   "waiting-user": "Waiting for you",
   "waiting-ci": "Waiting for CI",
+  "ready-to-merge": "Ready to merge",
   "waiting-deploy": "Waiting to deploy",
   "validating-deploy": "Validating deploy",
   "waiting-activation": "Waiting to activate",

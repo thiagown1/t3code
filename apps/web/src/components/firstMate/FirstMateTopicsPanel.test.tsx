@@ -129,4 +129,71 @@ describe("FirstMateTopicsPanel", () => {
     expect(markup).toContain('aria-pressed="true"');
     expect(markup).toContain("Automatic routing evaluation: Off");
   });
+
+  it("shows every linked PR with its exact head and check readiness", () => {
+    const markup = renderToStaticMarkup(
+      <FirstMateTopicsPanel
+        projects={[
+          {
+            ...baseProject,
+            firstMate: {
+              ...baseProject.firstMate!,
+              topics: [
+                {
+                  id: FirstMateTopicId.make("topic-1"),
+                  projectId,
+                  title: "Release task",
+                  summary: "Track both repositories.",
+                  stage: "testing",
+                  threadId,
+                  responsibleAgentId: "firstmate",
+                  createdAt: now,
+                  updatedAt: now,
+                  completedAt: null,
+                },
+              ],
+            },
+          },
+        ]}
+        threads={[
+          {
+            ...linkedThread,
+            deliveryStatus: null,
+            pullRequests: [
+              {
+                host: "github.com",
+                repository: "acme/web",
+                number: 12,
+                url: "https://github.com/acme/web/pull/12",
+                source: "agent",
+                linkedAt: now,
+                stack: null,
+                snapshot: {
+                  state: "open",
+                  title: "Ship UI",
+                  headBranch: "feature/ui",
+                  headSha: "abcdef1234567890",
+                  baseBranch: "main",
+                  isDraft: false,
+                  updatedAt: now,
+                  syncedAt: new Date().toISOString(),
+                  checksState: "passing",
+                  checks: [{ name: "CI", status: "success", description: null, url: null }],
+                },
+              },
+            ],
+          },
+        ]}
+        scopedProjectKeys={null}
+        onSelectTopic={async () => true}
+        onSetRoutingEvaluationMode={async () => true}
+        onOpenThread={() => {}}
+      />,
+    );
+
+    expect(markup).toContain("#12");
+    expect(markup).toContain("abcdef1");
+    expect(markup).toContain("Ready to merge");
+    expect(markup).toContain("acme/web#12 at abcdef1234567890");
+  });
 });
