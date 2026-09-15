@@ -194,6 +194,7 @@ import {
 } from "../browser/openFileInPreview";
 import { resolveLinkTarget } from "../browser/browserLinkTarget";
 import { PullRequestLinkPreview } from "./pullRequest/PullRequestLinkPreview";
+import { MermaidDiagram } from "./chat/MermaidDiagram";
 
 interface ChatMarkdownProps {
   text: string;
@@ -211,6 +212,8 @@ interface ChatMarkdownProps {
   lineBreaks?: boolean;
   /** Parse sanitized raw HTML instead of displaying its source text. */
   parseRawHtml?: boolean;
+  /** Render fenced Mermaid diagrams. Kept opt-in so ordinary chat code blocks stay lightweight. */
+  renderMermaidDiagrams?: boolean;
   /** Append a prompt that invokes a newly created artifact-template skill. */
   onUseArtifactTemplate?: ((template: CodexArtifactTemplate) => void) | undefined;
   /** Directory that anchors relative links and images; defaults to `cwd`. Set
@@ -2226,6 +2229,7 @@ function useChatMarkdownState({
   onImageExpand,
   renderContextReference,
   headingLevelOffset = 0,
+  renderMermaidDiagrams = false,
 }: ChatMarkdownProps) {
   const { resolvedTheme } = useTheme();
   const [localMediaPreview, setLocalMediaPreview] = useState<ExpandedImagePreview | null>(null);
@@ -2624,6 +2628,7 @@ function useChatMarkdownState({
       expandMedia,
       fileLinkChip,
       renderContextReference,
+      renderMermaidDiagrams,
       headingLevelOffset,
       imageBaseDir,
       inlineCodeFileLinkMetaByText,
@@ -2653,6 +2658,7 @@ function useChatMarkdownState({
       expandMedia,
       fileLinkChip,
       renderContextReference,
+      renderMermaidDiagrams,
       headingLevelOffset,
       imageBaseDir,
       inlineCodeFileLinkMetaByText,
@@ -3177,7 +3183,9 @@ const CHAT_MARKDOWN_COMPONENTS = {
     return <MarkdownDetails open={detailsOpen}>{children}</MarkdownDetails>;
   },
   pre: function MarkdownPre({ node, children, ...props }) {
-    const { resolvedTheme, diffThemeName, isStreaming } = use(ChatMarkdownRendererContext);
+    const { resolvedTheme, diffThemeName, isStreaming, renderMermaidDiagrams } = use(
+      ChatMarkdownRendererContext,
+    );
     const codeBlock = extractCodeBlock(children);
     if (!codeBlock) {
       return <pre {...props}>{children}</pre>;
@@ -3185,7 +3193,7 @@ const CHAT_MARKDOWN_COMPONENTS = {
 
     const language = extractFenceLanguage(codeBlock.className);
     const fenceTitle = extractFenceTitle(extractPreCodeMeta(node));
-    return (
+    const sourceBlock = (
       <MarkdownCodeBlock
         code={codeBlock.code}
         language={language}
@@ -3214,6 +3222,11 @@ const CHAT_MARKDOWN_COMPONENTS = {
           </Suspense>
         </RenderErrorBoundary>
       </MarkdownCodeBlock>
+    );
+    return renderMermaidDiagrams && language.toLowerCase() === "mermaid" ? (
+      <MermaidDiagram source={codeBlock.code} appearance={resolvedTheme} fallback={sourceBlock} />
+    ) : (
+      sourceBlock
     );
   },
 } satisfies Components;

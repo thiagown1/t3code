@@ -63,6 +63,7 @@ import ChatMarkdown, {
   hasMarkdownFilePrimaryAction,
   shouldUseMarkdownFileBrowserPrimaryAction,
 } from "./ChatMarkdown";
+import { PullRequestMarkdown } from "./pullRequest/PullRequestMarkdown";
 
 function codeButton(renderer: ReactTestRenderer, label: string) {
   const button = renderer.root
@@ -71,6 +72,30 @@ function codeButton(renderer: ReactTestRenderer, label: string) {
   if (!button) throw new Error(`Missing code button: ${label}`);
   return button.props as ComponentProps<typeof Button>;
 }
+
+describe("ChatMarkdown Mermaid diagrams", () => {
+  const diagram = "```mermaid\nflowchart LR\n  groups_list --> members_dialog\n```";
+
+  it("keeps Mermaid fences as code unless the surface opts in", () => {
+    const html = renderToStaticMarkup(<ChatMarkdown cwd="/tmp/project" text={diagram} />);
+
+    expect(html).not.toContain('data-mermaid-state="pending"');
+    expect(html).toContain("flowchart LR");
+  });
+
+  it("opts pull request markdown into Mermaid rendering", () => {
+    const html = renderToStaticMarkup(
+      <PullRequestMarkdown
+        text={diagram}
+        cwd="/tmp/project"
+        environmentId={EnvironmentId.make("local")}
+      />,
+    );
+
+    expect(html).toContain('data-mermaid-state="pending"');
+    expect(html).toContain("Rendering Mermaid diagram");
+  });
+});
 
 describe("ChatMarkdown context references", () => {
   it("renders text and image references through the chip renderer, with readable fallback", async () => {

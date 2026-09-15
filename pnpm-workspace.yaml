@@ -116,6 +116,10 @@ overrides:
   "@clerk/expo": "catalog:"
   "@clerk/react": "catalog:"
   "@clerk/shared": "catalog:"
+  # Mermaid 12's Chevrotain packages still resolve the vulnerable 4.17.23 release.
+  "@chevrotain/cst-dts-gen>lodash-es": 4.18.1
+  "@chevrotain/gast>lodash-es": 4.18.1
+  "chevrotain>lodash-es": 4.18.1
   "@effect/atom-react": "catalog:"
   "@effect/platform-node": "catalog:"
   "@effect/platform-node-shared": "catalog:"
