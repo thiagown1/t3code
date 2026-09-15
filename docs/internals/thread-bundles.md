@@ -30,6 +30,11 @@ deterministic target thread ID, portable-content counts, omission count, and rea
 every selected thread. It does not create threads, bind provider sessions, or write any target state;
 server persistence and UI confirmation remain separate adapters.
 
+Settings > Integrations exposes this dry run under **Conversation portability**. The review accepts a
+Thread Bundle v1 file or pasted JSON, validates it locally, and then requests the authoritative plan.
+It shows every source thread and destination status rather than collapsing a blocked batch into one
+generic error. A ready plan still has no apply action until the atomic persistence adapter exists.
+
 The read-only `server.exportThreadBundle` RPC accepts one to fifty unique thread IDs. It reads each
 full persisted projection snapshot, resolves its project, selects only FirstMate decisions whose
 topic is linked to that thread, and applies the shared sanitizer before returning the bundle. A
