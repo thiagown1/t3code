@@ -315,6 +315,10 @@
       "types": "./src/environmentBundle.ts",
       "import": "./src/environmentBundle.ts"
     },
+    "./threadBundle": {
+      "types": "./src/threadBundle.ts",
+      "import": "./src/threadBundle.ts"
+    },
     "./desktopAppControl": {
       "types": "./src/desktopAppControl.ts",
       "import": "./src/desktopAppControl.ts"

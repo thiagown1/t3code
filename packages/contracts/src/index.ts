@@ -39,6 +39,7 @@ export * from "./browserImport.ts";
 export * from "./browserProfile.ts";
 export * from "./capabilityProfile.ts";
 export * from "./environmentBundle.ts";
+export * from "./threadBundle.ts";
 export * from "./device.ts";
 export * from "./preview.ts";
 export * from "./previewAutomation.ts";
