@@ -147,3 +147,48 @@ export class ThreadBundleExportError extends Schema.TaggedError<ThreadBundleExpo
     threadId: Schema.optionalKey(ThreadId),
   },
 ) {}
+
+export const ThreadBundleImportStatus = Schema.Literals([
+  "ready",
+  "duplicate",
+  "missing-project",
+  "ambiguous-project",
+  "missing-provider",
+]);
+export type ThreadBundleImportStatus = typeof ThreadBundleImportStatus.Type;
+
+export const ThreadBundleImportPlanItem = Schema.Struct({
+  sourceEnvironmentId: StableReference,
+  sourceThreadId: ThreadId,
+  targetThreadId: ThreadId,
+  title: TrimmedNonEmptyString,
+  status: ThreadBundleImportStatus,
+  targetProjectId: Schema.NullOr(ProjectId),
+  messageCount: NonNegativeInt,
+  attachmentReferenceCount: NonNegativeInt,
+  proposedPlanCount: NonNegativeInt,
+  resolvedDecisionCount: NonNegativeInt,
+  omissionCount: NonNegativeInt,
+});
+export type ThreadBundleImportPlanItem = typeof ThreadBundleImportPlanItem.Type;
+
+export const ThreadBundleImportPlan = Schema.Struct({
+  bundleId: StableReference,
+  canImport: Schema.Boolean,
+  items: Schema.Array(ThreadBundleImportPlanItem),
+});
+export type ThreadBundleImportPlan = typeof ThreadBundleImportPlan.Type;
+
+export const ThreadBundleImportPlanInput = Schema.Struct({ bundle: ThreadBundle });
+export type ThreadBundleImportPlanInput = typeof ThreadBundleImportPlanInput.Type;
+
+export const ThreadBundleImportErrorReason = Schema.Literals(["snapshot-failed"]);
+export type ThreadBundleImportErrorReason = typeof ThreadBundleImportErrorReason.Type;
+
+export class ThreadBundleImportError extends Schema.TaggedError<ThreadBundleImportError>()(
+  "ThreadBundleImportError",
+  {
+    reason: ThreadBundleImportErrorReason,
+    message: TrimmedNonEmptyString,
+  },
+) {}

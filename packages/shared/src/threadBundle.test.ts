@@ -13,6 +13,7 @@ import {
   buildThreadBundleImportPlan,
   parseThreadBundleJson,
   serializeThreadBundle,
+  threadBundleTargetThreadId,
 } from "./threadBundle.ts";
 
 const NOW = "2026-09-15T18:00:00.000Z";
@@ -240,10 +241,16 @@ describe("Thread Bundle", () => {
     expect(
       buildThreadBundleImportPlan({ bundle: value, targetProjects: [target], existingOrigins: [] }),
     ).toMatchObject({
+      bundleId: "transfer-one",
       canImport: true,
       items: [
         {
+          sourceEnvironmentId: "desk-source",
           sourceThreadId: threadId,
+          targetThreadId: threadBundleTargetThreadId({
+            sourceEnvironmentId: "desk-source",
+            sourceThreadId: threadId,
+          }),
           status: "ready",
           targetProjectId: projectId,
           messageCount: 1,

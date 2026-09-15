@@ -1,13 +1,15 @@
 import {
   ThreadBundle,
+  ThreadId,
   type FirstMateDecision,
   type OrchestrationProject,
   type OrchestrationThread,
   type ProjectId,
+  type ThreadBundleImportPlan,
+  type ThreadBundleImportStatus,
   type ThreadBundleOmissionKind,
   type ThreadBundleThread,
   type ThreadBundle as ThreadBundleType,
-  type ThreadId,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 
@@ -236,23 +238,13 @@ export function parseThreadBundleJson(json: string): ThreadBundleType {
   return normalizeThreadBundle(decodeThreadBundle(input));
 }
 
-export type ThreadBundleImportStatus =
-  | "ready"
-  | "duplicate"
-  | "missing-project"
-  | "ambiguous-project"
-  | "missing-provider";
-
-export interface ThreadBundleImportPlanItem {
+export function threadBundleTargetThreadId(input: {
+  readonly sourceEnvironmentId: string;
   readonly sourceThreadId: ThreadId;
-  readonly title: string;
-  readonly status: ThreadBundleImportStatus;
-  readonly targetProjectId: ProjectId | null;
-  readonly messageCount: number;
-  readonly attachmentReferenceCount: number;
-  readonly proposedPlanCount: number;
-  readonly resolvedDecisionCount: number;
-  readonly omissionCount: number;
+}): ThreadId {
+  return ThreadId.make(
+    `bundle:${encodeURIComponent(input.sourceEnvironmentId)}:${encodeURIComponent(input.sourceThreadId)}`,
+  );
 }
 
 export function buildThreadBundleImportPlan(input: {
@@ -267,7 +259,7 @@ export function buildThreadBundleImportPlan(input: {
     readonly sourceEnvironmentId: string;
     readonly sourceThreadId: ThreadId;
   }>;
-}): { readonly canImport: boolean; readonly items: ReadonlyArray<ThreadBundleImportPlanItem> } {
+}): ThreadBundleImportPlan {
   const existingOrigins = new Set(
     input.existingOrigins.map((origin) =>
       originKey(origin.sourceEnvironmentId, origin.sourceThreadId),
@@ -293,7 +285,9 @@ export function buildThreadBundleImportPlan(input: {
             ? "missing-provider"
             : "ready";
     return {
+      sourceEnvironmentId: thread.sourceEnvironmentId,
       sourceThreadId: thread.sourceThreadId,
+      targetThreadId: threadBundleTargetThreadId(thread),
       title: thread.title,
       status,
       targetProjectId: target?.projectId ?? null,
@@ -307,5 +301,9 @@ export function buildThreadBundleImportPlan(input: {
       omissionCount: thread.omissions.reduce((count, omission) => count + omission.count, 0),
     };
   });
-  return { canImport: items.length > 0 && items.every((item) => item.status === "ready"), items };
+  return {
+    bundleId: input.bundle.bundleId,
+    canImport: items.length > 0 && items.every((item) => item.status === "ready"),
+    items,
+  };
 }

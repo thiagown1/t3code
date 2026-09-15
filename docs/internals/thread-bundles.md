@@ -20,8 +20,15 @@ The canonical serializer sorts threads, plans, decisions, and omission summaries
 message order. It rejects duplicate source origins and duplicate message, plan, or decision IDs.
 The dry-run planner maps projects by canonical repository identity (or source project ID when no
 repository identity exists), detects duplicates, missing or ambiguous projects, and unavailable
-provider instances. Import is fail-closed unless every selected thread is ready. This contract and
-planner do not write any target state; server persistence and UI confirmation are separate adapters.
+provider instances. Imported thread IDs are deterministic from the source environment and thread
+identity, so importing the same origin twice is detectable without inspecting message content.
+Import is fail-closed unless every selected thread is ready.
+
+The read-only `server.planThreadBundleImport` RPC evaluates the supplied bundle against one
+authoritative projection snapshot and the enabled provider registry. It returns the target project,
+deterministic target thread ID, portable-content counts, omission count, and readiness reason for
+every selected thread. It does not create threads, bind provider sessions, or write any target state;
+server persistence and UI confirmation remain separate adapters.
 
 The read-only `server.exportThreadBundle` RPC accepts one to fifty unique thread IDs. It reads each
 full persisted projection snapshot, resolves its project, selects only FirstMate decisions whose

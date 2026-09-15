@@ -70,6 +70,7 @@ import {
   EnvironmentAuthorizationError,
   ThreadId,
   ThreadBundleExportError,
+  ThreadBundleImportError,
   type TerminalAttachStreamEvent,
   type TerminalError,
   type TerminalEvent,
@@ -158,6 +159,7 @@ import {
 } from "./environment/EnvironmentBundleInventory.ts";
 import { resolveEnvironmentBundleCredentialReferences } from "./environment/EnvironmentBundleCredentials.ts";
 import { exportThreadBundleFromProjection } from "./orchestration/ThreadBundleExport.ts";
+import { planThreadBundleImportFromProjection } from "./orchestration/ThreadBundleImportPlan.ts";
 import { summarizeResourceTelemetry } from "./resourceTelemetry/ResourceTelemetrySummary.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
@@ -2577,6 +2579,34 @@ const makeWsRpcLayer = (
                   exportedAt: yield* nowIso,
                 },
                 projectionSnapshotQuery,
+              );
+            }),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.serverPlanThreadBundleImport]: ({ bundle }) =>
+          observeRpcEffect(
+            WS_METHODS.serverPlanThreadBundleImport,
+            Effect.gen(function* () {
+              const providers = yield* providerRegistry.getProviders.pipe(
+                Effect.mapError(
+                  () =>
+                    new ThreadBundleImportError({
+                      reason: "snapshot-failed",
+                      message: "Failed to read provider availability for Thread Bundle import",
+                    }),
+                ),
+              );
+              return yield* planThreadBundleImportFromProjection(
+                bundle,
+                projectionSnapshotQuery,
+                providers
+                  .filter(
+                    (provider) =>
+                      provider.enabled &&
+                      provider.status !== "disabled" &&
+                      provider.availability !== "unavailable",
+                  )
+                  .map((provider) => provider.instanceId),
               );
             }),
             { "rpc.aggregate": "server" },
