@@ -23,6 +23,8 @@ import {
   ClientActivityReportInput,
   HostPowerSnapshot,
 } from "./background.ts";
+import { EnvironmentBundleCredentialResolutions } from "./environmentBundle.ts";
+import { PortableCredentialReference } from "./capabilityProfile.ts";
 import {
   FilesystemBrowseInput,
   FilesystemBrowseResult,
@@ -367,6 +369,7 @@ export const WS_METHODS = {
   serverRemoveKeybinding: "server.removeKeybinding",
   serverGetSettings: "server.getSettings",
   serverUpdateSettings: "server.updateSettings",
+  serverResolveEnvironmentBundleCredentials: "server.resolveEnvironmentBundleCredentials",
   serverDiscoverSourceControl: "server.discoverSourceControl",
   serverGetTraceDiagnostics: "server.getTraceDiagnostics",
   serverGetProcessDiagnostics: "server.getProcessDiagnostics",
@@ -579,6 +582,17 @@ const WsServerUpdateSettingsRpc = Rpc.make(WS_METHODS.serverUpdateSettings, {
   success: ServerSettings,
   error: Schema.Union([ServerSettingsError, EnvironmentAuthorizationError]),
 });
+
+const WsServerResolveEnvironmentBundleCredentialsRpc = Rpc.make(
+  WS_METHODS.serverResolveEnvironmentBundleCredentials,
+  {
+    payload: Schema.Struct({
+      credentialRefs: Schema.Array(PortableCredentialReference).check(Schema.isMaxLength(512)),
+    }),
+    success: EnvironmentBundleCredentialResolutions,
+    error: EnvironmentAuthorizationError,
+  },
+);
 
 const WsServerDiscoverSourceControlRpc = Rpc.make(WS_METHODS.serverDiscoverSourceControl, {
   payload: Schema.Struct({}),
@@ -1391,6 +1405,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerRemoveKeybindingRpc,
   WsServerGetSettingsRpc,
   WsServerUpdateSettingsRpc,
+  WsServerResolveEnvironmentBundleCredentialsRpc,
   WsServerDiscoverSourceControlRpc,
   WsServerGetTraceDiagnosticsRpc,
   WsServerGetProcessDiagnosticsRpc,

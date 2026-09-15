@@ -155,6 +155,7 @@ import {
   codexMcpInventorySourcesFromSettings,
   loadEnvironmentBundleServerInventory,
 } from "./environment/EnvironmentBundleInventory.ts";
+import { resolveEnvironmentBundleCredentialReferences } from "./environment/EnvironmentBundleCredentials.ts";
 import { summarizeResourceTelemetry } from "./resourceTelemetry/ResourceTelemetrySummary.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
@@ -2545,6 +2546,12 @@ const makeWsRpcLayer = (
             {
               "rpc.aggregate": "server",
             },
+          ),
+        [WS_METHODS.serverResolveEnvironmentBundleCredentials]: ({ credentialRefs }) =>
+          observeRpcEffect(
+            WS_METHODS.serverResolveEnvironmentBundleCredentials,
+            Effect.succeed(resolveEnvironmentBundleCredentialReferences(credentialRefs)),
+            { "rpc.aggregate": "server" },
           ),
         [WS_METHODS.serverDiscoverSourceControl]: (_input) =>
           observeRpcEffect(

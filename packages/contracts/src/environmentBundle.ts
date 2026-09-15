@@ -93,6 +93,27 @@ export const EnvironmentBundleHealthStatus = Schema.Literals([
 ]);
 export type EnvironmentBundleHealthStatus = typeof EnvironmentBundleHealthStatus.Type;
 
+export const EnvironmentBundleCredentialResolutionStatus = Schema.Literals([
+  "resolved",
+  "missing",
+  "unsupported",
+]);
+export type EnvironmentBundleCredentialResolutionStatus =
+  typeof EnvironmentBundleCredentialResolutionStatus.Type;
+
+export const EnvironmentBundleCredentialResolution = Schema.Struct({
+  credentialRef: PortableCredentialReference,
+  status: EnvironmentBundleCredentialResolutionStatus,
+});
+export type EnvironmentBundleCredentialResolution =
+  typeof EnvironmentBundleCredentialResolution.Type;
+
+export const EnvironmentBundleCredentialResolutions = Schema.Array(
+  EnvironmentBundleCredentialResolution,
+);
+export type EnvironmentBundleCredentialResolutions =
+  typeof EnvironmentBundleCredentialResolutions.Type;
+
 export const EnvironmentBundleInventoryCoverage = Schema.Literals([
   "complete",
   "partial",

@@ -58,6 +58,10 @@ Nested Codex MCP `env` tables contribute only their variable names as portable
 `environment-variable` credential references. Values are never returned or hashed; destinations
 must resolve each name from their own environment before any future enablement adapter may report
 the MCP as ready. Inline or provider-specific credential layouts remain outside the partial scan.
+The read-only credential-resolution RPC accepts only explicitly requested references. It reports
+`resolved`, `missing`, or `unsupported`, never returns a value, and does not enumerate the host
+environment. The first resolver supports environment variables; native keychains, credential
+managers, and managed references remain unsupported until dedicated adapters exist.
 The inventory dialog exposes logical identities, enabled state, origin, coverage, and abbreviated
 instruction hashes so operators can inspect what a bundle would contain before exporting it.
 

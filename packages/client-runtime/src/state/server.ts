@@ -1078,6 +1078,14 @@ export function createServerEnvironmentAtoms<R, E>(
           ]),
       },
     }),
+    resolveEnvironmentBundleCredentials: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:resolve-environment-bundle-credentials",
+      tag: WS_METHODS.serverResolveEnvironmentBundleCredentials,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId, input }) => JSON.stringify([environmentId, input.credentialRefs]),
+      },
+    }),
     updateProvider: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:update-provider",
       tag: WS_METHODS.serverUpdateProvider,
