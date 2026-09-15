@@ -70,6 +70,11 @@ Only project-scoped server identities and environment-variable reference names a
 commands, arguments, URLs, headers, and values are discarded. User-scoped Cursor configuration,
 runtime health, approvals, and extension-managed MCPs remain outside the adapter, so coverage is
 still explicitly partial.
+OpenCode instances contribute the repository's `opencode.jsonc` or `opencode.json` (JSONC wins
+when both exist). The adapter accepts both `mcp.<name>` and `mcp.servers.<name>`, preserves only
+the enabled state and environment-variable reference names, and discards commands, URLs, headers,
+OAuth values, file references, and all other configuration. Global, custom, remote, inline, and
+managed OpenCode layers are not inferred, so this inventory also remains explicitly partial.
 The read-only credential-resolution RPC accepts only explicitly requested references. It reports
 `resolved`, `missing`, or `unsupported`, never returns a value, and does not enumerate the host
 environment. The first resolver supports environment variables; native keychains, credential

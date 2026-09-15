@@ -11,6 +11,7 @@ import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import { parse as parseJsonc, type ParseError } from "jsonc-parser";
 
 import { expandHomePathWith } from "../pathExpansion.ts";
 
@@ -33,6 +34,11 @@ export interface ClaudeMcpInventorySource {
 }
 
 export interface CursorMcpInventorySource {
+  readonly instanceId: string;
+  readonly enabled: boolean;
+}
+
+export interface OpenCodeMcpInventorySource {
   readonly instanceId: string;
   readonly enabled: boolean;
 }
@@ -112,6 +118,25 @@ export function cursorMcpInventorySourcesFromSettings(
 
   if (!("cursor" in settings.providerInstances)) {
     sources.push({ instanceId: "cursor", enabled: settings.providers.cursor.enabled });
+  }
+  return sources;
+}
+
+export function openCodeMcpInventorySourcesFromSettings(
+  settings: ServerSettings,
+): ReadonlyArray<OpenCodeMcpInventorySource> {
+  const sources = Object.entries(settings.providerInstances)
+    .filter(([, instance]) => instance.driver === "opencode")
+    .map(([instanceId, instance]) => {
+      const configEnabled = recordValue(instance.config, "enabled");
+      return {
+        instanceId,
+        enabled: instance.enabled !== false && configEnabled !== false,
+      } satisfies OpenCodeMcpInventorySource;
+    });
+
+  if (!("opencode" in settings.providerInstances)) {
+    sources.push({ instanceId: "opencode", enabled: settings.providers.opencode.enabled });
   }
   return sources;
 }
@@ -281,6 +306,23 @@ function addEnvironmentReferences(value: unknown, references: Set<string>): void
   }
 }
 
+function addOpenCodeEnvironmentReferences(value: unknown, references: Set<string>): void {
+  if (typeof value === "string") {
+    addEnvironmentReferences(value, references);
+    for (const match of value.matchAll(/\{env:([a-zA-Z_][a-zA-Z0-9_]{0,255})}/g)) {
+      references.add(match[1]!);
+    }
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const entry of value) addOpenCodeEnvironmentReferences(entry, references);
+    return;
+  }
+  const record = jsonRecord(value);
+  if (!record) return;
+  for (const entry of Object.values(record)) addOpenCodeEnvironmentReferences(entry, references);
+}
+
 /**
  * Reads only identities and environment-variable reference names from the
  * common JSON MCP shape. Executables, arguments, URLs, headers, and values
@@ -325,6 +367,57 @@ export function parseSanitizedJsonMcpConfig(
   return servers;
 }
 
+/**
+ * Parses only portable OpenCode MCP metadata from JSON/JSONC. Both the v1
+ * `mcp.<name>` shape and the v2 `mcp.servers.<name>` shape are accepted.
+ * File references and every executable/configuration value are discarded.
+ */
+export function parseSanitizedOpenCodeMcpConfig(
+  contents: string,
+): ReadonlyMap<string, ParsedCodexMcpServer> {
+  const errors: ParseError[] = [];
+  const root = jsonRecord(
+    parseJsonc(contents, errors, { allowTrailingComma: true, disallowComments: false }),
+  );
+  if (errors.length > 0) return new Map();
+  const mcp = jsonRecord(root?.mcp);
+  const nestedServers = jsonRecord(mcp?.servers);
+  const configuredServers = nestedServers ?? mcp;
+  if (!configuredServers) return new Map();
+
+  const servers = new Map<string, ParsedCodexMcpServer>();
+  for (const [name, unknownServer] of Object.entries(configuredServers).sort(([left], [right]) =>
+    left.localeCompare(right),
+  )) {
+    if (!/^[a-zA-Z0-9_.-]{1,256}$/.test(name)) continue;
+    const server = jsonRecord(unknownServer);
+    if (!server) continue;
+    const references = new Set<string>();
+    const environment = jsonRecord(server.environment);
+    if (environment) {
+      for (const key of Object.keys(environment)) {
+        if (/^[a-zA-Z_][a-zA-Z0-9_]{0,255}$/.test(key)) references.add(key);
+      }
+    }
+    for (const field of [
+      server.command,
+      server.url,
+      server.headers,
+      server.environment,
+      server.oauth,
+    ]) {
+      addOpenCodeEnvironmentReferences(field, references);
+    }
+    servers.set(name, {
+      enabled: server.disabled === true ? false : server.enabled !== false,
+      credentialRefs: [...references]
+        .sort((left, right) => left.localeCompare(right))
+        .map((id) => ({ kind: "environment-variable" as const, id })),
+    });
+  }
+  return servers;
+}
+
 const readCodexMcpConfig = Effect.fn("readEnvironmentBundleCodexMcpConfig")(function* (
   filePath: string,
 ) {
@@ -345,6 +438,15 @@ const readJsonMcpConfig = Effect.fn("readEnvironmentBundleJsonMcpConfig")(functi
     try: () => parseSanitizedJsonMcpConfig(contents),
     catch: (cause) => new InvalidJsonMcpConfigError({ cause }),
   });
+});
+
+const readOpenCodeMcpConfig = Effect.fn("readEnvironmentBundleOpenCodeMcpConfig")(function* (
+  filePath: string,
+) {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const info = yield* fileSystem.stat(filePath);
+  if (info.type !== "File" || info.size > MAX_MCP_CONFIG_BYTES) return new Map();
+  return parseSanitizedOpenCodeMcpConfig(yield* fileSystem.readFileString(filePath));
 });
 
 function mergeMcpConfigs(
@@ -491,6 +593,36 @@ const loadCursorMcpInventory = Effect.fn("loadEnvironmentBundleCursorMcpInventor
   });
 });
 
+const loadOpenCodeMcpInventory = Effect.fn("loadEnvironmentBundleOpenCodeMcpInventory")(function* (
+  root: string,
+  sources: ReadonlyArray<OpenCodeMcpInventorySource>,
+) {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const jsoncPath = path.join(root, "opencode.jsonc");
+  const jsonPath = path.join(root, "opencode.json");
+  const selectedPath = (yield* fileSystem.exists(jsoncPath).pipe(Effect.orElseSucceed(() => false)))
+    ? jsoncPath
+    : jsonPath;
+  const projectConfig = yield* readOpenCodeMcpConfig(selectedPath).pipe(
+    Effect.orElseSucceed(() => new Map()),
+  );
+  return sources.flatMap((source) =>
+    [...projectConfig.entries()].map(([name, config]) => {
+      const server = {
+        serverId: boundedMcpId(`opencode:${source.instanceId}`, name),
+        origin: `opencode:${source.instanceId}:project-config`,
+        enabled: source.enabled && config.enabled !== false,
+        configurationRef: boundedMcpId(`opencode:${source.instanceId}:mcp`, name),
+        credentialRefs: [...(config.credentialRefs ?? [])],
+        allowedTools: [],
+        blockedTools: [],
+      } satisfies EnvironmentBundleMcpServer;
+      return { ...server, configurationHash: sanitizedConfigurationHash(server) };
+    }),
+  );
+});
+
 const readProjectInstruction = Effect.fn("readEnvironmentBundleProjectInstruction")(function* (
   root: string,
   logicalPath: (typeof ROOT_PROJECT_INSTRUCTION_PATHS)[number],
@@ -516,6 +648,7 @@ export const loadEnvironmentBundleServerInventory = Effect.fn(
   readonly codexMcpSources?: ReadonlyArray<CodexMcpInventorySource>;
   readonly claudeMcpSources?: ReadonlyArray<ClaudeMcpInventorySource>;
   readonly cursorMcpSources?: ReadonlyArray<CursorMcpInventorySource>;
+  readonly openCodeMcpSources?: ReadonlyArray<OpenCodeMcpInventorySource>;
 }): Effect.fn.Return<EnvironmentBundleServerInventory, never, FileSystem.FileSystem | Path.Path> {
   const root = yield* resolveProjectRoot(input.cwd);
   const projectInstructions = yield* Effect.forEach(
@@ -529,6 +662,7 @@ export const loadEnvironmentBundleServerInventory = Effect.fn(
     ...(yield* loadCodexMcpInventory(root, input.codexMcpSources ?? [])),
     ...(yield* loadClaudeMcpInventory(root, input.claudeMcpSources ?? [])),
     ...(yield* loadCursorMcpInventory(root, input.cursorMcpSources ?? [])),
+    ...(yield* loadOpenCodeMcpInventory(root, input.openCodeMcpSources ?? [])),
   ].sort((left, right) => left.serverId.localeCompare(right.serverId));
 
   return {
@@ -538,7 +672,8 @@ export const loadEnvironmentBundleServerInventory = Effect.fn(
     mcpCoverage:
       input.codexMcpSources?.length ||
       input.claudeMcpSources?.length ||
-      input.cursorMcpSources?.length
+      input.cursorMcpSources?.length ||
+      input.openCodeMcpSources?.length
         ? "partial"
         : "unavailable",
     projectInstructions: availableProjectInstructions,

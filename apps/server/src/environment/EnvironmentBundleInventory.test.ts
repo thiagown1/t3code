@@ -11,8 +11,10 @@ import {
   claudeMcpInventorySourcesFromSettings,
   cursorMcpInventorySourcesFromSettings,
   loadEnvironmentBundleServerInventory,
+  openCodeMcpInventorySourcesFromSettings,
   parseSanitizedJsonMcpConfig,
   parseSanitizedCodexMcpConfig,
+  parseSanitizedOpenCodeMcpConfig,
 } from "./EnvironmentBundleInventory.ts";
 
 const sha256 = (value: string) => NodeCrypto.createHash("sha256").update(value).digest("hex");
@@ -328,6 +330,108 @@ command = "do-not-export"
       ]);
       expect(encodeUnknownJson(inventory)).not.toContain("private.invalid");
       expect(encodeUnknownJson(inventory)).not.toContain("do-not-export");
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it("discovers OpenCode instances without exposing provider configuration", () => {
+    const settings = {
+      providerInstances: {
+        opencode_work: {
+          driver: "opencode",
+          enabled: true,
+          config: { enabled: false, serverUrl: "https://private.invalid" },
+        },
+      },
+      providers: { opencode: { enabled: true } },
+    } as never;
+
+    expect(openCodeMcpInventorySourcesFromSettings(settings)).toEqual([
+      { instanceId: "opencode_work", enabled: false },
+      { instanceId: "opencode", enabled: true },
+    ]);
+  });
+
+  it("extracts safe OpenCode MCP state and environment references from JSONC", () => {
+    const parsed = parseSanitizedOpenCodeMcpConfig(`{
+      // Project-local OpenCode MCP configuration.
+      "mcp": {
+        "firebase": {
+          "type": "local",
+          "command": ["private-command", "{env:FIREBASE_PROJECT}"],
+          "environment": { "FIREBASE_TOKEN": "do-not-export" },
+          "enabled": false,
+        },
+        "logs.remote": {
+          "type": "remote",
+          "url": "https://example.invalid/{env:LOG_TENANT}",
+          "headers": { "Authorization": "Bearer {env:LOG_TOKEN}" },
+        },
+      },
+    }`);
+
+    expect([...parsed.entries()]).toEqual([
+      [
+        "firebase",
+        {
+          enabled: false,
+          credentialRefs: [
+            { kind: "environment-variable", id: "FIREBASE_PROJECT" },
+            { kind: "environment-variable", id: "FIREBASE_TOKEN" },
+          ],
+        },
+      ],
+      [
+        "logs.remote",
+        {
+          enabled: true,
+          credentialRefs: [
+            { kind: "environment-variable", id: "LOG_TENANT" },
+            { kind: "environment-variable", id: "LOG_TOKEN" },
+          ],
+        },
+      ],
+    ]);
+    expect(encodeUnknownJson([...parsed.entries()])).not.toContain("private-command");
+    expect(encodeUnknownJson([...parsed.entries()])).not.toContain("do-not-export");
+  });
+
+  it.effect("inventories nested OpenCode v2 project MCPs without exporting secrets", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-environment-bundle-" });
+      yield* fileSystem.makeDirectory(path.join(root, ".git"), { recursive: true });
+      yield* fileSystem.writeFileString(
+        path.join(root, "opencode.json"),
+        encodeUnknownJson({
+          mcp: {
+            servers: {
+              github: {
+                type: "remote",
+                url: "https://private.invalid/mcp",
+                headers: { Authorization: "Bearer {env:GITHUB_MCP_TOKEN}" },
+                disabled: true,
+              },
+            },
+          },
+        }),
+      );
+
+      const inventory = yield* loadEnvironmentBundleServerInventory({
+        cwd: root,
+        openCodeMcpSources: [{ instanceId: "opencode-work", enabled: true }],
+      });
+
+      expect(inventory.mcpServers).toEqual([
+        expect.objectContaining({
+          serverId: "opencode:opencode-work:github",
+          origin: "opencode:opencode-work:project-config",
+          enabled: false,
+          configurationRef: "opencode:opencode-work:mcp:github",
+          credentialRefs: [{ kind: "environment-variable", id: "GITHUB_MCP_TOKEN" }],
+        }),
+      ]);
+      expect(encodeUnknownJson(inventory)).not.toContain("private.invalid");
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 });

@@ -158,6 +158,7 @@ import {
   codexMcpInventorySourcesFromSettings,
   cursorMcpInventorySourcesFromSettings,
   loadEnvironmentBundleServerInventory,
+  openCodeMcpInventorySourcesFromSettings,
 } from "./environment/EnvironmentBundleInventory.ts";
 import { resolveEnvironmentBundleCredentialReferences } from "./environment/EnvironmentBundleCredentials.ts";
 import { exportThreadBundleFromProjection } from "./orchestration/ThreadBundleExport.ts";
@@ -1792,6 +1793,7 @@ const makeWsRpcLayer = (
             codexMcpSources: codexMcpInventorySourcesFromSettings(rawSettings),
             claudeMcpSources: claudeMcpInventorySourcesFromSettings(rawSettings),
             cursorMcpSources: cursorMcpInventorySourcesFromSettings(rawSettings),
+            openCodeMcpSources: openCodeMcpInventorySourcesFromSettings(rawSettings),
           });
 
           return {
