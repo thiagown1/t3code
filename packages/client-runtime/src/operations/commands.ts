@@ -60,6 +60,7 @@ export type StopThreadSessionInput = CommandInput<"thread.session.stop">;
 export type LinkFirstMateSupervisorInput = CommandInput<"firstmate.supervisor.link">;
 export type CreateFirstMateTopicInput = CommandInput<"firstmate.topic.create">;
 export type SelectFirstMateTopicInput = CommandInput<"firstmate.topic.select">;
+export type RecordFirstMateRoutingInput = CommandInput<"firstmate.routing.record">;
 export type OpenFirstMateDecisionInput = CommandInput<"firstmate.decision.open">;
 export type ResolveFirstMateDecisionInput = CommandInput<"firstmate.decision.resolve">;
 export type CancelFirstMateDecisionInput = CommandInput<"firstmate.decision.cancel">;
@@ -132,6 +133,17 @@ export const selectFirstMateTopic: (input: SelectFirstMateTopicInput) => Command
     createdAt: metadata.createdAt,
   });
 });
+
+export const recordFirstMateRouting: (input: RecordFirstMateRoutingInput) => CommandEffect =
+  Effect.fn("EnvironmentCommands.recordFirstMateRouting")(function* (input) {
+    const metadata = yield* timestampedCommandMetadata(input);
+    return yield* dispatch({
+      ...input,
+      type: "firstmate.routing.record",
+      commandId: metadata.commandId,
+      createdAt: metadata.createdAt,
+    });
+  });
 
 export const openFirstMateDecision: (input: OpenFirstMateDecisionInput) => CommandEffect =
   Effect.fn("EnvironmentCommands.openFirstMateDecision")(function* (input) {

@@ -85,6 +85,7 @@ const workspace: NonNullable<EnvironmentProject["firstMate"]> = {
     },
   ],
   decisions: [],
+  routingReceipts: [],
   updatedAt: now,
 };
 

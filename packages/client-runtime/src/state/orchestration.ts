@@ -13,12 +13,14 @@ import {
   createFirstMateTopic,
   linkFirstMateSupervisor,
   openFirstMateDecision,
+  recordFirstMateRouting,
   resolveFirstMateDecision,
   selectFirstMateTopic,
   type CancelFirstMateDecisionInput,
   type CreateFirstMateTopicInput,
   type LinkFirstMateSupervisorInput,
   type OpenFirstMateDecisionInput,
+  type RecordFirstMateRoutingInput,
   type ResolveFirstMateDecisionInput,
   type SelectFirstMateTopicInput,
 } from "../operations/commands.ts";
@@ -28,6 +30,7 @@ export type {
   CreateFirstMateTopicInput,
   LinkFirstMateSupervisorInput,
   OpenFirstMateDecisionInput,
+  RecordFirstMateRoutingInput,
   ResolveFirstMateDecisionInput,
   SelectFirstMateTopicInput,
 } from "../operations/commands.ts";
@@ -63,6 +66,16 @@ export function createOrchestrationEnvironmentAtoms<R, E>(
       concurrency: {
         mode: "serial" as const,
         key: ({ environmentId, input }) => JSON.stringify([environmentId, input.projectId]),
+      },
+    }),
+    recordFirstMateRouting: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:firstmate:record-routing",
+      execute: (input: RecordFirstMateRoutingInput) => recordFirstMateRouting(input),
+      scheduler: firstMateScheduler,
+      concurrency: {
+        mode: "serial" as const,
+        key: ({ environmentId, input }) =>
+          JSON.stringify([environmentId, input.projectId, input.messageId]),
       },
     }),
     openFirstMateDecision: createEnvironmentCommand(runtime, {

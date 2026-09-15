@@ -26,6 +26,7 @@ import {
   type EnvironmentId,
   type FirstMateTopic,
   type FirstMateTopicId,
+  type FirstMateRoutingReason,
   type MessageId,
   type ModelSelection,
   type ProjectScript,
@@ -1497,6 +1498,9 @@ export default function ChatView(props: ChatViewProps) {
   });
   const startThreadTurn = useAtomCommand(threadEnvironment.startTurn, { reportFailure: false });
   const selectFirstMateTopic = useAtomCommand(orchestrationEnvironment.selectFirstMateTopic, {
+    reportFailure: false,
+  });
+  const recordFirstMateRouting = useAtomCommand(orchestrationEnvironment.recordFirstMateRouting, {
     reportFailure: false,
   });
   const createAttachmentAssetUrl = useAtomQueryRunner(assetEnvironment.createUrl, {
@@ -7105,8 +7109,16 @@ export default function ChatView(props: ChatViewProps) {
   const dispatchFirstMateRoutedTurn = async (input: {
     readonly topic: FirstMateTopic;
     readonly message: string;
+    readonly reason: FirstMateRoutingReason;
   }): Promise<boolean> => {
-    if (!activeProject || input.topic.threadId === null || sendInFlightRef.current) return false;
+    if (
+      !activeProject ||
+      !activeThread ||
+      input.topic.threadId === null ||
+      sendInFlightRef.current
+    ) {
+      return false;
+    }
     const targetRef = scopeThreadRef(activeProject.environmentId, input.topic.threadId);
     const target = readThreadShell(targetRef);
     if (
@@ -7163,6 +7175,20 @@ export default function ChatView(props: ChatViewProps) {
         return false;
       }
 
+      const auditResult = await recordFirstMateRouting({
+        environmentId: activeProject.environmentId,
+        input: {
+          projectId: activeProject.id,
+          messageId,
+          sourceThreadId: activeThread.id,
+          topicId: input.topic.id,
+          destinationThreadId: target.id,
+          reason: input.reason,
+          createdAt,
+        },
+      });
+      const auditRecorded = auditResult._tag !== "Failure";
+
       promptRef.current = "";
       clearComposerDraftContent(composerDraftTarget);
       composerRef.current?.resetCursorState();
@@ -7170,9 +7196,13 @@ export default function ChatView(props: ChatViewProps) {
       clearUsageLimitsFor(scopedThreadKey(targetRef));
       toastManager.add(
         stackedThreadToast({
-          type: "success",
-          title: `Routed to ${input.topic.title}`,
-          description: "The supervisor stays open while the worker continues.",
+          type: auditRecorded ? "success" : "warning",
+          title: auditRecorded
+            ? `Routed to ${input.topic.title}`
+            : `Routed to ${input.topic.title}, but audit was not recorded`,
+          description: auditRecorded
+            ? "The supervisor stays open while the worker continues."
+            : "The worker received the message. Retry is unsafe because it could duplicate the turn.",
           timeout: 8_000,
           actionProps: {
             children: "Open",
@@ -7218,7 +7248,11 @@ export default function ChatView(props: ChatViewProps) {
           appAtomRegistry.refresh(environmentShell.stateAtom(targetEnvironmentId)),
       });
       if (!selected) return;
-      await dispatchFirstMateRoutedTurn({ topic, message: pendingFirstMateRoute.message });
+      await dispatchFirstMateRoutedTurn({
+        topic,
+        message: pendingFirstMateRoute.message,
+        reason: "user-confirmed",
+      });
     } finally {
       setConfirmingFirstMateTopicId(null);
     }
@@ -7588,7 +7622,11 @@ export default function ChatView(props: ChatViewProps) {
         });
         return;
       }
-      await dispatchFirstMateRoutedTurn({ topic, message: firstMateRoutingPlan.message });
+      await dispatchFirstMateRoutedTurn({
+        topic,
+        message: firstMateRoutingPlan.message,
+        reason: firstMateRoutingPlan.reason,
+      });
       return;
     }
     const threadIdForSend = activeThread.id;

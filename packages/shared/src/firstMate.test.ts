@@ -2,6 +2,7 @@ import {
   CommandId,
   FirstMateDecisionId,
   FirstMateTopicId,
+  MessageId,
   ProjectId,
   ThreadId,
   type FirstMateCommand,
@@ -295,6 +296,97 @@ describe("FirstMate deterministic routing", () => {
       reason: "topic-is-supervisor",
       candidateTopicIds: [topicId],
     });
+  });
+});
+
+describe("FirstMate routing audit", () => {
+  function routingWorkspace() {
+    let state = createEmptyFirstMateWorkspace(projectId, "2026-09-14T19:00:00.000Z");
+    state = accept(
+      state,
+      command({
+        type: "firstmate.supervisor.link",
+        threadId: ThreadId.make("thread-supervisor"),
+      }),
+    );
+    return accept(state, topicCreate());
+  }
+
+  it("records why a supervisor message was routed without storing its body", () => {
+    const state = routingWorkspace();
+    const recorded = accept(
+      state,
+      command({
+        type: "firstmate.routing.record",
+        messageId: MessageId.make("message-1"),
+        sourceThreadId: ThreadId.make("thread-supervisor"),
+        topicId,
+        destinationThreadId: ThreadId.make("thread-1"),
+        reason: "selected-topic",
+      }),
+    );
+
+    expect(recorded.routingReceipts).toEqual([
+      {
+        messageId: "message-1",
+        projectId: "project-1",
+        sourceThreadId: "thread-supervisor",
+        topicId: "topic-1",
+        destinationThreadId: "thread-1",
+        reason: "selected-topic",
+        routedAt: "2026-09-14T20:00:00.000Z",
+      },
+    ]);
+    expect(JSON.stringify(recorded.routingReceipts)).not.toContain("Continue");
+  });
+
+  it("rejects receipts that do not match the supervisor or delegated worker", () => {
+    const state = routingWorkspace();
+    const base = {
+      type: "firstmate.routing.record" as const,
+      messageId: MessageId.make("message-1"),
+      sourceThreadId: ThreadId.make("wrong-supervisor"),
+      topicId,
+      destinationThreadId: ThreadId.make("thread-1"),
+      reason: "explicit-mention" as const,
+    };
+
+    expect(decideFirstMateCommand(state, command(base))).toEqual({
+      accepted: false,
+      reason: "routing-source-not-supervisor",
+    });
+    expect(
+      decideFirstMateCommand(
+        state,
+        command({
+          ...base,
+          sourceThreadId: ThreadId.make("thread-supervisor"),
+          destinationThreadId: ThreadId.make("wrong-worker"),
+        }),
+      ),
+    ).toEqual({ accepted: false, reason: "routing-destination-mismatch" });
+  });
+
+  it("keeps only the latest routing receipts in the workspace snapshot", () => {
+    let state = routingWorkspace();
+    for (let index = 0; index < 51; index += 1) {
+      state = accept(
+        state,
+        command({
+          type: "firstmate.routing.record",
+          messageId: MessageId.make(`message-${index}`),
+          sourceThreadId: ThreadId.make("thread-supervisor"),
+          topicId,
+          destinationThreadId: ThreadId.make("thread-1"),
+          reason: "selected-topic",
+          createdAt: `2026-09-14T20:00:${String(index).padStart(2, "0")}.000Z`,
+        }),
+      );
+    }
+
+    expect(state.routingReceipts).toHaveLength(50);
+    expect(state.routingReceipts[0]?.messageId).toBe("message-1");
+    expect(state.routingReceipts[49]?.messageId).toBe("message-50");
   });
 });
 

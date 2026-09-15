@@ -4,6 +4,7 @@ import {
   ApprovalRequestId,
   CommandId,
   IsoDateTime,
+  MessageId,
   NonNegativeInt,
   ProjectId,
   ThreadId,
@@ -80,6 +81,24 @@ export const FirstMateDecision = Schema.Struct({
 });
 export type FirstMateDecision = typeof FirstMateDecision.Type;
 
+export const FirstMateRoutingReason = Schema.Literals([
+  "selected-topic",
+  "explicit-mention",
+  "user-confirmed",
+]);
+export type FirstMateRoutingReason = typeof FirstMateRoutingReason.Type;
+
+export const FirstMateRoutingReceipt = Schema.Struct({
+  messageId: MessageId,
+  projectId: ProjectId,
+  sourceThreadId: ThreadId,
+  topicId: FirstMateTopicId,
+  destinationThreadId: ThreadId,
+  reason: FirstMateRoutingReason,
+  routedAt: IsoDateTime,
+});
+export type FirstMateRoutingReceipt = typeof FirstMateRoutingReceipt.Type;
+
 export const FirstMateWorkspaceState = Schema.Struct({
   projectId: ProjectId,
   supervisorThreadId: Schema.NullOr(ThreadId),
@@ -88,6 +107,9 @@ export const FirstMateWorkspaceState = Schema.Struct({
   ),
   topics: Schema.Array(FirstMateTopic),
   decisions: Schema.Array(FirstMateDecision),
+  routingReceipts: Schema.Array(FirstMateRoutingReceipt).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
   updatedAt: IsoDateTime,
 });
 export type FirstMateWorkspaceState = typeof FirstMateWorkspaceState.Type;
@@ -143,6 +165,15 @@ export const FirstMateCommand = Schema.Union([
     topicId: FirstMateTopicId,
     threadId: Schema.NullOr(ThreadId),
     responsibleAgentId: Schema.NullOr(TrimmedNonEmptyString),
+  }),
+  Schema.Struct({
+    ...FirstMateCommandBase,
+    type: Schema.Literal("firstmate.routing.record"),
+    messageId: MessageId,
+    sourceThreadId: ThreadId,
+    topicId: FirstMateTopicId,
+    destinationThreadId: ThreadId,
+    reason: FirstMateRoutingReason,
   }),
   Schema.Struct({
     ...FirstMateCommandBase,
@@ -202,6 +233,16 @@ export const FirstMateEvent = Schema.Union([
     topicId: FirstMateTopicId,
     threadId: Schema.NullOr(ThreadId),
     responsibleAgentId: Schema.NullOr(TrimmedNonEmptyString),
+    occurredAt: IsoDateTime,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("firstmate.routing-recorded"),
+    messageId: MessageId,
+    projectId: ProjectId,
+    sourceThreadId: ThreadId,
+    topicId: FirstMateTopicId,
+    destinationThreadId: ThreadId,
+    reason: FirstMateRoutingReason,
     occurredAt: IsoDateTime,
   }),
   Schema.Struct({

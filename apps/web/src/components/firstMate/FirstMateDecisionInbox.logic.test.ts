@@ -54,6 +54,7 @@ function project(
         },
       ],
       decisions,
+      routingReceipts: [],
       updatedAt: now,
     },
     createdAt: now,

@@ -37,6 +37,7 @@ const baseProject: EnvironmentProject = {
     selectedTopicId: null,
     topics: [],
     decisions: [],
+    routingReceipts: [],
     updatedAt: now,
   },
   createdAt: now,

@@ -18,7 +18,12 @@ export type FirstMateCommandRejection =
   | "decision-already-exists"
   | "decision-not-found"
   | "decision-not-pending"
-  | "decision-option-not-found";
+  | "decision-option-not-found"
+  | "routing-already-recorded"
+  | "routing-source-not-supervisor"
+  | "routing-destination-mismatch";
+
+export const FIRST_MATE_ROUTING_RECEIPT_LIMIT = 50;
 
 export type FirstMateCommandDecision =
   | { readonly accepted: true; readonly events: ReadonlyArray<FirstMateEvent> }
@@ -34,6 +39,7 @@ export function createEmptyFirstMateWorkspace(
     selectedTopicId: null,
     topics: [],
     decisions: [],
+    routingReceipts: [],
     updatedAt: now,
   };
 }
@@ -135,6 +141,33 @@ export function decideFirstMateCommand(
             topicId: command.topicId,
             threadId: command.threadId,
             responsibleAgentId: command.responsibleAgentId,
+            occurredAt: command.createdAt,
+          },
+        ],
+      };
+
+    case "firstmate.routing.record":
+      if (!topic) return reject("topic-not-found");
+      if (state.routingReceipts.some((receipt) => receipt.messageId === command.messageId)) {
+        return reject("routing-already-recorded");
+      }
+      if (state.supervisorThreadId !== command.sourceThreadId) {
+        return reject("routing-source-not-supervisor");
+      }
+      if (topic.threadId !== command.destinationThreadId) {
+        return reject("routing-destination-mismatch");
+      }
+      return {
+        accepted: true,
+        events: [
+          {
+            type: "firstmate.routing-recorded",
+            messageId: command.messageId,
+            projectId: command.projectId,
+            sourceThreadId: command.sourceThreadId,
+            topicId: command.topicId,
+            destinationThreadId: command.destinationThreadId,
+            reason: command.reason,
             occurredAt: command.createdAt,
           },
         ],
@@ -270,6 +303,24 @@ export function projectFirstMateEvent(
           responsibleAgentId: event.responsibleAgentId,
           updatedAt: event.occurredAt,
         })),
+        updatedAt: event.occurredAt,
+      };
+
+    case "firstmate.routing-recorded":
+      return {
+        ...state,
+        routingReceipts: [
+          ...state.routingReceipts.filter((receipt) => receipt.messageId !== event.messageId),
+          {
+            messageId: event.messageId,
+            projectId: event.projectId,
+            sourceThreadId: event.sourceThreadId,
+            topicId: event.topicId,
+            destinationThreadId: event.destinationThreadId,
+            reason: event.reason,
+            routedAt: event.occurredAt,
+          },
+        ].slice(-FIRST_MATE_ROUTING_RECEIPT_LIMIT),
         updatedAt: event.occurredAt,
       };
 

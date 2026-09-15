@@ -3,6 +3,7 @@ import {
   EnvironmentId,
   FirstMateDecisionId,
   FirstMateTopicId,
+  MessageId,
   ORCHESTRATION_WS_METHODS,
   ProjectId,
   ThreadId,
@@ -30,6 +31,7 @@ import {
   createProject,
   linkFirstMateSupervisor,
   openFirstMateDecision,
+  recordFirstMateRouting,
   revertThreadCheckpoint,
   reorderActiveThread,
   resolveFirstMateDecision,
@@ -216,6 +218,39 @@ describe("environment commands", () => {
           createdAt: "2026-09-14T21:00:45.000Z",
         },
       ]);
+    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+  );
+
+  it.effect("dispatches a FirstMate routing receipt without the message body", () =>
+    Effect.gen(function* () {
+      const dispatched: ClientOrchestrationCommand[] = [];
+      const supervisor = yield* makeSupervisor(dispatched);
+
+      yield* recordFirstMateRouting({
+        commandId: CommandId.make("record-firstmate-routing"),
+        projectId: ProjectId.make("project-1"),
+        messageId: MessageId.make("message-1"),
+        sourceThreadId: ThreadId.make("thread-supervisor"),
+        topicId: FirstMateTopicId.make("topic-1"),
+        destinationThreadId: ThreadId.make("thread-worker"),
+        reason: "selected-topic",
+        createdAt: "2026-09-14T21:00:50.000Z",
+      }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+
+      expect(dispatched).toEqual([
+        {
+          type: "firstmate.routing.record",
+          commandId: "record-firstmate-routing",
+          projectId: "project-1",
+          messageId: "message-1",
+          sourceThreadId: "thread-supervisor",
+          topicId: "topic-1",
+          destinationThreadId: "thread-worker",
+          reason: "selected-topic",
+          createdAt: "2026-09-14T21:00:50.000Z",
+        },
+      ]);
+      expect(dispatched[0]).not.toHaveProperty("message");
     }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
   );
 

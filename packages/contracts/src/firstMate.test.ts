@@ -6,6 +6,7 @@ import {
   FirstMateMachineAlertSummary,
   FirstMateTopicId,
   FirstMateWorkspaceState,
+  MessageId,
   ProjectId,
   ThreadId,
 } from "./index.ts";
@@ -102,5 +103,27 @@ describe("FirstMate contracts", () => {
     });
 
     expect(workspace.selectedTopicId).toBeNull();
+    expect(workspace.routingReceipts).toEqual([]);
+  });
+
+  it("decodes a routing receipt without persisting the message body", () => {
+    const command = decodeCommand({
+      type: "firstmate.routing.record",
+      commandId: CommandId.make("command-routing-1"),
+      projectId: ProjectId.make("project-1"),
+      messageId: MessageId.make("message-1"),
+      sourceThreadId: ThreadId.make("thread-supervisor"),
+      topicId: FirstMateTopicId.make("topic-1"),
+      destinationThreadId: ThreadId.make("thread-worker"),
+      reason: "user-confirmed",
+      createdAt: "2026-09-14T21:01:00.000Z",
+    });
+
+    expect(command).toMatchObject({
+      type: "firstmate.routing.record",
+      messageId: "message-1",
+      reason: "user-confirmed",
+    });
+    expect(command).not.toHaveProperty("message");
   });
 });
