@@ -79,6 +79,34 @@ on the signing runner. The
 `pull_request_target` cleanup job in the publish workflow removes the download when the PR closes, or
 when the label is removed by hand before a build consumed it, and never checks out PR code.
 
+## FirstMate fork desktop builds
+
+The FirstMate fork uses an explicit packaging flavor rather than repackaging the official desktop
+identity. Build the local Windows x64 installer from the exact commit being validated with:
+
+```powershell
+pnpm dist:desktop:firstmate:win:x64
+```
+
+This produces `T3-Code-FirstMate-<version>-x64.exe` with app id
+`com.t3tools.t3code.firstmate`, product name `T3 Code FirstMate`, Electron user data under
+`t3code-firstmate`, and server state under `~/.t3-firstmate`. It can therefore coexist with an
+official installation without reading or migrating its live database implicitly.
+
+The flavor ignores `GITHUB_REPOSITORY` and `T3CODE_DESKTOP_UPDATE_REPOSITORY`. A FirstMate update
+feed is embedded only when `T3CODE_FIRSTMATE_DESKTOP_UPDATE_REPOSITORY=owner/repository` is set for
+the build. Keep that variable absent for local validation artifacts. Publishing a release and
+installing an artifact remain separate operator actions.
+
+Before first use, back up the source installation and move portable state through the reviewed
+Environment Bundle and Thread Bundle flows. Do not copy a live `state.sqlite`, credential files,
+provider processes, approvals, tokens, or browser data into `~/.t3-firstmate`. Import bundles only
+after reviewing their dry runs in the isolated installation.
+
+To incorporate upstream changes, fetch `upstream/main`, integrate it on a dedicated branch, and run
+the fork tests plus this installer build before promoting the exact commit to the fork's release
+branch. Never point an installed FirstMate build at an unvalidated official or feature-branch feed.
+
 ## Required release credentials
 
 Stable releases require these GitHub Actions secrets in addition to the platform and deployment

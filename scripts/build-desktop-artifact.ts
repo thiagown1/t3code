@@ -54,11 +54,12 @@ import { Command, Flag } from "effect/unstable/cli";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 const LINUX_ICON_SIZES = [16, 22, 24, 32, 48, 64, 128, 256, 512] as const;
-const DESKTOP_APP_ID = "com.t3tools.t3code";
 const APPLE_TEAM_ID_PATTERN = /^[A-Z0-9]{10}$/u;
 
 const BuildPlatform = Schema.Literals(["mac", "linux", "win"]);
 const BuildArch = Schema.Literals(["arm64", "x64", "universal"]);
+export const DesktopBuildFlavor = Schema.Literals(["official", "firstmate"]);
+export type DesktopBuildFlavor = typeof DesktopBuildFlavor.Type;
 
 const WorkspaceConfig = Schema.Struct({
   catalog: Schema.optional(Schema.Record(Schema.String, Schema.String)),
@@ -150,6 +151,7 @@ const PLATFORM_CONFIG: Record<typeof BuildPlatform.Type, PlatformConfig> = {
 };
 
 interface BuildCliInput {
+  readonly flavor: Option.Option<DesktopBuildFlavor>;
   readonly platform: Option.Option<typeof BuildPlatform.Type>;
   readonly target: Option.Option<string>;
   readonly arch: Option.Option<typeof BuildArch.Type>;
@@ -907,6 +909,7 @@ const resolvePythonForNodeGyp = Effect.fn("resolvePythonForNodeGyp")(function* (
 });
 
 interface ResolvedBuildOptions {
+  readonly flavor: DesktopBuildFlavor;
   readonly platform: typeof BuildPlatform.Type;
   readonly target: string;
   readonly arch: typeof BuildArch.Type;
@@ -926,6 +929,7 @@ interface StagePackageJson {
   readonly version: string;
   readonly buildVersion: string;
   readonly t3codeCommitHash: string;
+  readonly t3codeDesktopFlavor: DesktopBuildFlavor;
   readonly private: true;
   readonly packageManager: string;
   readonly description: string;
@@ -1538,6 +1542,7 @@ const AzureTrustedSigningOptionsConfig = Config.all({
 });
 
 const BuildEnvConfig = Config.all({
+  flavor: Config.schema(DesktopBuildFlavor, "T3CODE_DESKTOP_FLAVOR").pipe(Config.option),
   platform: Config.schema(BuildPlatform, "T3CODE_DESKTOP_PLATFORM").pipe(Config.option),
   target: Config.string("T3CODE_DESKTOP_TARGET").pipe(Config.option),
   arch: Config.schema(BuildArch, "T3CODE_DESKTOP_ARCH").pipe(Config.option),
@@ -1597,6 +1602,8 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
   const env = yield* BuildEnvConfig;
   const hostPlatform = yield* HostProcessPlatform;
 
+  const flavor = mergeOptions(input.flavor, env.flavor, "official");
+
   const platform = mergeOptions(
     input.platform,
     env.platform,
@@ -1648,6 +1655,7 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
     Option.getOrUndefined(input.wslRuntime) ?? Option.getOrUndefined(env.wslRuntime);
 
   return {
+    flavor,
     platform,
     target,
     arch,
@@ -2536,16 +2544,23 @@ export function resolveDesktopRuntimeDependencies(
 
 export const resolveGitHubPublishConfig = Effect.fn("resolveGitHubPublishConfig")(function* (
   updateChannel: "latest" | "nightly",
+  flavor: DesktopBuildFlavor = "official",
 ) {
   const env = yield* Config.all({
     updateRepository: Config.string("T3CODE_DESKTOP_UPDATE_REPOSITORY").pipe(Config.option),
+    firstMateUpdateRepository: Config.string("T3CODE_FIRSTMATE_DESKTOP_UPDATE_REPOSITORY").pipe(
+      Config.option,
+    ),
     githubRepository: Config.string("GITHUB_REPOSITORY").pipe(Config.option),
   });
-  const rawRepo = (
-    Option.getOrUndefined(env.updateRepository)?.trim() ||
-    Option.getOrUndefined(env.githubRepository)?.trim() ||
-    ""
-  ).trim();
+  const rawRepo =
+    flavor === "firstmate"
+      ? (Option.getOrUndefined(env.firstMateUpdateRepository)?.trim() ?? "")
+      : (
+          Option.getOrUndefined(env.updateRepository)?.trim() ||
+          Option.getOrUndefined(env.githubRepository)?.trim() ||
+          ""
+        ).trim();
   if (!rawRepo) return undefined;
 
   const [owner, repo, ...rest] = rawRepo.split("/");
@@ -2612,10 +2627,30 @@ export function resolvePackageManagerUserAgent(packageManager: string): string {
   return `${trimmed.slice(0, versionSeparator)}/${trimmed.slice(versionSeparator + 1)}`;
 }
 
-export function resolveDesktopProductName(version: string): string {
+export function resolveDesktopProductName(
+  version: string,
+  flavor: DesktopBuildFlavor = "official",
+): string {
+  if (flavor === "firstmate") return "T3 Code FirstMate";
   return resolveDesktopUpdateChannel(version) === "nightly"
     ? "T3 Code (Nightly)"
     : (desktopPackageJson.productName ?? "T3 Code");
+}
+
+export function resolveDesktopBuildIdentity(version: string, flavor: DesktopBuildFlavor) {
+  return flavor === "firstmate"
+    ? {
+        appId: "com.t3tools.t3code.firstmate",
+        artifactName: "T3-Code-FirstMate-${version}-${arch}.${ext}",
+        packageName: "t3code-firstmate",
+        productName: resolveDesktopProductName(version, flavor),
+      }
+    : {
+        appId: "com.t3tools.t3code",
+        artifactName: "T3-Code-${version}-${arch}.${ext}",
+        packageName: "t3code",
+        productName: resolveDesktopProductName(version, flavor),
+      };
 }
 
 export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
@@ -2636,11 +2671,13 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   // source file was never written fails the electron-builder step.
   wslRuntimeBundled = false,
   arch?: typeof BuildArch.Type,
+  flavor: DesktopBuildFlavor = "official",
 ) {
+  const identity = resolveDesktopBuildIdentity(version, flavor);
   const buildConfig: Record<string, unknown> = {
-    appId: DESKTOP_APP_ID,
-    productName: resolveDesktopProductName(version),
-    artifactName: "T3-Code-${version}-${arch}.${ext}",
+    appId: identity.appId,
+    productName: identity.productName,
+    artifactName: identity.artifactName,
     electronLanguages: [...DESKTOP_ELECTRON_LANGUAGES],
     files: [
       ...DESKTOP_FILE_EXCLUSIONS,
@@ -2669,7 +2706,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   };
   const updateChannel = resolveDesktopUpdateChannel(version);
   if (!isDesktopPreviewVersion(version)) {
-    const publishConfig = yield* resolveGitHubPublishConfig(updateChannel);
+    const publishConfig = yield* resolveGitHubPublishConfig(updateChannel, flavor);
     if (publishConfig) {
       buildConfig.publish = [publishConfig];
     } else if (mockUpdates) {
@@ -2714,7 +2751,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       // Give the themed installer its own Finder volume name. Finder caches
       // DMG window backgrounds by volume name, so reusing a generic name can
       // make a newly built background look unchanged during testing.
-      title: `${resolveDesktopProductName(version)} ${version} Installer`,
+      title: `${identity.productName} ${version} Installer`,
       background: `dmg/dmg-background-${updateChannel}.png`,
       window: {
         width: 640,
@@ -3643,11 +3680,13 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     options.platform === "win"
       ? path.join(stageAppDir, WINDOWS_SERVER_RESOURCE_SOURCE_DIR, WINDOWS_SERVER_ASAR_RESOURCE)
       : undefined;
+  const desktopIdentity = resolveDesktopBuildIdentity(appVersion, options.flavor);
   const stagePackageJson: StagePackageJson = {
-    name: "t3code",
+    name: desktopIdentity.packageName,
     version: appVersion,
     buildVersion: appVersion,
     t3codeCommitHash: commitHash,
+    t3codeDesktopFlavor: options.flavor,
     private: true,
     packageManager: rootPackageJson.packageManager,
     description: "T3 Code desktop build",
@@ -3668,6 +3707,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
         : undefined,
       bundlesWslRuntime({ platform: options.platform, runtimeArchivePath: options.wslRuntime }),
       options.arch,
+      options.flavor,
     ),
     dependencies: stageDependencies,
     devDependencies: {
@@ -3775,7 +3815,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   }
 
   yield* Effect.log(
-    `[desktop-artifact] Building ${options.platform}/${options.target} (arch=${options.arch}, version=${appVersion})...`,
+    `[desktop-artifact] Building ${options.platform}/${options.target} (flavor=${options.flavor}, arch=${options.arch}, version=${appVersion})...`,
   );
   const builderArgs = [
     "exec",
@@ -3827,7 +3867,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   if (options.platform === "win") {
     yield* validateWindowsPackagedPayload({
       stageDistDir,
-      appExecutableName: `${resolveDesktopProductName(appVersion)}.exe`,
+      appExecutableName: `${desktopIdentity.productName}.exe`,
       targetArch: options.arch,
       appVersion,
       expectWslRuntime: bundlesWslRuntime({
@@ -3866,6 +3906,12 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
 });
 
 const buildDesktopArtifactCli = Command.make("build-desktop-artifact", {
+  flavor: Flag.choice("flavor", DesktopBuildFlavor.literals).pipe(
+    Flag.withDescription(
+      "Desktop distribution identity (env: T3CODE_DESKTOP_FLAVOR; default: official).",
+    ),
+    Flag.optional,
+  ),
   platform: Flag.choice("platform", BuildPlatform.literals).pipe(
     Flag.withDescription("Build platform (env: T3CODE_DESKTOP_PLATFORM)."),
     Flag.optional,

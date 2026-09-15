@@ -11,7 +11,11 @@ import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
-import { parse as parseJsonc, type ParseError } from "jsonc-parser";
+// The package's default UMD entry uses runtime-relative `require("./impl/*")`
+// calls. When inlined into the single server bundle those paths become relative
+// to bin.mjs and disappear from the packaged desktop payload. The ESM entry has
+// static imports, so the bundler can include the complete parser implementation.
+import { parse as parseJsonc, type ParseError } from "jsonc-parser/lib/esm/main.js";
 
 import { expandHomePathWith } from "../pathExpansion.ts";
 

@@ -14,6 +14,7 @@ const defaultInput = {
   platform: "darwin",
   processArch: "arm64",
   appVersion: "0.0.22",
+  appName: "T3 Code (Alpha)",
   appPath: "/Applications/T3 Code.app/Contents/Resources/app.asar",
   isPackaged: false,
   resourcesPath: "/Applications/T3 Code.app/Contents/Resources",
@@ -113,6 +114,28 @@ describe("DesktopEnvironment", () => {
       assert.equal(environment.browserArtifactsDir, "/tmp/t3/userdata/browser-artifacts");
       assert.equal(environment.serverSettingsPath, "/tmp/t3/userdata/settings.json");
       assert.equal(environment.otlpProtocol, "http/json");
+    }),
+  );
+
+  it.effect("keeps a packaged FirstMate install isolated from the official app", () =>
+    Effect.gen(function* () {
+      const environment = yield* makeEnvironment({
+        // Electron may expose package.json#name rather than electron-builder's
+        // productName, so the packaged identifier is the authoritative case.
+        appName: "t3code-firstmate",
+        platform: "win32",
+        isPackaged: true,
+        homeDirectory: "C:/Users/alice",
+      });
+
+      assert.equal(environment.desktopFlavor, "firstmate");
+      assert.equal(environment.baseDir, "C:/Users/alice/.t3-firstmate");
+      assert.equal(environment.stateDir, "C:/Users/alice/.t3-firstmate/userdata");
+      assert.equal(environment.userDataDirName, "t3code-firstmate");
+      assert.equal(environment.legacyUserDataDirName, "T3 Code FirstMate");
+      assert.equal(environment.appUserModelId, "com.t3tools.t3code.firstmate");
+      assert.equal(environment.branding.baseName, "T3 Code FirstMate");
+      assert.equal(environment.displayName, "T3 Code FirstMate (Alpha)");
     }),
   );
 
