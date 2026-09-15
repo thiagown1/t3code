@@ -37,6 +37,14 @@ to install, enable, restart, or mutate an environment. Runtime health remains ex
 `configured`, `missing-credential`, `unavailable`, `disabled`, or `ready`, and only a completed
 health check can produce `ready`.
 
+The Integrations panel builds its export from the selected server's live provider inventory and,
+when available, the workspace-scoped skill snapshot for that checkout. It converts project skill
+paths to relative logical paths and infers plugin/app identities without serializing user or
+installation paths. Import remains review-only: the canonical dry run lists each add, update, and
+remove operation and marks provider reloads and required health checks. MCP inventory and project
+instruction hashes stay visibly empty until server-side adapters can expose sanitized metadata;
+the browser must not derive them from raw provider configuration or local files.
+
 ## Process and account isolation
 
 T3-managed OpenCode chat uses one server per thread. Its MCP registrations are directory-scoped, while

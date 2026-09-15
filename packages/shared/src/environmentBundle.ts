@@ -207,6 +207,146 @@ export function diffEnvironmentBundles(
   };
 }
 
+export type EnvironmentBundleApplicationComponent =
+  | "bundle"
+  | "capability"
+  | "mcp-server"
+  | "skill"
+  | "plugin-app"
+  | "provider"
+  | "project-instruction"
+  | "skill-context-budget";
+
+export interface EnvironmentBundleApplicationStep {
+  readonly component: EnvironmentBundleApplicationComponent;
+  readonly id: string;
+  readonly operation: "add" | "update" | "remove";
+  readonly requiresProviderReload: boolean;
+  readonly healthCheckRequired: boolean;
+}
+
+function capabilityStepId(
+  declaration: EnvironmentBundleType["capabilityProfile"]["capabilities"][number],
+): string {
+  const scope = declaration.scope;
+  return [
+    declaration.capabilityId,
+    scope?.environment ?? "*",
+    scope?.project ?? "*",
+    scope?.provider ?? "*",
+    scope?.integration ?? "*",
+  ].join("|");
+}
+
+/**
+ * Produces a deterministic dry-run plan. The plan is descriptive only: every
+ * step still needs an explicit confirmation and its destination adapter.
+ */
+export function buildEnvironmentBundleApplicationPlan(
+  currentBundle: EnvironmentBundleType,
+  incomingBundle: EnvironmentBundleType,
+): ReadonlyArray<EnvironmentBundleApplicationStep> {
+  const diff = diffEnvironmentBundles(currentBundle, incomingBundle);
+  const steps: EnvironmentBundleApplicationStep[] = [];
+  const appendInventory = <Value>(
+    component: EnvironmentBundleApplicationComponent,
+    inventory: EnvironmentBundleInventoryDiff<Value>,
+    keyOf: (value: Value) => string,
+    options: { readonly reload: boolean; readonly health: boolean },
+  ) => {
+    for (const value of inventory.added) {
+      steps.push({
+        component,
+        id: keyOf(value),
+        operation: "add",
+        requiresProviderReload: options.reload,
+        healthCheckRequired: options.health,
+      });
+    }
+    for (const value of inventory.changed) {
+      steps.push({
+        component,
+        id: keyOf(value.after),
+        operation: "update",
+        requiresProviderReload: options.reload,
+        healthCheckRequired: options.health,
+      });
+    }
+    for (const value of inventory.removed) {
+      steps.push({
+        component,
+        id: keyOf(value),
+        operation: "remove",
+        requiresProviderReload: options.reload,
+        healthCheckRequired: options.health,
+      });
+    }
+  };
+
+  if (diff.identityChanged) {
+    steps.push({
+      component: "bundle",
+      id: incomingBundle.bundleId,
+      operation: "update",
+      requiresProviderReload: false,
+      healthCheckRequired: false,
+    });
+  }
+  appendInventory("capability", diff.capabilityProfile, capabilityStepId, {
+    reload: false,
+    health: false,
+  });
+  appendInventory("mcp-server", diff.mcpServers, (entry) => entry.serverId, {
+    reload: true,
+    health: true,
+  });
+  appendInventory("skill", diff.skills, (entry) => entry.skillId, {
+    reload: true,
+    health: false,
+  });
+  appendInventory(
+    "plugin-app",
+    diff.pluginsAndApps,
+    (entry) => `${entry.kind}:${entry.integrationId}`,
+    { reload: true, health: false },
+  );
+  appendInventory("provider", diff.providers, (entry) => entry.instanceId, {
+    reload: true,
+    health: true,
+  });
+  appendInventory("project-instruction", diff.projectInstructions, (entry) => entry.logicalPath, {
+    reload: true,
+    health: false,
+  });
+  if (diff.skillContextBudgetChanged) {
+    steps.push({
+      component: "skill-context-budget",
+      id: "initial",
+      operation: "update",
+      requiresProviderReload: true,
+      healthCheckRequired: false,
+    });
+  }
+
+  const componentOrder: ReadonlyArray<EnvironmentBundleApplicationComponent> = [
+    "bundle",
+    "capability",
+    "mcp-server",
+    "plugin-app",
+    "skill",
+    "provider",
+    "project-instruction",
+    "skill-context-budget",
+  ];
+  const rank = new Map(componentOrder.map((component, index) => [component, index]));
+  return steps.sort(
+    (left, right) =>
+      (rank.get(left.component) ?? 999) - (rank.get(right.component) ?? 999) ||
+      compareText(left.id, right.id) ||
+      compareText(left.operation, right.operation),
+  );
+}
+
 export function resolveEnvironmentBundleHealth(input: {
   readonly enabled: boolean;
   readonly configured: boolean;

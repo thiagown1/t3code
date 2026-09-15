@@ -490,6 +490,14 @@ export const SETTINGS_SEARCH_ITEMS = [
     ],
   },
   {
+    id: "environment-bundle",
+    title: "Environment Bundle",
+    to: "/settings/integrations",
+    searchTerms: [
+      "portable json export import dry run providers skills plugins apps mcp instructions credentials restore environment",
+    ],
+  },
+  {
     id: "device-hosts",
     title: "Device hosts",
     to: "/settings/integrations",

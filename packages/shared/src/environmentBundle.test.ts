@@ -2,6 +2,7 @@ import type { EnvironmentBundle } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  buildEnvironmentBundleApplicationPlan,
   diffEnvironmentBundles,
   parseEnvironmentBundleJson,
   resolveEnvironmentBundleHealth,
@@ -155,6 +156,37 @@ describe("environment bundles", () => {
     });
     expect(diff.providers.removed).toEqual(current.providers);
     expect(diff.skillContextBudgetChanged).toBe(true);
+
+    expect(buildEnvironmentBundleApplicationPlan(current, incoming)).toEqual([
+      {
+        component: "skill",
+        id: "one",
+        operation: "update",
+        requiresProviderReload: true,
+        healthCheckRequired: false,
+      },
+      {
+        component: "skill",
+        id: "two",
+        operation: "add",
+        requiresProviderReload: true,
+        healthCheckRequired: false,
+      },
+      {
+        component: "provider",
+        id: "codex",
+        operation: "remove",
+        requiresProviderReload: true,
+        healthCheckRequired: true,
+      },
+      {
+        component: "skill-context-budget",
+        id: "initial",
+        operation: "update",
+        requiresProviderReload: true,
+        healthCheckRequired: false,
+      },
+    ]);
   });
 
   it("keeps health states explicit and never treats configured as ready", () => {
