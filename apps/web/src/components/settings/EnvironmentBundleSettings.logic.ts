@@ -1,7 +1,9 @@
 import {
   type EnvironmentBundle,
+  type EnvironmentBundleCredentialResolutions,
   type EnvironmentBundleServerInventory,
   type PortableCapabilityProfile,
+  type PortableCredentialReference,
   type ProviderInstanceConfig,
   type ServerProviderSkill,
   type ServerProviderWorkspaceSnapshot,
@@ -274,6 +276,39 @@ export function environmentBundleDownloadName(bundle: EnvironmentBundle): string
   return `t3-environment-${slug || "bundle"}.json`;
 }
 
+export function collectEnvironmentBundleCredentialReferences(
+  bundle: EnvironmentBundle,
+): ReadonlyArray<PortableCredentialReference> {
+  const references = new Map<string, PortableCredentialReference>();
+  for (const capability of bundle.capabilityProfile.capabilities) {
+    if (!capability.credentialRef) continue;
+    references.set(
+      `${capability.credentialRef.kind}:${capability.credentialRef.id}`,
+      capability.credentialRef,
+    );
+  }
+  for (const server of bundle.mcpServers) {
+    for (const credentialRef of server.credentialRefs) {
+      references.set(`${credentialRef.kind}:${credentialRef.id}`, credentialRef);
+    }
+  }
+  return [...references.values()].sort((left, right) =>
+    `${left.kind}:${left.id}`.localeCompare(`${right.kind}:${right.id}`),
+  );
+}
+
+export function summarizeEnvironmentBundleCredentialResolutions(
+  resolutions: EnvironmentBundleCredentialResolutions,
+): { readonly resolved: number; readonly missing: number; readonly unsupported: number } {
+  return resolutions.reduce(
+    (summary, resolution) => ({
+      ...summary,
+      [resolution.status]: summary[resolution.status] + 1,
+    }),
+    { resolved: 0, missing: 0, unsupported: 0 },
+  );
+}
+
 export function summarizeEnvironmentBundleDiff(
   current: EnvironmentBundle,
   incoming: EnvironmentBundle,
@@ -314,6 +349,7 @@ export interface EnvironmentBundleApplyReadiness {
 
 interface EnvironmentBundleApplyContext {
   readonly providerInstances: ServerSettings["providerInstances"];
+  readonly credentialResolutions?: EnvironmentBundleCredentialResolutions;
 }
 
 function environmentBundleApplicationStepLabel(
@@ -378,6 +414,36 @@ export function getEnvironmentBundleApplyReadiness(
       }
       return `${environmentBundleApplicationStepLabel(current, incoming, step.component, step.id)} requires an application adapter`;
     });
+
+  if (capabilityProfileChanged) {
+    const resolutionByReference = new Map(
+      (context?.credentialResolutions ?? []).map((resolution) => [
+        `${resolution.credentialRef.kind}:${resolution.credentialRef.id}`,
+        resolution.status,
+      ]),
+    );
+    const requiredReferences = new Map<string, PortableCredentialReference>();
+    for (const capability of incoming.capabilityProfile.capabilities) {
+      if (capability.state !== "enabled" || !capability.credentialRef) continue;
+      requiredReferences.set(
+        `${capability.credentialRef.kind}:${capability.credentialRef.id}`,
+        capability.credentialRef,
+      );
+    }
+    for (const [key] of [...requiredReferences].sort(([left], [right]) =>
+      left.localeCompare(right),
+    )) {
+      const status = resolutionByReference.get(key);
+      if (status === "resolved") continue;
+      blockers.push(
+        status === "missing"
+          ? `credential:${key} is missing`
+          : status === "unsupported"
+            ? `credential:${key} uses an unsupported resolver`
+            : `credential:${key} has not been checked`,
+      );
+    }
+  }
 
   const hasSupportedChanges = capabilityProfileChanged || providerInstancesToDisable.length > 0;
   if (!hasSupportedChanges && blockers.length === 0) {

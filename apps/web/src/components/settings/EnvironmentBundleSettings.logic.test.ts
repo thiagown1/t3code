@@ -4,9 +4,11 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   buildEnvironmentBundleSettingsPatch,
   buildEnvironmentBundleInventory,
+  collectEnvironmentBundleCredentialReferences,
   environmentBundleDownloadName,
   getEnvironmentBundleApplyReadiness,
   setEnvironmentBundleEntryEnabled,
+  summarizeEnvironmentBundleCredentialResolutions,
   summarizeEnvironmentBundleDiff,
 } from "./EnvironmentBundleSettings.logic";
 
@@ -353,5 +355,129 @@ describe("Environment Bundle settings", () => {
       ],
       providerInstancesToDisable: [],
     });
+  });
+
+  it("deduplicates credential references and summarizes local resolution", () => {
+    const bundle = buildEnvironmentBundleInventory({
+      environmentId: "desk",
+      environmentLabel: "Desk",
+      cwd: null,
+      capabilityProfile: {
+        ...profile,
+        capabilities: [
+          {
+            capabilityId: "firebase.logs",
+            state: "enabled",
+            credentialRef: { kind: "environment-variable", id: "FIREBASE_TOKEN" },
+          },
+          {
+            capabilityId: "github.read",
+            state: "enabled",
+            credentialRef: { kind: "keychain", id: "github-work" },
+          },
+        ],
+      },
+      serverInventory: {
+        mcpServers: [
+          {
+            serverId: "codex:firebase",
+            origin: "codex:effective-config",
+            enabled: true,
+            configurationRef: "codex:mcp:firebase",
+            credentialRefs: [
+              { kind: "environment-variable", id: "FIREBASE_TOKEN" },
+              { kind: "environment-variable", id: "SECONDARY_TOKEN" },
+            ],
+            allowedTools: [],
+            blockedTools: [],
+          },
+        ],
+        mcpCoverage: "partial",
+        projectInstructions: [],
+        projectInstructionsCoverage: "partial",
+      },
+      providers: [],
+    });
+
+    expect(collectEnvironmentBundleCredentialReferences(bundle)).toEqual([
+      { kind: "environment-variable", id: "FIREBASE_TOKEN" },
+      { kind: "environment-variable", id: "SECONDARY_TOKEN" },
+      { kind: "keychain", id: "github-work" },
+    ]);
+    expect(
+      summarizeEnvironmentBundleCredentialResolutions([
+        {
+          credentialRef: { kind: "environment-variable", id: "FIREBASE_TOKEN" },
+          status: "resolved",
+        },
+        {
+          credentialRef: { kind: "environment-variable", id: "SECONDARY_TOKEN" },
+          status: "missing",
+        },
+        {
+          credentialRef: { kind: "keychain", id: "github-work" },
+          status: "unsupported",
+        },
+      ]),
+    ).toEqual({ resolved: 1, missing: 1, unsupported: 1 });
+  });
+
+  it("requires local credential resolution before enabling a capability", () => {
+    const providerInstances = {} as ServerSettings["providerInstances"];
+    const current = buildEnvironmentBundleInventory({
+      environmentId: "desk",
+      environmentLabel: "Desk",
+      cwd: null,
+      capabilityProfile: profile,
+      providers: [],
+    });
+    const incoming = {
+      ...current,
+      capabilityProfile: {
+        ...profile,
+        capabilities: [
+          {
+            capabilityId: "firebase.logs",
+            state: "enabled" as const,
+            credentialRef: {
+              kind: "environment-variable" as const,
+              id: "FIREBASE_TOKEN",
+            },
+          },
+        ],
+      },
+    };
+
+    expect(getEnvironmentBundleApplyReadiness(current, incoming, { providerInstances })).toEqual({
+      canApply: false,
+      capabilityProfileChanged: true,
+      blockers: ["credential:environment-variable:FIREBASE_TOKEN has not been checked"],
+      providerInstancesToDisable: [],
+    });
+    expect(
+      getEnvironmentBundleApplyReadiness(current, incoming, {
+        providerInstances,
+        credentialResolutions: [
+          {
+            credentialRef: { kind: "environment-variable", id: "FIREBASE_TOKEN" },
+            status: "missing",
+          },
+        ],
+      }),
+    ).toMatchObject({
+      canApply: false,
+      blockers: ["credential:environment-variable:FIREBASE_TOKEN is missing"],
+    });
+    expect(
+      getEnvironmentBundleApplyReadiness(current, incoming, {
+        providerInstances,
+        credentialResolutions: [
+          {
+            credentialRef: { kind: "environment-variable", id: "FIREBASE_TOKEN" },
+            status: "resolved",
+          },
+        ],
+      }),
+    ).toMatchObject({ canApply: true, blockers: [] });
   });
 });

@@ -1,6 +1,8 @@
 import type {
   EnvironmentBundle,
+  EnvironmentBundleCredentialResolutions,
   EnvironmentBundleInventoryCoverage,
+  EnvironmentId,
   ServerSettings,
   ServerSettingsPatch,
 } from "@t3tools/contracts";
@@ -10,6 +12,9 @@ import {
 } from "@t3tools/shared/environmentBundle";
 import { DownloadIcon, EyeIcon, FileJsonIcon, UploadIcon } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
+
+import { serverEnvironment } from "../../state/server";
+import { useAtomCommand } from "../../state/use-atom-command";
 
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
@@ -26,11 +31,13 @@ import { Switch } from "../ui/switch";
 import {
   buildEnvironmentBundleSettingsPatch,
   buildEnvironmentBundleInventory,
+  collectEnvironmentBundleCredentialReferences,
   environmentBundleCapabilityId,
   environmentBundleDownloadName,
   type EnvironmentBundleEnablementTarget,
   getEnvironmentBundleApplyReadiness,
   setEnvironmentBundleEntryEnabled,
+  summarizeEnvironmentBundleCredentialResolutions,
   summarizeEnvironmentBundleDiff,
 } from "./EnvironmentBundleSettings.logic";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
@@ -198,11 +205,17 @@ function EnvironmentBundleInventoryDialog({
 }
 
 function EnvironmentBundleReview({
+  credentialResolutions,
+  credentialResolutionError,
+  credentialResolutionPending,
   current,
   incoming,
   onIncomingChange,
   providerInstances,
 }: {
+  credentialResolutions: EnvironmentBundleCredentialResolutions | null;
+  credentialResolutionError: string | null;
+  credentialResolutionPending: boolean;
   current: EnvironmentBundle;
   incoming: EnvironmentBundle;
   onIncomingChange: (incoming: EnvironmentBundle) => void;
@@ -211,7 +224,11 @@ function EnvironmentBundleReview({
   const summary = summarizeEnvironmentBundleDiff(current, incoming);
   const applyReadiness = getEnvironmentBundleApplyReadiness(current, incoming, {
     providerInstances,
+    ...(credentialResolutions ? { credentialResolutions } : {}),
   });
+  const credentialSummary = credentialResolutions
+    ? summarizeEnvironmentBundleCredentialResolutions(credentialResolutions)
+    : null;
   const enablementEntries: ReadonlyArray<{
     readonly target: EnvironmentBundleEnablementTarget;
     readonly label: string;
@@ -280,6 +297,51 @@ function EnvironmentBundleReview({
         <InventoryCount label="providers" value={incoming.providers.length} />
         <InventoryCount label="instructions" value={incoming.projectInstructions.length} />
       </div>
+      <section className="space-y-2">
+        <div>
+          <h3 className="text-sm font-medium">Local credential references</h3>
+          <p className="text-xs text-muted-foreground">
+            Checks only the named references on this environment. Credential values never leave the
+            server.
+          </p>
+        </div>
+        {credentialResolutionPending ? (
+          <p className="text-xs text-muted-foreground">Checking local references…</p>
+        ) : credentialResolutionError ? (
+          <p className="text-xs text-destructive-foreground">{credentialResolutionError}</p>
+        ) : credentialResolutions?.length === 0 ? (
+          <p className="text-xs text-muted-foreground">No credential references in this bundle.</p>
+        ) : credentialResolutions && credentialSummary ? (
+          <>
+            <div className="flex flex-wrap gap-2">
+              <Badge variant="success">{credentialSummary.resolved} resolved</Badge>
+              <Badge variant={credentialSummary.missing > 0 ? "warning" : "secondary"}>
+                {credentialSummary.missing} missing
+              </Badge>
+              <Badge variant={credentialSummary.unsupported > 0 ? "warning" : "secondary"}>
+                {credentialSummary.unsupported} unsupported
+              </Badge>
+            </div>
+            <ul className="max-h-32 space-y-1 overflow-auto rounded-lg border border-border/60 p-2">
+              {credentialResolutions.map((resolution) => (
+                <li
+                  key={`${resolution.credentialRef.kind}:${resolution.credentialRef.id}`}
+                  className="flex items-center justify-between gap-3 rounded-md px-2 py-1.5"
+                >
+                  <span className="min-w-0 truncate font-mono text-xs">
+                    {resolution.credentialRef.kind}:{resolution.credentialRef.id}
+                  </span>
+                  <Badge variant={resolution.status === "resolved" ? "success" : "warning"}>
+                    {resolution.status}
+                  </Badge>
+                </li>
+              ))}
+            </ul>
+          </>
+        ) : (
+          <p className="text-xs text-muted-foreground">Credential check has not run.</p>
+        )}
+      </section>
       <section className="space-y-2">
         <div>
           <h3 className="text-sm font-medium">Prepared enablement</h3>
@@ -358,11 +420,13 @@ function EnvironmentBundleReview({
 
 function EnvironmentBundleImportDialog({
   current,
+  environmentId,
   onOpenChange,
   onApplySettings,
   providerInstances,
 }: {
   current: EnvironmentBundle;
+  environmentId: EnvironmentId;
   onOpenChange: (open: boolean) => void;
   onApplySettings: (patch: ServerSettingsPatch) => void;
   providerInstances: ServerSettings["providerInstances"];
@@ -372,6 +436,14 @@ function EnvironmentBundleImportDialog({
   const [step, setStep] = useState<"edit" | "review">("edit");
   const [error, setError] = useState<string | null>(null);
   const [reviewBundle, setReviewBundle] = useState<EnvironmentBundle | null>(null);
+  const [credentialResolutions, setCredentialResolutions] =
+    useState<EnvironmentBundleCredentialResolutions | null>(null);
+  const [credentialResolutionError, setCredentialResolutionError] = useState<string | null>(null);
+  const [credentialResolutionPending, setCredentialResolutionPending] = useState(false);
+  const credentialResolutionRequest = useRef(0);
+  const resolveCredentials = useAtomCommand(serverEnvironment.resolveEnvironmentBundleCredentials, {
+    reportFailure: false,
+  });
   const parsed = useMemo(() => {
     try {
       return { bundle: parseEnvironmentBundleJson(json), error: null };
@@ -440,6 +512,9 @@ function EnvironmentBundleImportDialog({
             </>
           ) : reviewBundle ? (
             <EnvironmentBundleReview
+              credentialResolutions={credentialResolutions}
+              credentialResolutionError={credentialResolutionError}
+              credentialResolutionPending={credentialResolutionPending}
               current={current}
               incoming={reviewBundle}
               onIncomingChange={setReviewBundle}
@@ -472,6 +547,7 @@ function EnvironmentBundleImportDialog({
                   onApplySettings(
                     buildEnvironmentBundleSettingsPatch(current, reviewBundle, {
                       providerInstances,
+                      ...(credentialResolutions ? { credentialResolutions } : {}),
                     }),
                   );
                   onOpenChange(false);
@@ -490,6 +566,30 @@ function EnvironmentBundleImportDialog({
                 setError(null);
                 setReviewBundle(parsed.bundle);
                 setStep("review");
+                const credentialRefs = collectEnvironmentBundleCredentialReferences(parsed.bundle);
+                const requestId = ++credentialResolutionRequest.current;
+                setCredentialResolutionError(null);
+                if (credentialRefs.length === 0) {
+                  setCredentialResolutionPending(false);
+                  setCredentialResolutions([]);
+                  return;
+                }
+                setCredentialResolutions(null);
+                setCredentialResolutionPending(true);
+                void resolveCredentials({
+                  environmentId,
+                  input: { credentialRefs },
+                }).then((result) => {
+                  if (requestId !== credentialResolutionRequest.current) return;
+                  setCredentialResolutionPending(false);
+                  if (result._tag === "Success") {
+                    setCredentialResolutions(result.value);
+                    return;
+                  }
+                  setCredentialResolutionError(
+                    "Could not check local credential references. Applying credential-dependent capabilities remains blocked.",
+                  );
+                });
               }}
             >
               Generate dry run
@@ -573,9 +673,10 @@ export function EnvironmentBundleSettings() {
         settingKeys={["capabilityProfile"]}
         mixed={mixed}
       />
-      {importOpen && bundle ? (
+      {importOpen && bundle && target ? (
         <EnvironmentBundleImportDialog
           current={bundle}
+          environmentId={target.environmentId}
           onOpenChange={setImportOpen}
           onApplySettings={updateSettings}
           providerInstances={providerInstances}

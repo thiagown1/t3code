@@ -62,6 +62,11 @@ The read-only credential-resolution RPC accepts only explicitly requested refere
 `resolved`, `missing`, or `unsupported`, never returns a value, and does not enumerate the host
 environment. The first resolver supports environment variables; native keychains, credential
 managers, and managed references remain unsupported until dedicated adapters exist.
+The import review resolves those references on the selected environment and displays only their
+identities and statuses. Enabling a capability that names a credential is fail-closed until its
+reference resolves locally; a missing, unsupported, unchecked, or failed resolution keeps the
+atomic Apply action disabled. MCP references are visible in the same review, but do not authorize
+MCP configuration or activation while that application adapter is absent.
 The inventory dialog exposes logical identities, enabled state, origin, coverage, and abbreviated
 instruction hashes so operators can inspect what a bundle would contain before exporting it.
 
