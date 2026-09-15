@@ -63,3 +63,21 @@ needed, last update, pending-decision count, and a link to the delegated thread.
 Resource-alert counts remain zero until environment telemetry is joined into
 this read model; the panel must not imply that machine coverage exists before
 that integration is present.
+
+## Global decision inbox
+
+Pending FirstMate decisions are aggregated across the visible project scope and
+shown above the topic panel. Blocking decisions sort first. Each row keeps its
+topic, responsible agent, impact descriptions, recommendation, and linked
+thread navigation visible without requiring the user to find the original chat
+message.
+
+Resolving a decision records the selected persisted option, rather than only a
+generic resolved flag. Existing stored decisions and events decode with a null
+selection for backward compatibility. After a successful resolve or cancel
+receipt, the web client refreshes the authoritative environment shell once. This
+keeps the inbox consistent with older or reconnecting shell subscriptions
+without adding a polling loop. The inbox intentionally does not invent provider
+replies: delivering the recorded answer into a provider approval, user-input
+request, or a new agent turn belongs to deterministic routing and must be
+fail-closed when the source cannot be mapped exactly.

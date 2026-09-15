@@ -1,3 +1,4 @@
+import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import {
   ApprovalRequestId,
@@ -68,6 +69,9 @@ export const FirstMateDecision = Schema.Struct({
   question: TrimmedNonEmptyString,
   options: Schema.Array(FirstMateDecisionOption),
   recommendedOptionId: Schema.NullOr(TrimmedNonEmptyString),
+  selectedOptionId: Schema.NullOr(TrimmedNonEmptyString).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
   blocking: Schema.Boolean,
   status: FirstMateDecisionStatus,
   createdAt: IsoDateTime,
@@ -145,7 +149,13 @@ export const FirstMateCommand = Schema.Union([
   }),
   Schema.Struct({
     ...FirstMateCommandBase,
-    type: Schema.Literals(["firstmate.decision.resolve", "firstmate.decision.cancel"]),
+    type: Schema.Literal("firstmate.decision.resolve"),
+    decisionId: FirstMateDecisionId,
+    selectedOptionId: TrimmedNonEmptyString,
+  }),
+  Schema.Struct({
+    ...FirstMateCommandBase,
+    type: Schema.Literal("firstmate.decision.cancel"),
     decisionId: FirstMateDecisionId,
   }),
 ]);
@@ -186,7 +196,16 @@ export const FirstMateEvent = Schema.Union([
     occurredAt: IsoDateTime,
   }),
   Schema.Struct({
-    type: Schema.Literals(["firstmate.decision-resolved", "firstmate.decision-cancelled"]),
+    type: Schema.Literal("firstmate.decision-resolved"),
+    projectId: ProjectId,
+    decisionId: FirstMateDecisionId,
+    selectedOptionId: Schema.NullOr(TrimmedNonEmptyString).pipe(
+      Schema.withDecodingDefault(Effect.succeed(null)),
+    ),
+    occurredAt: IsoDateTime,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("firstmate.decision-cancelled"),
     projectId: ProjectId,
     decisionId: FirstMateDecisionId,
     occurredAt: IsoDateTime,

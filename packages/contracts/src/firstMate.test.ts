@@ -1,6 +1,8 @@
 import {
   CommandId,
   FirstMateCommand,
+  FirstMateDecision,
+  FirstMateEvent,
   FirstMateMachineAlertSummary,
   FirstMateTopicId,
   ProjectId,
@@ -10,6 +12,8 @@ import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
 const decodeCommand = Schema.decodeUnknownSync(FirstMateCommand);
+const decodeDecision = Schema.decodeUnknownSync(FirstMateDecision);
+const decodeEvent = Schema.decodeUnknownSync(FirstMateEvent);
 const decodeMachineAlerts = Schema.decodeUnknownSync(FirstMateMachineAlertSummary);
 
 describe("FirstMate contracts", () => {
@@ -54,5 +58,35 @@ describe("FirstMate contracts", () => {
         createdAt: "2026-09-14T20:00:00.000Z",
       }),
     ).toThrow();
+  });
+
+  it("decodes persisted decisions created before selected options were recorded", () => {
+    const decision = decodeDecision({
+      id: "decision-1",
+      projectId: "project-1",
+      topicId: "topic-1",
+      source: { kind: "firstmate", sourceId: "routing" },
+      question: "Deploy behind a feature flag?",
+      options: [{ id: "yes", label: "Yes", description: "Keep activation separate." }],
+      recommendedOptionId: "yes",
+      blocking: true,
+      status: "resolved",
+      createdAt: "2026-09-14T20:00:00.000Z",
+      updatedAt: "2026-09-14T21:00:00.000Z",
+      resolvedAt: "2026-09-14T21:00:00.000Z",
+    });
+
+    expect(decision.selectedOptionId).toBeNull();
+  });
+
+  it("decodes historical resolution events without a selected option", () => {
+    const event = decodeEvent({
+      type: "firstmate.decision-resolved",
+      projectId: "project-1",
+      decisionId: "decision-1",
+      occurredAt: "2026-09-14T21:00:00.000Z",
+    });
+
+    expect(event).toMatchObject({ type: "firstmate.decision-resolved", selectedOptionId: null });
   });
 });

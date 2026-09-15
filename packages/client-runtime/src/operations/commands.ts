@@ -57,6 +57,10 @@ export type RevertThreadCheckpointInput = CommandInput<"thread.checkpoint.revert
   readonly restoreFiles?: boolean;
 };
 export type StopThreadSessionInput = CommandInput<"thread.session.stop">;
+export type CreateFirstMateTopicInput = CommandInput<"firstmate.topic.create">;
+export type OpenFirstMateDecisionInput = CommandInput<"firstmate.decision.open">;
+export type ResolveFirstMateDecisionInput = CommandInput<"firstmate.decision.resolve">;
+export type CancelFirstMateDecisionInput = CommandInput<"firstmate.decision.cancel">;
 
 type DispatchTag = typeof ORCHESTRATION_WS_METHODS.dispatchCommand;
 type CommandEffect = Effect.Effect<
@@ -91,6 +95,51 @@ function timestampedCommandMetadata(input: {
 function dispatch(command: ClientOrchestrationCommand) {
   return request(ORCHESTRATION_WS_METHODS.dispatchCommand, command);
 }
+
+export const createFirstMateTopic: (input: CreateFirstMateTopicInput) => CommandEffect = Effect.fn(
+  "EnvironmentCommands.createFirstMateTopic",
+)(function* (input) {
+  const metadata = yield* timestampedCommandMetadata(input);
+  return yield* dispatch({
+    ...input,
+    type: "firstmate.topic.create",
+    commandId: metadata.commandId,
+    createdAt: metadata.createdAt,
+  });
+});
+
+export const openFirstMateDecision: (input: OpenFirstMateDecisionInput) => CommandEffect =
+  Effect.fn("EnvironmentCommands.openFirstMateDecision")(function* (input) {
+    const metadata = yield* timestampedCommandMetadata(input);
+    return yield* dispatch({
+      ...input,
+      type: "firstmate.decision.open",
+      commandId: metadata.commandId,
+      createdAt: metadata.createdAt,
+    });
+  });
+
+export const resolveFirstMateDecision: (input: ResolveFirstMateDecisionInput) => CommandEffect =
+  Effect.fn("EnvironmentCommands.resolveFirstMateDecision")(function* (input) {
+    const metadata = yield* timestampedCommandMetadata(input);
+    return yield* dispatch({
+      ...input,
+      type: "firstmate.decision.resolve",
+      commandId: metadata.commandId,
+      createdAt: metadata.createdAt,
+    });
+  });
+
+export const cancelFirstMateDecision: (input: CancelFirstMateDecisionInput) => CommandEffect =
+  Effect.fn("EnvironmentCommands.cancelFirstMateDecision")(function* (input) {
+    const metadata = yield* timestampedCommandMetadata(input);
+    return yield* dispatch({
+      ...input,
+      type: "firstmate.decision.cancel",
+      commandId: metadata.commandId,
+      createdAt: metadata.createdAt,
+    });
+  });
 
 export const createProject: (input: CreateProjectInput) => CommandEffect = Effect.fn(
   "EnvironmentCommands.createProject",

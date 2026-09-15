@@ -16,7 +16,8 @@ export type FirstMateCommandRejection =
   | "topic-not-found"
   | "decision-already-exists"
   | "decision-not-found"
-  | "decision-not-pending";
+  | "decision-not-pending"
+  | "decision-option-not-found";
 
 export type FirstMateCommandDecision =
   | { readonly accepted: true; readonly events: ReadonlyArray<FirstMateEvent> }
@@ -139,6 +140,7 @@ export function decideFirstMateCommand(
               question: command.question,
               options: command.options,
               recommendedOptionId: command.recommendedOptionId,
+              selectedOptionId: null,
               blocking: command.blocking,
               status: "pending",
               createdAt: command.createdAt,
@@ -154,14 +156,28 @@ export function decideFirstMateCommand(
     case "firstmate.decision.cancel":
       if (!decision) return reject("decision-not-found");
       if (decision.status !== "pending") return reject("decision-not-pending");
+      if (command.type === "firstmate.decision.resolve") {
+        if (!decision.options.some((option) => option.id === command.selectedOptionId)) {
+          return reject("decision-option-not-found");
+        }
+        return {
+          accepted: true,
+          events: [
+            {
+              type: "firstmate.decision-resolved",
+              projectId: command.projectId,
+              decisionId: command.decisionId,
+              selectedOptionId: command.selectedOptionId,
+              occurredAt: command.createdAt,
+            },
+          ],
+        };
+      }
       return {
         accepted: true,
         events: [
           {
-            type:
-              command.type === "firstmate.decision.resolve"
-                ? "firstmate.decision-resolved"
-                : "firstmate.decision-cancelled",
+            type: "firstmate.decision-cancelled",
             projectId: command.projectId,
             decisionId: command.decisionId,
             occurredAt: command.createdAt,
@@ -256,6 +272,8 @@ export function projectFirstMateEvent(
         decisions: updateDecision(state.decisions, event.decisionId, (decision) => ({
           ...decision,
           status: event.type === "firstmate.decision-resolved" ? "resolved" : "cancelled",
+          selectedOptionId:
+            event.type === "firstmate.decision-resolved" ? event.selectedOptionId : null,
           updatedAt: event.occurredAt,
           resolvedAt: event.occurredAt,
         })),

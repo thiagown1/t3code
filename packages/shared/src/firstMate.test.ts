@@ -126,14 +126,47 @@ describe("FirstMate domain", () => {
       command({
         type: "firstmate.decision.resolve",
         decisionId,
+        selectedOptionId: "yes",
         createdAt: "2026-09-14T22:00:00.000Z",
       }),
     );
     expect(state.decisions).toHaveLength(1);
     expect(state.decisions[0]).toMatchObject({
       status: "resolved",
+      selectedOptionId: "yes",
       resolvedAt: "2026-09-14T22:00:00.000Z",
     });
+  });
+
+  it("rejects a resolution that is not one of the persisted options", () => {
+    let state = accept(
+      createEmptyFirstMateWorkspace(projectId, "2026-09-14T19:00:00.000Z"),
+      topicCreate(),
+    );
+    state = accept(
+      state,
+      command({
+        type: "firstmate.decision.open",
+        decisionId,
+        topicId,
+        source: { kind: "firstmate", sourceId: "routing-choice" },
+        question: "Deploy behind a feature flag?",
+        options: [{ id: "yes", label: "Yes", description: "Keep activation separate." }],
+        recommendedOptionId: "yes",
+        blocking: true,
+      }),
+    );
+
+    expect(
+      decideFirstMateCommand(
+        state,
+        command({
+          type: "firstmate.decision.resolve",
+          decisionId,
+          selectedOptionId: "unknown",
+        }),
+      ),
+    ).toEqual({ accepted: false, reason: "decision-option-not-found" });
   });
 });
 

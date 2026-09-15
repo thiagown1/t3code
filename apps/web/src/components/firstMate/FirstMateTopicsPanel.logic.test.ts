@@ -133,6 +133,7 @@ describe("FirstMate topics panel model", () => {
               question: "Deploy now?",
               options: [],
               recommendedOptionId: null,
+              selectedOptionId: null,
               blocking: true,
               status: "pending",
               createdAt: now,

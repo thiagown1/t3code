@@ -132,10 +132,13 @@ import {
   useThreadShells,
 } from "../state/entities";
 import { environmentServerConfigsAtom, primaryServerKeybindingsAtom } from "../state/server";
+import { orchestrationEnvironment } from "../state/orchestration";
+import { environmentShell } from "../state/shell";
 import { vcsEnvironment } from "../state/vcs";
 import { threadEnvironment } from "../state/threads";
 import { useEnvironmentQuery } from "../state/query";
 import { useAtomCommand } from "../state/use-atom-command";
+import { appAtomRegistry } from "../rpc/atomRegistry";
 import {
   buildThreadRouteParams,
   resolveActiveThreadRouteRef,
@@ -234,6 +237,11 @@ import {
 import { SidebarContent, SidebarGroup, useSidebar } from "./ui/sidebar";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
 import { SidebarHeaderIconButton, SidebarThreadHeader } from "./sidebar/SidebarThreadHeader";
+import {
+  FirstMateDecisionInbox,
+  type ResolveFirstMateDecisionRequest,
+} from "./firstMate/FirstMateDecisionInbox";
+import { finalizeFirstMateDecisionCommand } from "./firstMate/FirstMateDecisionInbox.actions";
 import { FirstMateTopicsPanel } from "./firstMate/FirstMateTopicsPanel";
 import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
 import { Tooltip, TooltipPopup, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
@@ -2157,6 +2165,14 @@ export default function Sidebar() {
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
   });
+  const resolveFirstMateDecision = useAtomCommand(
+    orchestrationEnvironment.resolveFirstMateDecision,
+    "resolve FirstMate decision",
+  );
+  const cancelFirstMateDecision = useAtomCommand(
+    orchestrationEnvironment.cancelFirstMateDecision,
+    "cancel FirstMate decision",
+  );
   const { copyToClipboard: copyPathToClipboard } = useCopyToClipboard<{ path: string }>({
     onCopy: ({ path }) => {
       toastManager.add({
@@ -2830,6 +2846,47 @@ export default function Sidebar() {
       });
     },
     [clearSelection, isMobile, router, setOpenMobile, setSelectionAnchor],
+  );
+  const handleResolveFirstMateDecision = useCallback(
+    async (request: ResolveFirstMateDecisionRequest) => {
+      const result = await resolveFirstMateDecision({
+        environmentId: request.environmentId,
+        input: {
+          projectId: request.projectId,
+          decisionId: request.decisionId,
+          selectedOptionId: request.selectedOptionId,
+        },
+      });
+      // The command receipt can arrive before an older server forwards the
+      // project-level FirstMate event to an already-open shell subscription.
+      // Reconcile from the authoritative shell snapshot so the inbox still
+      // updates in place without adding a polling loop.
+      return finalizeFirstMateDecisionCommand({
+        result,
+        environmentId: request.environmentId,
+        refreshEnvironmentShell: (environmentId) =>
+          appAtomRegistry.refresh(environmentShell.stateAtom(environmentId)),
+      });
+    },
+    [resolveFirstMateDecision],
+  );
+  const handleCancelFirstMateDecision = useCallback(
+    async (request: Omit<ResolveFirstMateDecisionRequest, "selectedOptionId">) => {
+      const result = await cancelFirstMateDecision({
+        environmentId: request.environmentId,
+        input: {
+          projectId: request.projectId,
+          decisionId: request.decisionId,
+        },
+      });
+      return finalizeFirstMateDecisionCommand({
+        result,
+        environmentId: request.environmentId,
+        refreshEnvironmentShell: (environmentId) =>
+          appAtomRegistry.refresh(environmentShell.stateAtom(environmentId)),
+      });
+    },
+    [cancelFirstMateDecision],
   );
 
   // Dropping files on a row opens that thread and attaches the files there.
@@ -4528,6 +4585,15 @@ export default function Sidebar() {
           </SidebarGroup>
         }
       >
+        <FirstMateDecisionInbox
+          projects={projects}
+          threads={threads}
+          scopedProjectKeys={scopedProjectKeys}
+          hidden={isSearchingThreads}
+          onResolveDecision={handleResolveFirstMateDecision}
+          onCancelDecision={handleCancelFirstMateDecision}
+          onOpenThread={navigateToThread}
+        />
         <FirstMateTopicsPanel
           projects={projects}
           threads={threads}
