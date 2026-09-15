@@ -25,6 +25,7 @@ export type ThreadActionMenuId =
   | "copy-path"
   | "copy-branch"
   | "copy-thread-id"
+  | "export-thread-bundle"
   | "archive"
   | "delete";
 
@@ -147,6 +148,11 @@ export function buildThreadActionMenuItems(
           : []),
         { id: "copy-thread-id", label: "Thread ID", icon: "hash" },
       ],
+    },
+    {
+      id: "export-thread-bundle",
+      label: "Export Thread Bundle…",
+      icon: "download",
     },
     { id: "project-settings", label: "Project settings", icon: "settings" },
     // Archive removes the thread from the sidebar while keeping its

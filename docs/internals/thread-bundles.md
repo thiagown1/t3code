@@ -28,3 +28,9 @@ full persisted projection snapshot, resolves its project, selects only FirstMate
 topic is linked to that thread, and applies the shared sanitizer before returning the bundle. A
 missing thread/project or failed snapshot aborts the whole export. The RPC requires orchestration
 read scope and never starts, resumes, interrupts, or mutates a provider session.
+
+The web thread-action menu exposes `Export Thread Bundle…` in both the sidebar and chat header. It
+prepares the sanitized snapshot first, then presents the portable-content counts, attachment
+limitations, and every omission category before download. Cancelling that review creates no file;
+confirming downloads the canonical JSON with a filesystem-safe name. The review also warns that
+free-form message and plan text can still contain sensitive information.

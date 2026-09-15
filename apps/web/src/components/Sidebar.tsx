@@ -118,6 +118,7 @@ import {
   useThreadSelectionStore,
 } from "../threadSelectionStore";
 import { useThreadActions } from "../hooks/useThreadActions";
+import { useThreadBundleExport } from "../hooks/useThreadBundleExport";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { isCommandPaletteOpen, openCommandPalette } from "../commandPaletteBus";
 import { startNewThreadFromContext } from "../lib/chatThreadActions";
@@ -2184,6 +2185,7 @@ export default function Sidebar() {
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
   });
+  const exportThreadBundle = useThreadBundleExport();
   const resolveFirstMateDecision = useAtomCommand(
     orchestrationEnvironment.resolveFirstMateDecision,
     "resolve FirstMate decision",
@@ -4367,6 +4369,9 @@ export default function Sidebar() {
           case "copy-thread-id":
             copyThreadIdToClipboard(thread.id, { threadId: thread.id });
             return;
+          case "export-thread-bundle":
+            await exportThreadBundle(threadRef);
+            return;
           case "archive": {
             if (confirmThreadArchive) {
               const confirmed = await settlePromise(() =>
@@ -4441,6 +4446,7 @@ export default function Sidebar() {
       copyPathToClipboard,
       copyThreadIdToClipboard,
       deleteThread,
+      exportThreadBundle,
       handleMultiSelectContextMenu,
       markThreadUnread,
       openProjectSettings,
