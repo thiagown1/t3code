@@ -4,6 +4,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   buildEnvironmentBundleInventory,
   environmentBundleDownloadName,
+  setEnvironmentBundleEntryEnabled,
   summarizeEnvironmentBundleDiff,
 } from "./EnvironmentBundleSettings.logic";
 
@@ -165,5 +166,69 @@ describe("Environment Bundle settings", () => {
       ],
     });
     expect(environmentBundleDownloadName(incoming)).toBe("t3-environment-desk.json");
+  });
+
+  it("prepares enablement changes without mutating the imported bundle", () => {
+    const incoming = buildEnvironmentBundleInventory({
+      environmentId: "desk",
+      environmentLabel: "Desk",
+      cwd: null,
+      capabilityProfile: {
+        ...profile,
+        capabilities: [{ capabilityId: "firebase.logs", state: "enabled" }],
+      },
+      serverInventory: {
+        mcpServers: [
+          {
+            serverId: "codex:logs",
+            origin: "codex:effective-config",
+            enabled: true,
+            configurationRef: "codex:mcp:logs",
+            credentialRefs: [],
+            allowedTools: [],
+            blockedTools: [],
+          },
+        ],
+        mcpCoverage: "partial",
+        projectInstructions: [],
+        projectInstructionsCoverage: "partial",
+      },
+      providers: [],
+    });
+
+    const prepared = setEnvironmentBundleEntryEnabled(
+      incoming,
+      { component: "mcp-server", id: "codex:logs" },
+      false,
+    );
+    const withCapabilityDisabled = setEnvironmentBundleEntryEnabled(
+      prepared,
+      { component: "capability", id: "firebase.logs|*|*|*|*" },
+      false,
+    );
+
+    expect(incoming.mcpServers[0]?.enabled).toBe(true);
+    expect(incoming.capabilityProfile.capabilities[0]?.state).toBe("enabled");
+    expect(withCapabilityDisabled.mcpServers[0]?.enabled).toBe(false);
+    expect(withCapabilityDisabled.capabilityProfile.capabilities[0]?.state).toBe("disabled");
+    expect(summarizeEnvironmentBundleDiff(incoming, withCapabilityDisabled)).toMatchObject({
+      added: 0,
+      changed: 2,
+      removed: 0,
+    });
+  });
+
+  it("rejects an enablement target that is not in the imported bundle", () => {
+    const incoming = buildEnvironmentBundleInventory({
+      environmentId: "desk",
+      environmentLabel: "Desk",
+      cwd: null,
+      capabilityProfile: profile,
+      providers: [],
+    });
+
+    expect(() =>
+      setEnvironmentBundleEntryEnabled(incoming, { component: "provider", id: "missing" }, false),
+    ).toThrow("Environment Bundle provider not found: missing");
   });
 });

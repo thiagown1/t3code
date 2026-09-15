@@ -20,6 +20,19 @@ interface InventoryProvider {
   readonly workspaceSnapshots?: ReadonlyArray<ServerProviderWorkspaceSnapshot>;
 }
 
+export type EnvironmentBundleEnablementComponent =
+  | "capability"
+  | "mcp-server"
+  | "skill"
+  | "plugin-app"
+  | "provider"
+  | "project-instruction";
+
+export interface EnvironmentBundleEnablementTarget {
+  readonly component: EnvironmentBundleEnablementComponent;
+  readonly id: string;
+}
+
 function normalizedPath(value: string): string {
   return value.replaceAll("\\", "/").replace(/\/$/, "");
 }
@@ -73,6 +86,118 @@ function emptyCapabilityProfile(
     name: environmentLabel,
     capabilities: [],
   };
+}
+
+export function environmentBundleCapabilityId(
+  declaration: EnvironmentBundle["capabilityProfile"]["capabilities"][number],
+): string {
+  const scope = declaration.scope;
+  return [
+    declaration.capabilityId,
+    scope?.environment ?? "*",
+    scope?.project ?? "*",
+    scope?.provider ?? "*",
+    scope?.integration ?? "*",
+  ].join("|");
+}
+
+function updateEnvironmentBundleEntry<Value>(input: {
+  readonly values: ReadonlyArray<Value>;
+  readonly id: string;
+  readonly keyOf: (value: Value) => string;
+  readonly update: (value: Value) => Value;
+  readonly label: string;
+}): Array<Value> {
+  let found = false;
+  const values = input.values.map((value) => {
+    if (input.keyOf(value) !== input.id) return value;
+    found = true;
+    return input.update(value);
+  });
+  if (!found) throw new Error(`Environment Bundle ${input.label} not found: ${input.id}`);
+  return values;
+}
+
+/**
+ * Changes only the in-memory bundle being reviewed. Destination adapters are
+ * deliberately not involved until a separately confirmed apply phase exists.
+ */
+export function setEnvironmentBundleEntryEnabled(
+  bundle: EnvironmentBundle,
+  target: EnvironmentBundleEnablementTarget,
+  enabled: boolean,
+): EnvironmentBundle {
+  switch (target.component) {
+    case "capability":
+      return {
+        ...bundle,
+        capabilityProfile: {
+          ...bundle.capabilityProfile,
+          capabilities: updateEnvironmentBundleEntry({
+            values: bundle.capabilityProfile.capabilities,
+            id: target.id,
+            keyOf: environmentBundleCapabilityId,
+            update: (entry) => ({ ...entry, state: enabled ? "enabled" : "disabled" }),
+            label: "capability",
+          }),
+        },
+      };
+    case "mcp-server":
+      return {
+        ...bundle,
+        mcpServers: updateEnvironmentBundleEntry({
+          values: bundle.mcpServers,
+          id: target.id,
+          keyOf: (entry) => entry.serverId,
+          update: (entry) => ({ ...entry, enabled }),
+          label: "MCP server",
+        }),
+      };
+    case "skill":
+      return {
+        ...bundle,
+        skills: updateEnvironmentBundleEntry({
+          values: bundle.skills,
+          id: target.id,
+          keyOf: (entry) => entry.skillId,
+          update: (entry) => ({ ...entry, enabled }),
+          label: "skill",
+        }),
+      };
+    case "plugin-app":
+      return {
+        ...bundle,
+        pluginsAndApps: updateEnvironmentBundleEntry({
+          values: bundle.pluginsAndApps,
+          id: target.id,
+          keyOf: (entry) => `${entry.kind}:${entry.integrationId}`,
+          update: (entry) => ({ ...entry, enabled }),
+          label: "plugin/app",
+        }),
+      };
+    case "provider":
+      return {
+        ...bundle,
+        providers: updateEnvironmentBundleEntry({
+          values: bundle.providers,
+          id: target.id,
+          keyOf: (entry) => entry.instanceId,
+          update: (entry) => ({ ...entry, enabled }),
+          label: "provider",
+        }),
+      };
+    case "project-instruction":
+      return {
+        ...bundle,
+        projectInstructions: updateEnvironmentBundleEntry({
+          values: bundle.projectInstructions,
+          id: target.id,
+          keyOf: (entry) => entry.logicalPath,
+          update: (entry) => ({ ...entry, enabled }),
+          label: "project instruction",
+        }),
+      };
+  }
 }
 
 export function buildEnvironmentBundleInventory(input: {

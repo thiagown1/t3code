@@ -17,9 +17,13 @@ import {
   DialogTitle,
 } from "../ui/dialog";
 import { Textarea } from "../ui/textarea";
+import { Switch } from "../ui/switch";
 import {
   buildEnvironmentBundleInventory,
+  environmentBundleCapabilityId,
   environmentBundleDownloadName,
+  type EnvironmentBundleEnablementTarget,
+  setEnvironmentBundleEntryEnabled,
   summarizeEnvironmentBundleDiff,
 } from "./EnvironmentBundleSettings.logic";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
@@ -185,11 +189,62 @@ function EnvironmentBundleInventoryDialog({
 function EnvironmentBundleReview({
   current,
   incoming,
+  onIncomingChange,
 }: {
   current: EnvironmentBundle;
   incoming: EnvironmentBundle;
+  onIncomingChange: (incoming: EnvironmentBundle) => void;
 }) {
   const summary = summarizeEnvironmentBundleDiff(current, incoming);
+  const enablementEntries: ReadonlyArray<{
+    readonly target: EnvironmentBundleEnablementTarget;
+    readonly label: string;
+    readonly detail: string;
+    readonly enabled: boolean;
+  }> = [
+    ...incoming.capabilityProfile.capabilities.map((capability) => ({
+      target: {
+        component: "capability" as const,
+        id: environmentBundleCapabilityId(capability),
+      },
+      label: capability.capabilityId,
+      detail: `capability${capability.state === "unavailable" ? " · unavailable at source" : ""}`,
+      enabled: capability.state === "enabled",
+    })),
+    ...incoming.mcpServers.map((server) => ({
+      target: { component: "mcp-server" as const, id: server.serverId },
+      label: server.serverId,
+      detail: "MCP server",
+      enabled: server.enabled,
+    })),
+    ...incoming.skills.map((skill) => ({
+      target: { component: "skill" as const, id: skill.skillId },
+      label: skill.name,
+      detail: `skill · ${skill.origin}`,
+      enabled: skill.enabled,
+    })),
+    ...incoming.pluginsAndApps.map((integration) => ({
+      target: {
+        component: "plugin-app" as const,
+        id: `${integration.kind}:${integration.integrationId}`,
+      },
+      label: integration.integrationId,
+      detail: integration.kind,
+      enabled: integration.enabled,
+    })),
+    ...incoming.providers.map((provider) => ({
+      target: { component: "provider" as const, id: provider.instanceId },
+      label: provider.instanceId,
+      detail: `provider · ${provider.driver}`,
+      enabled: provider.enabled,
+    })),
+    ...incoming.projectInstructions.map((instruction) => ({
+      target: { component: "project-instruction" as const, id: instruction.logicalPath },
+      label: instruction.logicalPath,
+      detail: "project instruction",
+      enabled: instruction.enabled,
+    })),
+  ];
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap gap-2" aria-label="Environment Bundle changes">
@@ -209,6 +264,41 @@ function EnvironmentBundleReview({
         <InventoryCount label="providers" value={incoming.providers.length} />
         <InventoryCount label="instructions" value={incoming.projectInstructions.length} />
       </div>
+      <section className="space-y-2">
+        <div>
+          <h3 className="text-sm font-medium">Prepared enablement</h3>
+          <p className="text-xs text-muted-foreground">
+            Choose what this import should enable. These switches only update the dry-run plan.
+          </p>
+        </div>
+        {enablementEntries.length === 0 ? (
+          <p className="text-xs text-muted-foreground">No configurable entries in this bundle.</p>
+        ) : (
+          <ul className="max-h-56 space-y-1 overflow-auto rounded-lg border border-border/60 p-2">
+            {enablementEntries.map((entry) => (
+              <li
+                key={`${entry.target.component}:${entry.target.id}`}
+                className="flex items-center justify-between gap-3 rounded-md px-2 py-1.5 hover:bg-muted/30"
+              >
+                <span className="min-w-0">
+                  <span className="block truncate text-sm text-foreground">{entry.label}</span>
+                  <span className="block text-xs text-muted-foreground">{entry.detail}</span>
+                </span>
+                <Switch
+                  size="sm"
+                  checked={entry.enabled}
+                  aria-label={`${entry.label} enabled in prepared Environment Bundle`}
+                  onCheckedChange={(checked) =>
+                    onIncomingChange(
+                      setEnvironmentBundleEntryEnabled(incoming, entry.target, Boolean(checked)),
+                    )
+                  }
+                />
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
       {summary.steps.length === 0 ? (
         <p className="text-sm text-muted-foreground">No application steps.</p>
       ) : (
@@ -246,6 +336,7 @@ function EnvironmentBundleImportDialog({
   const [json, setJson] = useState(() => serializeEnvironmentBundle(current));
   const [step, setStep] = useState<"edit" | "review">("edit");
   const [error, setError] = useState<string | null>(null);
+  const [reviewBundle, setReviewBundle] = useState<EnvironmentBundle | null>(null);
   const parsed = useMemo(() => {
     try {
       return { bundle: parseEnvironmentBundleJson(json), error: null };
@@ -309,8 +400,12 @@ function EnvironmentBundleImportDialog({
                 conflicting MCP rules fail validation.
               </p>
             </>
-          ) : parsed.bundle ? (
-            <EnvironmentBundleReview current={current} incoming={parsed.bundle} />
+          ) : reviewBundle ? (
+            <EnvironmentBundleReview
+              current={current}
+              incoming={reviewBundle}
+              onIncomingChange={setReviewBundle}
+            />
           ) : null}
         </DialogPanel>
         <DialogFooter>
@@ -318,7 +413,13 @@ function EnvironmentBundleImportDialog({
             {step === "review" ? "Close review" : "Cancel"}
           </Button>
           {step === "review" ? (
-            <Button variant="outline" onClick={() => setStep("edit")}>
+            <Button
+              variant="outline"
+              onClick={() => {
+                if (reviewBundle) setJson(serializeEnvironmentBundle(reviewBundle));
+                setStep("edit");
+              }}
+            >
               Back
             </Button>
           ) : (
@@ -329,6 +430,7 @@ function EnvironmentBundleImportDialog({
                   return;
                 }
                 setError(null);
+                setReviewBundle(parsed.bundle);
                 setStep("review");
               }}
             >
