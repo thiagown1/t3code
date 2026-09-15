@@ -28,6 +28,7 @@ import {
   cancelFirstMateDecision,
   createFirstMateTopic,
   createProject,
+  linkFirstMateSupervisor,
   openFirstMateDecision,
   revertThreadCheckpoint,
   reorderActiveThread,
@@ -189,6 +190,30 @@ describe("environment commands", () => {
           projectId: "project-1",
           topicId: "topic-1",
           createdAt: "2026-09-14T21:00:30.000Z",
+        },
+      ]);
+    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+  );
+
+  it.effect("dispatches an explicit FirstMate supervisor link", () =>
+    Effect.gen(function* () {
+      const dispatched: ClientOrchestrationCommand[] = [];
+      const supervisor = yield* makeSupervisor(dispatched);
+
+      yield* linkFirstMateSupervisor({
+        commandId: CommandId.make("link-firstmate-supervisor"),
+        projectId: ProjectId.make("project-1"),
+        threadId: ThreadId.make("thread-supervisor"),
+        createdAt: "2026-09-14T21:00:45.000Z",
+      }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+
+      expect(dispatched).toEqual([
+        {
+          type: "firstmate.supervisor.link",
+          commandId: "link-firstmate-supervisor",
+          projectId: "project-1",
+          threadId: "thread-supervisor",
+          createdAt: "2026-09-14T21:00:45.000Z",
         },
       ]);
     }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),

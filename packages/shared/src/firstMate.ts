@@ -314,7 +314,8 @@ export type FirstMateMessageRoutingFailure =
   | "selected-topic-not-found"
   | "mentioned-topic-not-found"
   | "multiple-topic-mentions"
-  | "topic-not-delegated";
+  | "topic-not-delegated"
+  | "topic-is-supervisor";
 
 export type FirstMateMessageRoutingResult =
   | {
@@ -351,6 +352,7 @@ function mentionedFirstMateTopicIds(message: string): ReadonlyArray<string> {
 }
 
 function routeToTopic(
+  state: FirstMateWorkspaceState,
   topic: FirstMateTopic,
   reason: FirstMateMessageRouteReason,
   message: string,
@@ -359,6 +361,13 @@ function routeToTopic(
     return {
       status: "needs-confirmation",
       reason: "topic-not-delegated",
+      candidateTopicIds: [topic.id],
+    };
+  }
+  if (topic.threadId === state.supervisorThreadId) {
+    return {
+      status: "needs-confirmation",
+      reason: "topic-is-supervisor",
       candidateTopicIds: [topic.id],
     };
   }
@@ -395,7 +404,7 @@ export function routeFirstMateMessage(
           reason: "mentioned-topic-not-found",
           candidateTopicIds: [],
         }
-      : routeToTopic(topic, "explicit-mention", message);
+      : routeToTopic(state, topic, "explicit-mention", message);
   }
 
   const selectedTopicId = state.selectedTopicId ?? null;
@@ -413,7 +422,7 @@ export function routeFirstMateMessage(
         reason: "selected-topic-not-found",
         candidateTopicIds: state.topics.map((topic) => topic.id),
       }
-    : routeToTopic(selectedTopic, "selected-topic", message);
+    : routeToTopic(state, selectedTopic, "selected-topic", message);
 }
 
 const stageStatus: Record<FirstMateTopic["stage"], FirstMateTopicOperationalStatus> = {

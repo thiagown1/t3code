@@ -285,6 +285,16 @@ describe("FirstMate deterministic routing", () => {
       reason: "topic-not-delegated",
       candidateTopicIds: [topicId],
     });
+
+    const recursive = {
+      ...state,
+      supervisorThreadId: ThreadId.make("thread-1"),
+    };
+    expect(routeFirstMateMessage(recursive, "Continue.")).toEqual({
+      status: "needs-confirmation",
+      reason: "topic-is-supervisor",
+      candidateTopicIds: [topicId],
+    });
   });
 });
 

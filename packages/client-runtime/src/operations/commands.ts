@@ -57,6 +57,7 @@ export type RevertThreadCheckpointInput = CommandInput<"thread.checkpoint.revert
   readonly restoreFiles?: boolean;
 };
 export type StopThreadSessionInput = CommandInput<"thread.session.stop">;
+export type LinkFirstMateSupervisorInput = CommandInput<"firstmate.supervisor.link">;
 export type CreateFirstMateTopicInput = CommandInput<"firstmate.topic.create">;
 export type SelectFirstMateTopicInput = CommandInput<"firstmate.topic.select">;
 export type OpenFirstMateDecisionInput = CommandInput<"firstmate.decision.open">;
@@ -96,6 +97,17 @@ function timestampedCommandMetadata(input: {
 function dispatch(command: ClientOrchestrationCommand) {
   return request(ORCHESTRATION_WS_METHODS.dispatchCommand, command);
 }
+
+export const linkFirstMateSupervisor: (input: LinkFirstMateSupervisorInput) => CommandEffect =
+  Effect.fn("EnvironmentCommands.linkFirstMateSupervisor")(function* (input) {
+    const metadata = yield* timestampedCommandMetadata(input);
+    return yield* dispatch({
+      ...input,
+      type: "firstmate.supervisor.link",
+      commandId: metadata.commandId,
+      createdAt: metadata.createdAt,
+    });
+  });
 
 export const createFirstMateTopic: (input: CreateFirstMateTopicInput) => CommandEffect = Effect.fn(
   "EnvironmentCommands.createFirstMateTopic",

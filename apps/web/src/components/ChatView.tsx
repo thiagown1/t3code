@@ -24,6 +24,8 @@ import {
   ComposerContextId,
   DEFAULT_MODEL,
   type EnvironmentId,
+  type FirstMateTopic,
+  type FirstMateTopicId,
   type MessageId,
   type ModelSelection,
   type ProjectScript,
@@ -338,13 +340,16 @@ import { resolveProviderSkillsForCwd } from "@t3tools/client-runtime/providerSki
 import { vcsEnvironment } from "../state/vcs";
 import { useEnvironments, usePrimaryEnvironment } from "../state/environments";
 import {
+  readThreadShell,
   useProject,
   useProjects,
   useThread,
   useThreadRefs,
   useThreadShell,
+  useThreadShells,
 } from "../state/entities";
 import { environmentShell } from "../state/shell";
+import { orchestrationEnvironment } from "../state/orchestration";
 import { ChatComposer, type ChatComposerHandle } from "./chat/ChatComposer";
 import { createPageScrollController, type PageScrollKey } from "./chat/pageScrollController";
 import { DraftHeroHeadline } from "./chat/DraftHeroHeadline";
@@ -482,6 +487,12 @@ import { readPreparedConnection } from "../state/session";
 import { useAtomCommand } from "../state/use-atom-command";
 import { useAtomQueryRunner } from "../state/use-atom-query-runner";
 import { Button } from "./ui/button";
+import {
+  FirstMateRouteConfirmation,
+  type FirstMateRouteConfirmationRequest,
+} from "./firstMate/FirstMateRouteConfirmation";
+import { planFirstMateSupervisorSubmission } from "./firstMate/FirstMateSupervisorRouting.logic";
+import { finalizeFirstMateShellCommand } from "./firstMate/firstMateShellCommand";
 import {
   AlertDialog,
   AlertDialogClose,
@@ -1485,6 +1496,9 @@ export default function ChatView(props: ChatViewProps) {
     reportFailure: false,
   });
   const startThreadTurn = useAtomCommand(threadEnvironment.startTurn, { reportFailure: false });
+  const selectFirstMateTopic = useAtomCommand(orchestrationEnvironment.selectFirstMateTopic, {
+    reportFailure: false,
+  });
   const createAttachmentAssetUrl = useAtomQueryRunner(assetEnvironment.createUrl, {
     reportFailure: false,
     refresh: true,
@@ -2179,6 +2193,29 @@ export default function ChatView(props: ChatViewProps) {
   // Compute the list of environments this logical project spans, used to
   // drive the environment picker in BranchToolbar.
   const allProjects = useProjects();
+  const allThreadShells = useThreadShells();
+  const [pendingFirstMateRouteState, setPendingFirstMateRouteState] = useState<{
+    readonly threadKey: string;
+    readonly request: FirstMateRouteConfirmationRequest;
+  } | null>(null);
+  const pendingFirstMateRoute =
+    pendingFirstMateRouteState?.threadKey === routeThreadKey
+      ? pendingFirstMateRouteState.request
+      : null;
+  const setPendingFirstMateRoute = (request: FirstMateRouteConfirmationRequest | null) =>
+    setPendingFirstMateRouteState(request === null ? null : { threadKey: routeThreadKey, request });
+  const [confirmingFirstMateTopicState, setConfirmingFirstMateTopicState] = useState<{
+    readonly threadKey: string;
+    readonly topicId: FirstMateTopicId;
+  } | null>(null);
+  const confirmingFirstMateTopicId =
+    confirmingFirstMateTopicState?.threadKey === routeThreadKey
+      ? confirmingFirstMateTopicState.topicId
+      : null;
+  const setConfirmingFirstMateTopicId = (topicId: FirstMateTopicId | null) =>
+    setConfirmingFirstMateTopicState(
+      topicId === null ? null : { threadKey: routeThreadKey, topicId },
+    );
   const primaryEnvironmentId = primaryEnvironment?.environmentId ?? null;
   useEffect(() => {
     if (!activeThreadRef || !activeProjectRef) return;
@@ -7065,6 +7102,128 @@ export default function ChatView(props: ChatViewProps) {
     }
   };
 
+  const dispatchFirstMateRoutedTurn = async (input: {
+    readonly topic: FirstMateTopic;
+    readonly message: string;
+  }): Promise<boolean> => {
+    if (!activeProject || input.topic.threadId === null || sendInFlightRef.current) return false;
+    const targetRef = scopeThreadRef(activeProject.environmentId, input.topic.threadId);
+    const target = readThreadShell(targetRef);
+    if (
+      target === null ||
+      target.projectId !== activeProject.id ||
+      target.archivedAt !== null ||
+      target.id === activeThread?.id
+    ) {
+      setPendingFirstMateRoute({
+        reason:
+          target?.id === activeThread?.id ? "topic-is-supervisor" : "destination-thread-not-found",
+        candidateTopicIds: [input.topic.id],
+        message: input.message,
+      });
+      return false;
+    }
+
+    const messageId = newMessageId();
+    const createdAt = new Date().toISOString();
+    sendInFlightRef.current = true;
+    try {
+      const result = await startThreadTurn({
+        environmentId: target.environmentId,
+        input: {
+          threadId: target.id,
+          message: {
+            messageId,
+            role: "user",
+            text: input.message,
+            attachments: [],
+          },
+          modelSelection: target.modelSelection,
+          titleSeed:
+            truncate(
+              assistantCitationsToPlainText(stripInlineContextReferences(input.message)).trim(),
+            ) || input.topic.title,
+          runtimeMode: target.runtimeMode,
+          interactionMode: target.interactionMode,
+          createdAt,
+        },
+      });
+      if (result._tag === "Failure") {
+        if (!isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: `Could not route to ${input.topic.title}`,
+              description:
+                error instanceof Error ? error.message : "The worker thread rejected the turn.",
+            }),
+          );
+        }
+        return false;
+      }
+
+      promptRef.current = "";
+      clearComposerDraftContent(composerDraftTarget);
+      composerRef.current?.resetCursorState();
+      setPendingFirstMateRoute(null);
+      clearUsageLimitsFor(scopedThreadKey(targetRef));
+      toastManager.add(
+        stackedThreadToast({
+          type: "success",
+          title: `Routed to ${input.topic.title}`,
+          description: "The supervisor stays open while the worker continues.",
+          timeout: 8_000,
+          actionProps: {
+            children: "Open",
+            onClick: () => {
+              void navigate({
+                to: "/$environmentId/$threadId",
+                params: buildThreadRouteParams(targetRef),
+              });
+            },
+          },
+        }),
+      );
+      return true;
+    } finally {
+      sendInFlightRef.current = false;
+    }
+  };
+
+  const confirmFirstMateRoute = async (topic: FirstMateTopic) => {
+    if (!activeProject || pendingFirstMateRoute === null || confirmingFirstMateTopicId !== null) {
+      return;
+    }
+    if (promptRef.current.trim() !== pendingFirstMateRoute.message) {
+      setPendingFirstMateRoute(null);
+      toastManager.add({
+        type: "info",
+        title: "Draft changed",
+        description: "Send again so FirstMate can route the current message.",
+      });
+      return;
+    }
+
+    setConfirmingFirstMateTopicId(topic.id);
+    try {
+      const result = await selectFirstMateTopic({
+        environmentId: activeProject.environmentId,
+        input: { projectId: activeProject.id, topicId: topic.id },
+      });
+      const selected = await finalizeFirstMateShellCommand({
+        result,
+        environmentId: activeProject.environmentId,
+        refreshEnvironmentShell: (targetEnvironmentId) =>
+          appAtomRegistry.refresh(environmentShell.stateAtom(targetEnvironmentId)),
+      });
+      if (!selected) return;
+      await dispatchFirstMateRoutedTurn({ topic, message: pendingFirstMateRoute.message });
+    } finally {
+      setConfirmingFirstMateTopicId(null);
+    }
+  };
+
   const onSend = async (
     e?: { preventDefault: () => void },
     submissionIntent: ComposerSubmissionIntent = "foreground",
@@ -7399,6 +7558,37 @@ export default function ChatView(props: ChatViewProps) {
           description: "This draft no longer points to an available project.",
         }),
       );
+      return;
+    }
+    const firstMateRoutingPlan = planFirstMateSupervisorSubmission({
+      project: activeProject,
+      activeThreadId: activeThread.id,
+      threads: allThreadShells,
+      message: trimmed,
+      hasComposerContext:
+        composerImages.length > 0 ||
+        composerFiles.length > 0 ||
+        sendableComposerTerminalContexts.length > 0 ||
+        composerPreviewAnnotations.length > 0 ||
+        composerReviewComments.length > 0,
+    });
+    if (firstMateRoutingPlan.status === "needs-confirmation") {
+      setPendingFirstMateRoute(firstMateRoutingPlan);
+      return;
+    }
+    if (firstMateRoutingPlan.status === "routed") {
+      const topic = activeProject.firstMate?.topics.find(
+        (entry) => entry.id === firstMateRoutingPlan.topicId,
+      );
+      if (topic === undefined) {
+        setPendingFirstMateRoute({
+          reason: "selected-topic-not-found",
+          candidateTopicIds: activeProject.firstMate?.topics.map((entry) => entry.id) ?? [],
+          message: trimmed,
+        });
+        return;
+      }
+      await dispatchFirstMateRoutedTurn({ topic, message: firstMateRoutingPlan.message });
       return;
     }
     const threadIdForSend = activeThread.id;
@@ -9315,6 +9505,15 @@ export default function ChatView(props: ChatViewProps) {
                     <ComposerSurface.Shell contextStrip={showComposerContextStrip}>
                       <ComposerSurface.Host>
                         <div ref={attachDraftHeroComposerAnchorRef} className="relative z-10">
+                          {activeProject && pendingFirstMateRoute ? (
+                            <FirstMateRouteConfirmation
+                              project={activeProject}
+                              request={pendingFirstMateRoute}
+                              confirmingTopicId={confirmingFirstMateTopicId}
+                              onConfirm={(topic) => void confirmFirstMateRoute(topic)}
+                              onDismiss={() => setPendingFirstMateRoute(null)}
+                            />
+                          ) : null}
                           <ChatComposer
                             composerRef={composerRef}
                             composerDraftTarget={composerDraftTarget}

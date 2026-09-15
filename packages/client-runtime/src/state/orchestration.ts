@@ -11,11 +11,13 @@ import type { EnvironmentRegistry } from "../connection/registry.ts";
 import {
   cancelFirstMateDecision,
   createFirstMateTopic,
+  linkFirstMateSupervisor,
   openFirstMateDecision,
   resolveFirstMateDecision,
   selectFirstMateTopic,
   type CancelFirstMateDecisionInput,
   type CreateFirstMateTopicInput,
+  type LinkFirstMateSupervisorInput,
   type OpenFirstMateDecisionInput,
   type ResolveFirstMateDecisionInput,
   type SelectFirstMateTopicInput,
@@ -24,6 +26,7 @@ import {
 export type {
   CancelFirstMateDecisionInput,
   CreateFirstMateTopicInput,
+  LinkFirstMateSupervisorInput,
   OpenFirstMateDecisionInput,
   ResolveFirstMateDecisionInput,
   SelectFirstMateTopicInput,
@@ -34,6 +37,15 @@ export function createOrchestrationEnvironmentAtoms<R, E>(
 ) {
   const firstMateScheduler = createAtomCommandScheduler();
   return {
+    linkFirstMateSupervisor: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:firstmate:link-supervisor",
+      execute: (input: LinkFirstMateSupervisorInput) => linkFirstMateSupervisor(input),
+      scheduler: firstMateScheduler,
+      concurrency: {
+        mode: "serial" as const,
+        key: ({ environmentId, input }) => JSON.stringify([environmentId, input.projectId]),
+      },
+    }),
     createFirstMateTopic: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:firstmate:create-topic",
       execute: (input: CreateFirstMateTopicInput) => createFirstMateTopic(input),
