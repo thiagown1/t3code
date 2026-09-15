@@ -5,6 +5,8 @@ import {
   CorrelationId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   EventId,
+  FirstMateWorkspaceState,
+  FirstMateTopicId,
   MessageId,
   ProjectId,
   ThreadId,
@@ -65,6 +67,7 @@ const BaseTestLayer = makeProjectionPipelinePrefixedTestLayer("t3-projection-pip
 const encodeThreadLinkedPullRequest = Schema.encodeSync(
   Schema.fromJsonString(ThreadLinkedPullRequest),
 );
+const decodeFirstMateJson = Schema.decodeEffect(Schema.fromJsonString(FirstMateWorkspaceState));
 
 it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-projection-cursor-batch-")))(
   "OrchestrationProjectionPipeline cursor batches",
@@ -292,6 +295,87 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-branch-pr-proje
             },
           ]);
         }
+      }),
+    );
+  },
+);
+
+it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-firstmate-pipeline-test-")))(
+  "OrchestrationProjectionPipeline FirstMate facts",
+  (it) => {
+    it.effect("persists FirstMate facts in the project projection using envelope time", () =>
+      Effect.gen(function* () {
+        const projectionPipeline = yield* OrchestrationProjectionPipeline;
+        const eventStore = yield* OrchestrationEventStore;
+        const sql = yield* SqlClient.SqlClient;
+        const projectId = ProjectId.make("project-firstmate-pipeline");
+        const topicId = FirstMateTopicId.make("topic-firstmate-pipeline");
+        const createdAt = "2026-09-14T20:00:00.000Z";
+        const persistedAt = "2026-09-14T20:01:00.000Z";
+
+        const created = yield* eventStore.append({
+          type: "project.created",
+          eventId: EventId.make("evt-firstmate-pipeline-project"),
+          aggregateKind: "project",
+          aggregateId: projectId,
+          occurredAt: createdAt,
+          commandId: CommandId.make("cmd-firstmate-pipeline-project"),
+          causationEventId: null,
+          correlationId: null,
+          metadata: {},
+          payload: {
+            projectId,
+            title: "FirstMate pipeline",
+            workspaceRoot: "/tmp/firstmate-pipeline",
+            defaultModelSelection: null,
+            scripts: [],
+            createdAt,
+            updatedAt: createdAt,
+          },
+        });
+        yield* projectionPipeline.projectEvent(created);
+
+        const fact = yield* eventStore.append({
+          type: "firstmate.domain-event",
+          eventId: EventId.make("evt-firstmate-pipeline-topic"),
+          aggregateKind: "project",
+          aggregateId: projectId,
+          occurredAt: persistedAt,
+          commandId: CommandId.make("cmd-firstmate-pipeline-topic"),
+          causationEventId: null,
+          correlationId: null,
+          metadata: {},
+          payload: {
+            type: "firstmate.topic-created",
+            topic: {
+              id: topicId,
+              projectId,
+              title: "Deploy validation",
+              summary: "Track the operator-owned deployment gate.",
+              stage: "completed",
+              threadId: null,
+              responsibleAgentId: null,
+              createdAt,
+              updatedAt: createdAt,
+              completedAt: createdAt,
+            },
+            occurredAt: createdAt,
+          },
+        });
+        yield* projectionPipeline.projectEvent(fact);
+
+        const rows = yield* sql<{ readonly firstMate: string; readonly updatedAt: string }>`
+        SELECT firstmate_json AS "firstMate", updated_at AS "updatedAt"
+        FROM projection_projects
+        WHERE project_id = ${projectId}
+      `;
+        const state = yield* decodeFirstMateJson(rows[0]?.firstMate ?? "null");
+        assert.equal(rows[0]?.updatedAt, persistedAt);
+        assert.equal(state.updatedAt, persistedAt);
+        assert.deepEqual(
+          state.topics.map((topic) => topic.id),
+          [topicId],
+        );
       }),
     );
   },

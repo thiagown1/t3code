@@ -2,6 +2,7 @@ import {
   AgentSessionImportSource,
   ApprovalRequestId,
   ChatAttachment,
+  FirstMateWorkspaceState,
   OrchestrationMessageContext,
   CheckpointRef,
   IsoDateTime,
@@ -106,6 +107,7 @@ const ProjectionProjectDbRowSchema = ProjectionProject.mapFields(
     autoPull: Schema.Number,
     projectIcon: Schema.NullOr(Schema.fromJsonString(ProjectIconOverride)),
     scripts: Schema.fromJsonString(Schema.Array(ProjectScript)),
+    firstMate: Schema.NullOr(Schema.fromJsonString(FirstMateWorkspaceState)),
   }),
 );
 const ProjectionThreadMessageDbRowSchema = ProjectionThreadMessage.mapFields(
@@ -398,6 +400,7 @@ function mapProjectShellRow(
     faviconPath: row.faviconPath ?? null,
     projectIcon: row.projectIcon ?? null,
     scripts: row.scripts,
+    ...(row.firstMate === null ? {} : { firstMate: row.firstMate }),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -540,6 +543,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           favicon_path AS "faviconPath",
           project_icon_json AS "projectIcon",
           scripts_json AS "scripts",
+          firstmate_json AS "firstMate",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           deleted_at AS "deletedAt"
@@ -1097,6 +1101,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           favicon_path AS "faviconPath",
           project_icon_json AS "projectIcon",
           scripts_json AS "scripts",
+          firstmate_json AS "firstMate",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           deleted_at AS "deletedAt"
@@ -1123,6 +1128,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           favicon_path AS "faviconPath",
           project_icon_json AS "projectIcon",
           scripts_json AS "scripts",
+          firstmate_json AS "firstMate",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           deleted_at AS "deletedAt"
@@ -2231,6 +2237,7 @@ pending_approval_requests AS (
                 faviconPath: row.faviconPath ?? null,
                 projectIcon: row.projectIcon ?? null,
                 scripts: row.scripts,
+                ...(row.firstMate === null ? {} : { firstMate: row.firstMate }),
                 createdAt: row.createdAt,
                 updatedAt: row.updatedAt,
                 deletedAt: row.deletedAt,
@@ -2399,6 +2406,7 @@ pending_approval_requests AS (
                   faviconPath: row.faviconPath ?? null,
                   projectIcon: row.projectIcon ?? null,
                   scripts: row.scripts,
+                  ...(row.firstMate === null ? {} : { firstMate: row.firstMate }),
                   createdAt: row.createdAt,
                   updatedAt: row.updatedAt,
                   deletedAt: row.deletedAt,

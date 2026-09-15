@@ -1,14 +1,18 @@
 import {
+  FirstMateWorkspaceState,
+  FirstMateTopicId,
   ProjectId,
   ThreadId,
   TurnId,
   ProviderInstanceId,
   OrchestrationProposedPlanId,
 } from "@t3tools/contracts";
+import { createEmptyFirstMateWorkspace } from "@t3tools/shared/firstMate";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as Statement from "effect/unstable/sql/Statement";
 
@@ -34,6 +38,7 @@ const projectionRepositoriesLayer = it.layer(
     SqlitePersistenceMemory,
   ),
 );
+const decodeFirstMateJson = Schema.decodeEffect(Schema.fromJsonString(FirstMateWorkspaceState));
 
 projectionRepositoriesLayer("Projection repositories", (it) => {
   it.effect("selects the latest-turn plan before checking implementation status", () =>
@@ -330,6 +335,56 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
         instanceId: ProviderInstanceId.make("codex"),
         model: "gpt-5.4",
       });
+    }),
+  );
+
+  it.effect("round-trips FirstMate workspace state as project JSON", () =>
+    Effect.gen(function* () {
+      const projects = yield* ProjectionProjectRepository;
+      const sql = yield* SqlClient.SqlClient;
+      const projectId = ProjectId.make("project-firstmate-state");
+      const now = "2026-09-14T20:00:00.000Z";
+      const empty = createEmptyFirstMateWorkspace(projectId, now);
+      const firstMate = {
+        ...empty,
+        topics: [
+          {
+            id: FirstMateTopicId.make("topic-storage"),
+            projectId,
+            title: "Storage pressure",
+            summary: "Observe connected machine storage.",
+            stage: "testing" as const,
+            threadId: null,
+            responsibleAgentId: null,
+            createdAt: now,
+            updatedAt: now,
+            completedAt: null,
+          },
+        ],
+      };
+
+      yield* projects.upsert({
+        projectId,
+        title: "FirstMate state",
+        workspaceRoot: "/tmp/project-firstmate-state",
+        defaultModelSelection: null,
+        defaultThreadEnvMode: null,
+        autoPull: false,
+        scripts: [],
+        firstMate,
+        createdAt: now,
+        updatedAt: now,
+        deletedAt: null,
+      });
+
+      const raw = yield* sql<{ readonly firstMate: string | null }>`
+        SELECT firstmate_json AS "firstMate"
+        FROM projection_projects
+        WHERE project_id = ${projectId}
+      `;
+      assert.deepEqual(yield* decodeFirstMateJson(raw[0]?.firstMate ?? "null"), firstMate);
+      const persisted = yield* projects.getById({ projectId });
+      assert.deepEqual(Option.getOrThrow(persisted).firstMate, firstMate);
     }),
   );
 

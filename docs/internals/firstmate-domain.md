@@ -7,9 +7,11 @@ sources.
 
 The contract and pure domain functions live in `packages/contracts` and
 `packages/shared`. Commands are validated before the decider emits typed facts;
-the projector reconstructs workspace state by replaying those facts. This is the
-foundation for storing them in the existing orchestration event log. It must not
-grow into a separate event store.
+the projector reconstructs workspace state by replaying those facts. Accepted
+facts are wrapped in the existing `firstmate.domain-event` orchestration
+envelope. They use the project aggregate, so command receipts, idempotency,
+event persistence, and projection updates remain part of the same transactional
+path. FirstMate must not grow into a separate event store.
 
 ## Persistent facts versus derived state
 
@@ -27,9 +29,20 @@ Machine alerts are aggregate read facts. They can be shown next to a topic, but
 they never restart a service, clean a disk, signal a process, or otherwise
 perform remediation.
 
-## Next integration boundary
+## Persistence and compatibility
 
-The server will wrap accepted FirstMate facts in the existing orchestration
-event envelope and persist them transactionally with command receipts and
-projections. Clients will consume projected topic summaries; they will not replay
+The project projection stores the replayed workspace in `firstmate_json`.
+Existing rows migrate to `NULL`, and older snapshots remain valid because the
+field is optional at the transport boundary. A project-created event initializes
+an empty workspace; subsequent facts update it through the same pure projector
+used by command replay.
+
+The orchestration envelope is authoritative for aggregate identity and
+`occurredAt`. Projectors ignore a FirstMate envelope attached to another
+aggregate kind and normalize the nested fact timestamp to the persisted envelope
+timestamp. This keeps deterministic replay even if malformed or legacy nested
+payload metadata disagrees.
+
+Shell clients receive a project upsert when a FirstMate fact commits. Clients
+consume the projected workspace and derived topic summaries; they do not replay
 an independent client-side history.

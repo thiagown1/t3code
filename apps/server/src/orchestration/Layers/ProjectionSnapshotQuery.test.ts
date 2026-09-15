@@ -134,6 +134,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           workspace_root,
           default_model_selection_json,
           scripts_json,
+          firstmate_json,
           created_at,
           updated_at,
           deleted_at
@@ -144,6 +145,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           '/tmp/project-1',
           '{"provider":"codex","model":"gpt-5-codex"}',
           '[{"id":"script-1","name":"Build","command":"bun run build","icon":"build","runOnWorktreeCreate":false}]',
+          '{"projectId":"project-1","supervisorThreadId":null,"topics":[],"decisions":[],"updatedAt":"2026-02-24T00:00:01.000Z"}',
           '2026-02-24T00:00:00.000Z',
           '2026-02-24T00:00:01.000Z',
           NULL
@@ -441,6 +443,13 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
               runOnWorktreeCreate: false,
             },
           ],
+          firstMate: {
+            projectId: asProjectId("project-1"),
+            supervisorThreadId: null,
+            topics: [],
+            decisions: [],
+            updatedAt: "2026-02-24T00:00:01.000Z",
+          },
           defaultThreadEnvMode: null,
           createdAt: "2026-02-24T00:00:00.000Z",
           updatedAt: "2026-02-24T00:00:01.000Z",
@@ -568,6 +577,13 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
               runOnWorktreeCreate: false,
             },
           ],
+          firstMate: {
+            projectId: asProjectId("project-1"),
+            supervisorThreadId: null,
+            topics: [],
+            decisions: [],
+            updatedAt: "2026-02-24T00:00:01.000Z",
+          },
           defaultThreadEnvMode: null,
           createdAt: "2026-02-24T00:00:00.000Z",
           updatedAt: "2026-02-24T00:00:01.000Z",

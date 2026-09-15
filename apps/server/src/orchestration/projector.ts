@@ -13,7 +13,9 @@ import {
   OrchestrationMessage,
   OrchestrationSession,
   OrchestrationThread,
+  FirstMateEvent,
 } from "@t3tools/contracts";
+import { createEmptyFirstMateWorkspace, projectFirstMateEvent } from "@t3tools/shared/firstMate";
 import {
   legacyLinkedPullRequestOf,
   legacyThreadPullRequestKey,
@@ -339,6 +341,7 @@ export function projectEvent(
             faviconPath: payload.faviconPath ?? null,
             projectIcon: payload.projectIcon ?? null,
             scripts: payload.scripts,
+            firstMate: createEmptyFirstMateWorkspace(payload.projectId, payload.createdAt),
             createdAt: payload.createdAt,
             updatedAt: payload.updatedAt,
             deletedAt: null,
@@ -402,6 +405,27 @@ export function projectEvent(
               : project,
           ),
         })),
+      );
+
+    case "firstmate.domain-event":
+      if (event.aggregateKind !== "project") return Effect.succeed(nextBase);
+      return decodeForEvent(FirstMateEvent, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => {
+          const project = nextBase.projects.find((entry) => entry.id === event.aggregateId);
+          if (!project) return nextBase;
+          const firstMate = projectFirstMateEvent(
+            project.firstMate ?? createEmptyFirstMateWorkspace(project.id, project.createdAt),
+            { ...payload, occurredAt: event.occurredAt },
+          );
+          return {
+            ...nextBase,
+            projects: nextBase.projects.map((entry) =>
+              entry.id === project.id
+                ? { ...entry, firstMate, updatedAt: event.occurredAt }
+                : entry,
+            ),
+          };
+        }),
       );
 
     case "thread.created":

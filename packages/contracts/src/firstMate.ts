@@ -8,7 +8,6 @@ import {
   ThreadId,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
-import { OrchestrationSessionStatus, ThreadDeliveryStatus } from "./orchestration.ts";
 
 export const FirstMateTopicId = TrimmedNonEmptyString.pipe(Schema.brand("FirstMateTopicId"));
 export type FirstMateTopicId = typeof FirstMateTopicId.Type;
@@ -195,46 +194,9 @@ export const FirstMateEvent = Schema.Union([
 ]);
 export type FirstMateEvent = typeof FirstMateEvent.Type;
 
-export const FirstMateTopicOperationalStatus = Schema.Literals([
-  "queued",
-  "researching",
-  "planning",
-  "implementing",
-  "testing",
-  "waiting-user",
-  "waiting-ci",
-  "waiting-deploy",
-  "validating-deploy",
-  "waiting-activation",
-  "working",
-  "monitoring",
-  "blocked",
-  "completed",
-]);
-export type FirstMateTopicOperationalStatus = typeof FirstMateTopicOperationalStatus.Type;
-
 export const FirstMateMachineAlertSummary = Schema.Struct({
   informational: NonNegativeInt,
   attention: NonNegativeInt,
   critical: NonNegativeInt,
 });
 export type FirstMateMachineAlertSummary = typeof FirstMateMachineAlertSummary.Type;
-
-export const FirstMateTopicRuntimeFacts = Schema.Struct({
-  sessionStatus: Schema.NullOr(OrchestrationSessionStatus),
-  pendingUserInputCount: NonNegativeInt,
-  pendingApprovalCount: NonNegativeInt,
-  pendingFirstMateDecisionCount: NonNegativeInt,
-  backgroundLiveness: Schema.NullOr(Schema.Literals(["working", "monitoring"])),
-  deliveryStatus: Schema.NullOr(ThreadDeliveryStatus),
-  machineAlerts: FirstMateMachineAlertSummary,
-});
-export type FirstMateTopicRuntimeFacts = typeof FirstMateTopicRuntimeFacts.Type;
-
-export const FirstMateTopicReadModel = Schema.Struct({
-  ...FirstMateTopic.fields,
-  operationalStatus: FirstMateTopicOperationalStatus,
-  pendingDecisionCount: NonNegativeInt,
-  machineAlerts: FirstMateMachineAlertSummary,
-});
-export type FirstMateTopicReadModel = typeof FirstMateTopicReadModel.Type;

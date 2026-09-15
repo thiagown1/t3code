@@ -21,6 +21,7 @@ import {
   threadPullRequestKeysEqual,
 } from "@t3tools/shared/threadPullRequests";
 import { compareDateTimeStrings } from "@t3tools/shared/dateTime";
+import { createEmptyFirstMateWorkspace, decideFirstMateCommand } from "@t3tools/shared/firstMate";
 import * as DateTime from "effect/DateTime";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
@@ -362,6 +363,45 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           deletedAt: occurredAt,
         },
       };
+    }
+
+    case "firstmate.supervisor.link":
+    case "firstmate.topic.create":
+    case "firstmate.topic.update":
+    case "firstmate.topic.delegate":
+    case "firstmate.decision.open":
+    case "firstmate.decision.resolve":
+    case "firstmate.decision.cancel": {
+      const project = yield* requireProject({
+        readModel,
+        command,
+        projectId: command.projectId,
+      });
+      const decision = decideFirstMateCommand(
+        project.firstMate ?? createEmptyFirstMateWorkspace(project.id, project.createdAt),
+        command,
+      );
+      if (!decision.accepted) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `FirstMate command rejected: ${decision.reason}.`,
+        });
+      }
+
+      return yield* Effect.forEach(decision.events, (domainEvent) =>
+        withEventBase({
+          aggregateKind: "project",
+          aggregateId: command.projectId,
+          occurredAt: domainEvent.occurredAt,
+          commandId: command.commandId,
+        }).pipe(
+          Effect.map((base): PlannedOrchestrationEvent => ({
+            ...base,
+            type: "firstmate.domain-event",
+            payload: domainEvent,
+          })),
+        ),
+      );
     }
 
     case "thread.create": {
