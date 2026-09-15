@@ -157,6 +157,7 @@ import {
   animateSidebarLayoutChanges,
   applySidebarThreadDrop,
   buildBulkTitleRegenerationContextMenuItem,
+  buildBulkThreadBundleExportContextMenuItem,
   buildBulkUnpinContextMenuItem,
   deleteSelectedThreadEntries,
   filterSidebarProjectScopeItems,
@@ -4005,6 +4006,7 @@ export default function Sidebar() {
               : []),
             ...(titleRegenerationMenuItem ? [titleRegenerationMenuItem] : []),
             { id: "mark-unread", label: `Mark unread (${count})` },
+            buildBulkThreadBundleExportContextMenuItem(count),
             { id: "delete", label: `Delete (${count})`, destructive: true },
           ],
           position,
@@ -4125,6 +4127,12 @@ export default function Sidebar() {
         clearSelection();
         return;
       }
+      if (clicked.value === "export-thread-bundle") {
+        await exportThreadBundle(
+          selectedThreads.map((thread) => scopeThreadRef(thread.environmentId, thread.id)),
+        );
+        return;
+      }
       if (clicked.value !== "delete") return;
       if (confirmThreadDelete) {
         const confirmed = await settlePromise(() =>
@@ -4172,6 +4180,7 @@ export default function Sidebar() {
       clearSelection,
       confirmThreadDelete,
       deleteThread,
+      exportThreadBundle,
       markThreadUnread,
       performSnooze,
       removeFromSelection,

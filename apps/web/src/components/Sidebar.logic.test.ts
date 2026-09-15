@@ -7,6 +7,7 @@ import {
   applySidebarThreadDrop,
   archiveSelectedThreadEntries,
   buildBulkTitleRegenerationContextMenuItem,
+  buildBulkThreadBundleExportContextMenuItem,
   buildBulkUnpinContextMenuItem,
   buildMultiSelectThreadContextMenuItems,
   createThreadJumpHintVisibilityController,
@@ -304,6 +305,24 @@ describe("buildMultiSelectThreadContextMenuItems", () => {
     expect(
       buildMultiSelectThreadContextMenuItems({ count: 2, hasRunningThread: true }),
     ).toContainEqual({ id: "archive", label: "Archive (2)", disabled: true });
+  });
+});
+
+describe("buildBulkThreadBundleExportContextMenuItem", () => {
+  it("offers one reviewed bundle for the selected threads", () => {
+    expect(buildBulkThreadBundleExportContextMenuItem(3)).toEqual({
+      id: "export-thread-bundle",
+      label: "Export Thread Bundle (3)",
+      disabled: false,
+    });
+  });
+
+  it("fails closed above the server-side selection limit", () => {
+    expect(buildBulkThreadBundleExportContextMenuItem(51)).toEqual({
+      id: "export-thread-bundle",
+      label: "Export Thread Bundle (51; max 50)",
+      disabled: true,
+    });
   });
 });
 

@@ -1,8 +1,17 @@
-import type { MessageId, ProjectId, ThreadBundle, ThreadId } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  MessageId,
+  ProjectId,
+  ScopedThreadRef,
+  ThreadBundle,
+  ThreadId,
+} from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
   buildThreadBundleReviewMessage,
+  combineThreadBundleExports,
+  planThreadBundleExportRequests,
   summarizeThreadBundle,
   threadBundleDownloadName,
 } from "./threadBundleExport";
@@ -78,5 +87,57 @@ describe("Thread Bundle export review", () => {
     expect(threadBundleDownloadName(bundle)).toBe(
       "t3-thread-bundle-conversa-de-implantacao-producao-2026-09-15T12-34-56-000Z.json",
     );
+  });
+
+  it("groups a selection by environment without losing its total limit", () => {
+    const requests = planThreadBundleExportRequests([
+      { environmentId: "environment-1" as EnvironmentId, threadId: "thread-1" as ThreadId },
+      { environmentId: "environment-2" as EnvironmentId, threadId: "thread-2" as ThreadId },
+      { environmentId: "environment-1" as EnvironmentId, threadId: "thread-3" as ThreadId },
+    ] satisfies ReadonlyArray<ScopedThreadRef>);
+
+    expect(requests).toEqual([
+      {
+        environmentId: "environment-1",
+        input: { threadIds: ["thread-1", "thread-3"] },
+      },
+      { environmentId: "environment-2", input: { threadIds: ["thread-2"] } },
+    ]);
+    expect(() => planThreadBundleExportRequests([])).toThrow("at least one thread");
+    expect(() =>
+      planThreadBundleExportRequests(
+        Array.from({ length: 51 }, (_, index) => ({
+          environmentId: "environment-1" as EnvironmentId,
+          threadId: `thread-${index}` as ThreadId,
+        })),
+      ),
+    ).toThrow("at most 50 threads");
+  });
+
+  it("combines sanitized exports from multiple environments into one canonical bundle", () => {
+    const secondBundle: ThreadBundle = {
+      ...bundle,
+      bundleId: "bundle-2",
+      exportedAt: "2026-09-15T12:35:00.000Z",
+      threads: [
+        {
+          ...bundle.threads[0]!,
+          sourceEnvironmentId: "environment-2",
+          sourceThreadId: "thread-2" as ThreadId,
+          title: "Second conversation",
+        },
+      ],
+    };
+
+    const combined = combineThreadBundleExports([bundle, secondBundle]);
+    expect(combined).toMatchObject({
+      schemaVersion: 1,
+      bundleId: "bundle-1",
+      exportedAt: "2026-09-15T12:35:00.000Z",
+    });
+    expect(combined.threads.map((thread) => thread.sourceEnvironmentId)).toEqual([
+      "environment-1",
+      "environment-2",
+    ]);
   });
 });

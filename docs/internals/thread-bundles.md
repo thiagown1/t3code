@@ -54,3 +54,8 @@ prepares the sanitized snapshot first, then presents the portable-content counts
 limitations, and every omission category before download. Cancelling that review creates no file;
 confirming downloads the canonical JSON with a filesystem-safe name. The review also warns that
 free-form message and plan text can still contain sensitive information.
+
+The sidebar's existing multi-selection menu can export up to fifty selected threads as one reviewed
+bundle. Selections spanning connected environments are read independently from each authoritative
+server and combined only after every sanitized export succeeds; a failure produces no download.
+The combined bundle preserves each thread's source environment identity for duplicate detection.

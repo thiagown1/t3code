@@ -1,5 +1,10 @@
-import type { ThreadBundle, ThreadBundleOmissionKind } from "@t3tools/contracts";
-import { serializeThreadBundle } from "@t3tools/shared/threadBundle";
+import type {
+  ScopedThreadRef,
+  ThreadBundle,
+  ThreadBundleExportInput,
+  ThreadBundleOmissionKind,
+} from "@t3tools/contracts";
+import { normalizeThreadBundle, serializeThreadBundle } from "@t3tools/shared/threadBundle";
 
 const OMISSION_LABELS: Record<
   ThreadBundleOmissionKind,
@@ -49,6 +54,53 @@ export interface ThreadBundleReviewSummary {
     readonly kind: ThreadBundleOmissionKind;
     readonly count: number;
   }>;
+}
+
+export interface ThreadBundleExportRequest {
+  readonly environmentId: ScopedThreadRef["environmentId"];
+  readonly input: ThreadBundleExportInput;
+}
+
+export function planThreadBundleExportRequests(
+  threadRefs: ReadonlyArray<ScopedThreadRef>,
+): ReadonlyArray<ThreadBundleExportRequest> {
+  if (threadRefs.length === 0) {
+    throw new Error("Thread Bundle export requires at least one thread");
+  }
+  if (threadRefs.length > 50) {
+    throw new Error("Thread Bundle export supports at most 50 threads");
+  }
+  const seen = new Set<string>();
+  const byEnvironment = new Map<ScopedThreadRef["environmentId"], ScopedThreadRef["threadId"][]>();
+  for (const threadRef of threadRefs) {
+    const key = `${threadRef.environmentId}:${threadRef.threadId}`;
+    if (seen.has(key)) throw new Error("Thread Bundle export contains a duplicate thread");
+    seen.add(key);
+    const threadIds = byEnvironment.get(threadRef.environmentId) ?? [];
+    threadIds.push(threadRef.threadId);
+    byEnvironment.set(threadRef.environmentId, threadIds);
+  }
+  return [...byEnvironment].map(([environmentId, threadIds]) => ({
+    environmentId,
+    input: { threadIds },
+  }));
+}
+
+export function combineThreadBundleExports(bundles: ReadonlyArray<ThreadBundle>): ThreadBundle {
+  if (bundles.length === 0) {
+    throw new Error("Thread Bundle export produced no source bundles");
+  }
+  if (bundles.length === 1) return bundles[0]!;
+  const first = bundles[0]!;
+  return normalizeThreadBundle({
+    schemaVersion: 1,
+    bundleId: first.bundleId,
+    exportedAt: bundles.reduce(
+      (latest, bundle) => (bundle.exportedAt > latest ? bundle.exportedAt : latest),
+      first.exportedAt,
+    ),
+    threads: bundles.flatMap((bundle) => bundle.threads),
+  });
 }
 
 export function summarizeThreadBundle(bundle: ThreadBundle): ThreadBundleReviewSummary {

@@ -476,6 +476,19 @@ export function buildMultiSelectThreadContextMenuItems(input: {
   ];
 }
 
+export function buildBulkThreadBundleExportContextMenuItem(
+  count: number,
+): ContextMenuItem<"export-thread-bundle"> {
+  const overLimit = count > 50;
+  return {
+    id: "export-thread-bundle",
+    label: overLimit
+      ? `Export Thread Bundle (${count}; max 50)`
+      : `Export Thread Bundle (${count})`,
+    disabled: overLimit,
+  };
+}
+
 export function buildBulkTitleRegenerationContextMenuItem(input: {
   supportedCount: number;
   actionableCount: number;
