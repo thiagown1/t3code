@@ -2951,6 +2951,59 @@ export default function Sidebar() {
     },
     [setFirstMateRoutingEvaluationMode],
   );
+  const handleFirstMateSetWaitingDeploy = useCallback(
+    async (threadRef: ScopedThreadRef) => {
+      const result = await updateThreadMetadata({
+        environmentId: threadRef.environmentId,
+        input: { threadId: threadRef.threadId, deliveryStatus: "waiting-deploy" },
+      });
+      if (result._tag === "Success") return true;
+      if (!isAtomCommandInterrupted(result)) {
+        const error = squashAtomCommandFailure(result);
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Failed to update delivery status",
+            description: error instanceof Error ? error.message : "An error occurred.",
+          }),
+        );
+      }
+      return false;
+    },
+    [updateThreadMetadata],
+  );
+  const handleFirstMateArchiveThread = useCallback(
+    async (threadRef: ScopedThreadRef) => {
+      const thread = threads.find(
+        (candidate) =>
+          candidate.environmentId === threadRef.environmentId &&
+          candidate.id === threadRef.threadId,
+      );
+      if (thread === undefined) return false;
+      if (confirmThreadArchive) {
+        const api = readLocalApi();
+        if (api === undefined) return false;
+        const confirmed = await settlePromise(() =>
+          api.dialogs.confirm(`Archive thread "${thread.title}"?`),
+        );
+        if (confirmed._tag === "Failure" || !confirmed.value) return false;
+      }
+      const result = await archiveThread(threadRef);
+      if (result._tag === "Success") return true;
+      if (!isAtomCommandInterrupted(result)) {
+        const error = squashAtomCommandFailure(result);
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Failed to archive thread",
+            description: error instanceof Error ? error.message : "An error occurred.",
+          }),
+        );
+      }
+      return false;
+    },
+    [archiveThread, confirmThreadArchive, threads],
+  );
 
   // Dropping files on a row opens that thread and attaches the files there.
   // The composer only accepts drops for its OWN thread, so when the row is
@@ -4695,6 +4748,8 @@ export default function Sidebar() {
           hidden={isSearchingThreads}
           onSelectTopic={handleSelectFirstMateTopic}
           onSetRoutingEvaluationMode={handleSetFirstMateRoutingEvaluationMode}
+          onSetWaitingDeploy={handleFirstMateSetWaitingDeploy}
+          onArchiveThread={handleFirstMateArchiveThread}
           onOpenThread={navigateToThread}
         />
         <SidebarGroup className="ps-[calc(var(--sidebar-content-inset)+1px)] pe-[var(--sidebar-content-inset)] pb-1 pt-0 flex-1">

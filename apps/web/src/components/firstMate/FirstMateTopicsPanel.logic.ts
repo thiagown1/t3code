@@ -30,6 +30,7 @@ export interface FirstMatePanelItem {
   readonly responsibleAgentId: string | null;
   readonly threadId: ThreadId | null;
   readonly pullRequests: ReadonlyArray<FirstMatePanelPullRequest>;
+  readonly postMergeActionRequired: boolean;
   readonly updatedAt: string;
 }
 
@@ -157,6 +158,7 @@ function statusFromPullRequests(
   pullRequests: ReadonlyArray<FirstMatePanelPullRequest>,
 ): FirstMateTopicOperationalStatus {
   if (pullRequests.length === 0 || current === "waiting-user") return current;
+  if (pullRequests.every((pullRequest) => pullRequest.status === "merged")) return "waiting-user";
   if (
     pullRequests.some((pullRequest) =>
       ["action-required", "failing", "inconclusive", "conflicting", "stale"].includes(
@@ -223,6 +225,10 @@ export function buildFirstMatePanelModel(input: {
         machineAlerts: ZERO_MACHINE_ALERTS,
       });
       const pullRequests = firstMatePanelPullRequests(thread?.pullRequests ?? [], nowMs);
+      const postMergeActionRequired =
+        pullRequests.length > 0 &&
+        pullRequests.every((pullRequest) => pullRequest.status === "merged") &&
+        (thread?.deliveryStatus == null || thread.deliveryStatus === "waiting-ci");
       return {
         key: `${project.environmentId}:${project.id}:${topic.id}`,
         environmentId: project.environmentId,
@@ -240,6 +246,7 @@ export function buildFirstMatePanelModel(input: {
         responsibleAgentId: topic.responsibleAgentId,
         threadId: topic.threadId,
         pullRequests,
+        postMergeActionRequired,
         updatedAt: topic.updatedAt,
       };
     });

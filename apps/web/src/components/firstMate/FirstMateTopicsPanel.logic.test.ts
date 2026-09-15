@@ -287,4 +287,34 @@ describe("FirstMate topics panel model", () => {
     expect(stale[0]?.status).toBe("stale");
     expect(inconclusive[0]?.status).toBe("inconclusive");
   });
+
+  it("asks the operator to choose deploy or archive after every PR merges", () => {
+    const merged = pullRequest(42, {
+      state: "merged",
+      mergedAt: now,
+      checksState: "passing",
+      checks: [{ name: "CI", status: "success", description: null, url: null }],
+    });
+    const awaitingChoice = buildFirstMatePanelModel({
+      projects: [project(workspace)],
+      threads: [thread({ pullRequests: [merged] })],
+      scopedProjectKeys: null,
+      nowMs: Date.parse(now),
+    });
+    const waitingDeploy = buildFirstMatePanelModel({
+      projects: [project(workspace)],
+      threads: [thread({ pullRequests: [merged], deliveryStatus: "waiting-deploy" })],
+      scopedProjectKeys: null,
+      nowMs: Date.parse(now),
+    });
+
+    expect(awaitingChoice.items[0]).toMatchObject({
+      status: "waiting-user",
+      postMergeActionRequired: true,
+    });
+    expect(waitingDeploy.items[0]).toMatchObject({
+      status: "waiting-deploy",
+      postMergeActionRequired: false,
+    });
+  });
 });

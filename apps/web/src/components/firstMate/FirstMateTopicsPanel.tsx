@@ -10,11 +10,13 @@ import type {
   ScopedThreadRef,
 } from "@t3tools/contracts";
 import {
+  ArchiveIcon,
   ChevronDownIcon,
   CircleDotIcon,
   GitPullRequestIcon,
   Layers3Icon,
   MessageCircleQuestionIcon,
+  RocketIcon,
 } from "lucide-react";
 import { useMemo, useState } from "react";
 
@@ -46,6 +48,8 @@ interface FirstMateTopicsPanelProps {
   readonly onSetRoutingEvaluationMode: (
     request: SetFirstMateRoutingEvaluationModeRequest,
   ) => Promise<boolean>;
+  readonly onSetWaitingDeploy: (thread: ScopedThreadRef) => Promise<boolean>;
+  readonly onArchiveThread: (thread: ScopedThreadRef) => Promise<boolean>;
   readonly onOpenThread: (thread: ScopedThreadRef) => void;
 }
 
@@ -100,11 +104,14 @@ export function FirstMateTopicsPanel({
   hidden = false,
   onSelectTopic,
   onSetRoutingEvaluationMode,
+  onSetWaitingDeploy,
+  onArchiveThread,
   onOpenThread,
 }: FirstMateTopicsPanelProps) {
   const [expanded, setExpanded] = useState(true);
   const [selectingKey, setSelectingKey] = useState<string | null>(null);
   const [settingRoutingEvaluation, setSettingRoutingEvaluation] = useState(false);
+  const [actingKey, setActingKey] = useState<string | null>(null);
   const model = useMemo(
     () => buildFirstMatePanelModel({ projects, threads, scopedProjectKeys }),
     [projects, scopedProjectKeys, threads],
@@ -249,6 +256,40 @@ export function FirstMateTopicsPanel({
                       </span>
                     </span>
                   </button>
+                  {item.postMergeActionRequired && item.threadId !== null ? (
+                    <>
+                      <button
+                        type="button"
+                        aria-label={`Mark ${item.title} as waiting to deploy`}
+                        disabled={actingKey !== null}
+                        onClick={() => {
+                          setActingKey(item.key);
+                          void onSetWaitingDeploy({
+                            environmentId: item.environmentId,
+                            threadId: item.threadId!,
+                          }).finally(() => setActingKey(null));
+                        }}
+                        className="my-1 flex w-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-violet-500 outline-none hover:bg-sidebar-row-hover focus-visible:ring-2 focus-visible:ring-sidebar-ring disabled:cursor-wait disabled:opacity-50"
+                      >
+                        <RocketIcon aria-hidden className="size-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        aria-label={`Archive ${item.title}`}
+                        disabled={actingKey !== null}
+                        onClick={() => {
+                          setActingKey(item.key);
+                          void onArchiveThread({
+                            environmentId: item.environmentId,
+                            threadId: item.threadId!,
+                          }).finally(() => setActingKey(null));
+                        }}
+                        className="my-1 flex w-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-sidebar-muted-foreground outline-none hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring disabled:cursor-wait disabled:opacity-50"
+                      >
+                        <ArchiveIcon aria-hidden className="size-3.5" />
+                      </button>
+                    </>
+                  ) : null}
                   <button
                     type="button"
                     aria-label={

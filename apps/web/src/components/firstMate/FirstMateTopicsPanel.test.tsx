@@ -79,6 +79,8 @@ describe("FirstMateTopicsPanel", () => {
         scopedProjectKeys={null}
         onSelectTopic={async () => true}
         onSetRoutingEvaluationMode={async () => true}
+        onSetWaitingDeploy={async () => true}
+        onArchiveThread={async () => true}
         onOpenThread={() => {}}
       />,
     );
@@ -117,6 +119,8 @@ describe("FirstMateTopicsPanel", () => {
         scopedProjectKeys={null}
         onSelectTopic={async () => true}
         onSetRoutingEvaluationMode={async () => true}
+        onSetWaitingDeploy={async () => true}
+        onArchiveThread={async () => true}
         onOpenThread={() => {}}
       />,
     );
@@ -187,6 +191,8 @@ describe("FirstMateTopicsPanel", () => {
         scopedProjectKeys={null}
         onSelectTopic={async () => true}
         onSetRoutingEvaluationMode={async () => true}
+        onSetWaitingDeploy={async () => true}
+        onArchiveThread={async () => true}
         onOpenThread={() => {}}
       />,
     );
@@ -195,5 +201,74 @@ describe("FirstMateTopicsPanel", () => {
     expect(markup).toContain("abcdef1");
     expect(markup).toContain("Ready to merge");
     expect(markup).toContain("acme/web#12 at abcdef1234567890");
+  });
+
+  it("offers explicit deploy or archive choices after every linked PR merges", () => {
+    const markup = renderToStaticMarkup(
+      <FirstMateTopicsPanel
+        projects={[
+          {
+            ...baseProject,
+            firstMate: {
+              ...baseProject.firstMate!,
+              topics: [
+                {
+                  id: FirstMateTopicId.make("topic-1"),
+                  projectId,
+                  title: "Release task",
+                  summary: "Choose the post-merge step.",
+                  stage: "testing",
+                  threadId,
+                  responsibleAgentId: "firstmate",
+                  createdAt: now,
+                  updatedAt: now,
+                  completedAt: null,
+                },
+              ],
+            },
+          },
+        ]}
+        threads={[
+          {
+            ...linkedThread,
+            deliveryStatus: null,
+            pullRequests: [
+              {
+                host: "github.com",
+                repository: "acme/web",
+                number: 12,
+                url: "https://github.com/acme/web/pull/12",
+                source: "agent",
+                linkedAt: now,
+                stack: null,
+                snapshot: {
+                  state: "merged",
+                  title: "Ship UI",
+                  headBranch: "feature/ui",
+                  headSha: "abcdef1234567890",
+                  baseBranch: "main",
+                  isDraft: false,
+                  updatedAt: now,
+                  syncedAt: now,
+                  mergedAt: now,
+                  checksState: "passing",
+                  checks: [{ name: "CI", status: "success", description: null, url: null }],
+                },
+              },
+            ],
+          },
+        ]}
+        scopedProjectKeys={null}
+        onSelectTopic={async () => true}
+        onSetRoutingEvaluationMode={async () => true}
+        onSetWaitingDeploy={async () => true}
+        onArchiveThread={async () => true}
+        onOpenThread={() => {}}
+      />,
+    );
+
+    expect(markup).toContain("Waiting for you");
+    expect(markup).toContain('aria-label="Mark Release task as waiting to deploy"');
+    expect(markup).toContain('aria-label="Archive Release task"');
   });
 });

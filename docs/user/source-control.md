@@ -162,6 +162,10 @@ T3 Code does not merge, deploy, or activate a feature automatically. When a fres
 to **Ready to merge**, the normal in-app or desktop notification settings alert you and open the
 owning thread; the same head does not notify repeatedly while it stays green.
 
+After every linked pull request is merged, FirstMate asks for the operator-owned next step. Choose
+the rocket action to keep the thread visible as **Waiting to deploy**, or archive it when no deploy,
+feature flag, or post-deploy validation remains. Neither action is selected automatically.
+
 Cross-repository links use a project on the same host. Azure DevOps reviews require a project checked
 out from the matching organization and repository.
 
