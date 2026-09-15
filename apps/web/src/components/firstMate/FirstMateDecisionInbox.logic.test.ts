@@ -38,6 +38,7 @@ function project(
     firstMate: {
       projectId,
       supervisorThreadId: null,
+      selectedTopicId: null,
       topics: [
         {
           id: topicId,

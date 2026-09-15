@@ -81,3 +81,18 @@ without adding a polling loop. The inbox intentionally does not invent provider
 replies: delivering the recorded answer into a provider approval, user-input
 request, or a new agent turn belongs to deterministic routing and must be
 fail-closed when the source cannot be mapped exactly.
+
+## Deterministic topic routing
+
+The selected topic is a durable workspace fact. The sidebar exposes one
+explicit active-topic control for delegated topics; selection is persisted by a
+typed project command and replayed with the other FirstMate facts. Workspaces
+stored before this field existed decode with no selected topic.
+
+The pure router uses the selected topic by default. A canonical
+`@topic:<encoded-topic-id>` mention overrides it only when exactly one known
+topic is named. Missing selections, unknown or multiple mentions, stale topic
+references, and topics without a linked thread return `needs-confirmation`
+instead of guessing. This increment does not yet dispatch the routed message;
+the supervisor composer must consume this result and preserve the same
+fail-closed behavior before automatic routing is enabled.

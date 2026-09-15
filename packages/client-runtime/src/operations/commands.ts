@@ -58,6 +58,7 @@ export type RevertThreadCheckpointInput = CommandInput<"thread.checkpoint.revert
 };
 export type StopThreadSessionInput = CommandInput<"thread.session.stop">;
 export type CreateFirstMateTopicInput = CommandInput<"firstmate.topic.create">;
+export type SelectFirstMateTopicInput = CommandInput<"firstmate.topic.select">;
 export type OpenFirstMateDecisionInput = CommandInput<"firstmate.decision.open">;
 export type ResolveFirstMateDecisionInput = CommandInput<"firstmate.decision.resolve">;
 export type CancelFirstMateDecisionInput = CommandInput<"firstmate.decision.cancel">;
@@ -103,6 +104,18 @@ export const createFirstMateTopic: (input: CreateFirstMateTopicInput) => Command
   return yield* dispatch({
     ...input,
     type: "firstmate.topic.create",
+    commandId: metadata.commandId,
+    createdAt: metadata.createdAt,
+  });
+});
+
+export const selectFirstMateTopic: (input: SelectFirstMateTopicInput) => CommandEffect = Effect.fn(
+  "EnvironmentCommands.selectFirstMateTopic",
+)(function* (input) {
+  const metadata = yield* timestampedCommandMetadata(input);
+  return yield* dispatch({
+    ...input,
+    type: "firstmate.topic.select",
     commandId: metadata.commandId,
     createdAt: metadata.createdAt,
   });

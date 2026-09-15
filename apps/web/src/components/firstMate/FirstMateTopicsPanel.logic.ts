@@ -19,6 +19,7 @@ export interface FirstMatePanelItem {
   readonly projectId: ProjectId;
   readonly projectTitle: string;
   readonly topicId: FirstMateTopicId;
+  readonly selected: boolean;
   readonly title: string;
   readonly summary: string;
   readonly status: FirstMateTopicOperationalStatus;
@@ -105,6 +106,7 @@ export function buildFirstMatePanelModel(input: {
         projectId: project.id,
         projectTitle: project.title,
         topicId: topic.id,
+        selected: workspace.selectedTopicId === topic.id,
         title: topic.title,
         summary: topic.summary,
         status: readModel.operationalStatus,

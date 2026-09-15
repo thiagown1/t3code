@@ -30,6 +30,7 @@ const project: EnvironmentProject = {
   firstMate: {
     projectId,
     supervisorThreadId: null,
+    selectedTopicId: null,
     topics: [
       {
         id: topicId,

@@ -34,6 +34,7 @@ const baseProject: EnvironmentProject = {
   firstMate: {
     projectId,
     supervisorThreadId: null,
+    selectedTopicId: null,
     topics: [],
     decisions: [],
     updatedAt: now,
@@ -74,6 +75,7 @@ describe("FirstMateTopicsPanel", () => {
         projects={[baseProject]}
         threads={[]}
         scopedProjectKeys={null}
+        onSelectTopic={async () => true}
         onOpenThread={() => {}}
       />,
     );
@@ -90,6 +92,7 @@ describe("FirstMateTopicsPanel", () => {
             ...baseProject,
             firstMate: {
               ...baseProject.firstMate!,
+              selectedTopicId: FirstMateTopicId.make("topic-1"),
               topics: [
                 {
                   id: FirstMateTopicId.make("topic-1"),
@@ -109,6 +112,7 @@ describe("FirstMateTopicsPanel", () => {
         ]}
         threads={[linkedThread]}
         scopedProjectKeys={null}
+        onSelectTopic={async () => true}
         onOpenThread={() => {}}
       />,
     );
@@ -117,5 +121,7 @@ describe("FirstMateTopicsPanel", () => {
     expect(markup).toContain("Show durable topics in place.");
     expect(markup).toContain("Waiting to deploy");
     expect(markup).toContain("firstmate");
+    expect(markup).toContain("FirstMate panel is the active topic");
+    expect(markup).toContain('aria-pressed="true"');
   });
 });

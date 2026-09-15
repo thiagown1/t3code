@@ -71,6 +71,7 @@ function commandToAggregateRef(command: OrchestrationCommand): {
     case "project.delete":
     case "firstmate.supervisor.link":
     case "firstmate.topic.create":
+    case "firstmate.topic.select":
     case "firstmate.topic.update":
     case "firstmate.topic.delegate":
     case "firstmate.decision.open":

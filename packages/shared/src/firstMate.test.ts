@@ -14,11 +14,14 @@ import {
   decideFirstMateCommand,
   deriveFirstMateTopicReadModel,
   deriveFirstMateTopicStatus,
+  firstMateTopicMention,
   replayFirstMateEvents,
+  routeFirstMateMessage,
 } from "./firstMate.ts";
 
 const projectId = ProjectId.make("project-1");
 const topicId = FirstMateTopicId.make("topic-1");
+const secondTopicId = FirstMateTopicId.make("topic-2");
 const decisionId = FirstMateDecisionId.make("decision-1");
 
 type WithoutCommandBase<Value> = Value extends FirstMateCommand
@@ -98,6 +101,29 @@ describe("FirstMate domain", () => {
     ).toEqual({ accepted: false, reason: "topic-not-found" });
   });
 
+  it("persists the selected topic and rejects an unknown selection", () => {
+    const empty = createEmptyFirstMateWorkspace(projectId, "2026-09-14T19:00:00.000Z");
+    let state = accept(empty, topicCreate());
+    state = accept(
+      state,
+      command({
+        type: "firstmate.topic.select",
+        topicId,
+      }),
+    );
+
+    expect(state.selectedTopicId).toBe(topicId);
+    expect(
+      decideFirstMateCommand(
+        state,
+        command({
+          type: "firstmate.topic.select",
+          topicId: secondTopicId,
+        }),
+      ),
+    ).toEqual({ accepted: false, reason: "topic-not-found" });
+  });
+
   it("keeps a decision pinned until it is explicitly resolved", () => {
     let state = accept(
       createEmptyFirstMateWorkspace(projectId, "2026-09-14T19:00:00.000Z"),
@@ -167,6 +193,98 @@ describe("FirstMate domain", () => {
         }),
       ),
     ).toEqual({ accepted: false, reason: "decision-option-not-found" });
+  });
+});
+
+describe("FirstMate deterministic routing", () => {
+  function routingWorkspace() {
+    let state = createEmptyFirstMateWorkspace(projectId, "2026-09-14T19:00:00.000Z");
+    state = accept(state, topicCreate());
+    state = accept(
+      state,
+      command({
+        type: "firstmate.topic.create",
+        topicId: secondTopicId,
+        title: "CI checks",
+        summary: "Keep checks current.",
+        stage: "implementation",
+        threadId: ThreadId.make("thread-2"),
+        responsibleAgentId: "agent-2",
+      }),
+    );
+    return accept(
+      state,
+      command({
+        type: "firstmate.topic.select",
+        topicId,
+      }),
+    );
+  }
+
+  it("routes to the selected topic by default", () => {
+    expect(routeFirstMateMessage(routingWorkspace(), "Continue the implementation.")).toEqual({
+      status: "routed",
+      reason: "selected-topic",
+      topicId,
+      threadId: ThreadId.make("thread-1"),
+      message: "Continue the implementation.",
+    });
+  });
+
+  it("lets one exact topic mention override the selected topic", () => {
+    const message = `${firstMateTopicMention(secondTopicId)} Re-run the current checks.`;
+
+    expect(routeFirstMateMessage(routingWorkspace(), message)).toEqual({
+      status: "routed",
+      reason: "explicit-mention",
+      topicId: secondTopicId,
+      threadId: ThreadId.make("thread-2"),
+      message,
+    });
+  });
+
+  it("fails closed when the destination is missing, ambiguous, or not delegated", () => {
+    const state = routingWorkspace();
+    const withoutSelection = { ...state, selectedTopicId: null };
+    expect(routeFirstMateMessage(withoutSelection, "Continue.")).toMatchObject({
+      status: "needs-confirmation",
+      reason: "no-selected-topic",
+      candidateTopicIds: [topicId, secondTopicId],
+    });
+
+    expect(
+      routeFirstMateMessage(
+        state,
+        `${firstMateTopicMention(topicId)} ${firstMateTopicMention(secondTopicId)} Continue.`,
+      ),
+    ).toMatchObject({
+      status: "needs-confirmation",
+      reason: "multiple-topic-mentions",
+      candidateTopicIds: [topicId, secondTopicId],
+    });
+
+    expect(
+      routeFirstMateMessage(
+        state,
+        `${firstMateTopicMention(FirstMateTopicId.make("missing"))} Continue.`,
+      ),
+    ).toEqual({
+      status: "needs-confirmation",
+      reason: "mentioned-topic-not-found",
+      candidateTopicIds: [],
+    });
+
+    const undelegated = {
+      ...state,
+      topics: state.topics.map((topic) =>
+        topic.id === topicId ? { ...topic, threadId: null } : topic,
+      ),
+    };
+    expect(routeFirstMateMessage(undelegated, "Continue.")).toEqual({
+      status: "needs-confirmation",
+      reason: "topic-not-delegated",
+      candidateTopicIds: [topicId],
+    });
   });
 });
 

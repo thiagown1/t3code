@@ -241,8 +241,11 @@ import {
   FirstMateDecisionInbox,
   type ResolveFirstMateDecisionRequest,
 } from "./firstMate/FirstMateDecisionInbox";
-import { finalizeFirstMateDecisionCommand } from "./firstMate/FirstMateDecisionInbox.actions";
-import { FirstMateTopicsPanel } from "./firstMate/FirstMateTopicsPanel";
+import {
+  FirstMateTopicsPanel,
+  type SelectFirstMateTopicRequest,
+} from "./firstMate/FirstMateTopicsPanel";
+import { finalizeFirstMateShellCommand } from "./firstMate/firstMateShellCommand";
 import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
 import { Tooltip, TooltipPopup, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 import {
@@ -2173,6 +2176,10 @@ export default function Sidebar() {
     orchestrationEnvironment.cancelFirstMateDecision,
     "cancel FirstMate decision",
   );
+  const selectFirstMateTopic = useAtomCommand(
+    orchestrationEnvironment.selectFirstMateTopic,
+    "select FirstMate topic",
+  );
   const { copyToClipboard: copyPathToClipboard } = useCopyToClipboard<{ path: string }>({
     onCopy: ({ path }) => {
       toastManager.add({
@@ -2861,7 +2868,7 @@ export default function Sidebar() {
       // project-level FirstMate event to an already-open shell subscription.
       // Reconcile from the authoritative shell snapshot so the inbox still
       // updates in place without adding a polling loop.
-      return finalizeFirstMateDecisionCommand({
+      return finalizeFirstMateShellCommand({
         result,
         environmentId: request.environmentId,
         refreshEnvironmentShell: (environmentId) =>
@@ -2879,7 +2886,7 @@ export default function Sidebar() {
           decisionId: request.decisionId,
         },
       });
-      return finalizeFirstMateDecisionCommand({
+      return finalizeFirstMateShellCommand({
         result,
         environmentId: request.environmentId,
         refreshEnvironmentShell: (environmentId) =>
@@ -2887,6 +2894,24 @@ export default function Sidebar() {
       });
     },
     [cancelFirstMateDecision],
+  );
+  const handleSelectFirstMateTopic = useCallback(
+    async (request: SelectFirstMateTopicRequest) => {
+      const result = await selectFirstMateTopic({
+        environmentId: request.environmentId,
+        input: {
+          projectId: request.projectId,
+          topicId: request.topicId,
+        },
+      });
+      return finalizeFirstMateShellCommand({
+        result,
+        environmentId: request.environmentId,
+        refreshEnvironmentShell: (environmentId) =>
+          appAtomRegistry.refresh(environmentShell.stateAtom(environmentId)),
+      });
+    },
+    [selectFirstMateTopic],
   );
 
   // Dropping files on a row opens that thread and attaches the files there.
@@ -4599,6 +4624,7 @@ export default function Sidebar() {
           threads={threads}
           scopedProjectKeys={scopedProjectKeys}
           hidden={isSearchingThreads}
+          onSelectTopic={handleSelectFirstMateTopic}
           onOpenThread={navigateToThread}
         />
         <SidebarGroup className="ps-[calc(var(--sidebar-content-inset)+1px)] pe-[var(--sidebar-content-inset)] pb-1 pt-0 flex-1">

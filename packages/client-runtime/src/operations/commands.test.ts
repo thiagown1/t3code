@@ -32,6 +32,7 @@ import {
   revertThreadCheckpoint,
   reorderActiveThread,
   resolveFirstMateDecision,
+  selectFirstMateTopic,
   settleThread,
   stopThreadSession,
   unsettleThread,
@@ -166,6 +167,30 @@ describe("environment commands", () => {
         "firstmate.decision.open",
       ]);
       expect(dispatched.every((command) => command.commandId.length > 0)).toBe(true);
+    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+  );
+
+  it.effect("dispatches persistent FirstMate topic selection", () =>
+    Effect.gen(function* () {
+      const dispatched: ClientOrchestrationCommand[] = [];
+      const supervisor = yield* makeSupervisor(dispatched);
+
+      yield* selectFirstMateTopic({
+        commandId: CommandId.make("select-firstmate-topic"),
+        projectId: ProjectId.make("project-1"),
+        topicId: FirstMateTopicId.make("topic-1"),
+        createdAt: "2026-09-14T21:00:30.000Z",
+      }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+
+      expect(dispatched).toEqual([
+        {
+          type: "firstmate.topic.select",
+          commandId: "select-firstmate-topic",
+          projectId: "project-1",
+          topicId: "topic-1",
+          createdAt: "2026-09-14T21:00:30.000Z",
+        },
+      ]);
     }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
   );
 

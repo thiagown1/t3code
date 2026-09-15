@@ -2,8 +2,18 @@ import type {
   EnvironmentProject,
   EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/models";
-import type { ScopedThreadRef } from "@t3tools/contracts";
-import { ChevronDownIcon, Layers3Icon, MessageCircleQuestionIcon } from "lucide-react";
+import type {
+  EnvironmentId,
+  FirstMateTopicId,
+  ProjectId,
+  ScopedThreadRef,
+} from "@t3tools/contracts";
+import {
+  ChevronDownIcon,
+  CircleDotIcon,
+  Layers3Icon,
+  MessageCircleQuestionIcon,
+} from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { cn } from "~/lib/utils";
@@ -13,11 +23,18 @@ import {
   type FirstMatePanelItem,
 } from "./FirstMateTopicsPanel.logic";
 
+export interface SelectFirstMateTopicRequest {
+  readonly environmentId: EnvironmentId;
+  readonly projectId: ProjectId;
+  readonly topicId: FirstMateTopicId;
+}
+
 interface FirstMateTopicsPanelProps {
   readonly projects: ReadonlyArray<EnvironmentProject>;
   readonly threads: ReadonlyArray<EnvironmentThreadShell>;
   readonly scopedProjectKeys: ReadonlySet<string> | null;
   readonly hidden?: boolean;
+  readonly onSelectTopic: (request: SelectFirstMateTopicRequest) => Promise<boolean>;
   readonly onOpenThread: (thread: ScopedThreadRef) => void;
 }
 
@@ -50,15 +67,30 @@ export function FirstMateTopicsPanel({
   threads,
   scopedProjectKeys,
   hidden = false,
+  onSelectTopic,
   onOpenThread,
 }: FirstMateTopicsPanelProps) {
   const [expanded, setExpanded] = useState(true);
+  const [selectingKey, setSelectingKey] = useState<string | null>(null);
   const model = useMemo(
     () => buildFirstMatePanelModel({ projects, threads, scopedProjectKeys }),
     [projects, scopedProjectKeys, threads],
   );
 
   if (hidden || projects.length === 0) return null;
+
+  const selectTopic = async (item: FirstMatePanelItem) => {
+    setSelectingKey(item.key);
+    try {
+      await onSelectTopic({
+        environmentId: item.environmentId,
+        projectId: item.projectId,
+        topicId: item.topicId,
+      });
+    } finally {
+      setSelectingKey((current) => (current === item.key ? null : current));
+    }
+  };
 
   return (
     <section
@@ -88,7 +120,7 @@ export function FirstMateTopicsPanel({
         model.availability === "ready" ? (
           <ul aria-live="polite" className="max-h-56 space-y-0.5 overflow-y-auto">
             {model.items.map((item) => (
-              <li key={item.key}>
+              <li key={item.key} className="flex items-stretch gap-0.5">
                 <button
                   type="button"
                   disabled={item.threadId === null}
@@ -96,7 +128,10 @@ export function FirstMateTopicsPanel({
                     if (item.threadId === null) return;
                     onOpenThread({ environmentId: item.environmentId, threadId: item.threadId });
                   }}
-                  className="group flex w-full cursor-pointer items-start gap-2 rounded-md px-2 py-1.5 text-left outline-none active:scale-[0.99] hover:bg-sidebar-row-hover focus-visible:ring-2 focus-visible:ring-sidebar-ring disabled:cursor-default disabled:hover:bg-transparent"
+                  className={cn(
+                    "group flex min-w-0 flex-1 cursor-pointer items-start gap-2 rounded-md px-2 py-1.5 text-left outline-none active:scale-[0.99] hover:bg-sidebar-row-hover focus-visible:ring-2 focus-visible:ring-sidebar-ring disabled:cursor-default disabled:hover:bg-transparent",
+                    item.selected && "bg-sidebar-accent/60",
+                  )}
                 >
                   <span
                     aria-hidden
@@ -143,6 +178,23 @@ export function FirstMateTopicsPanel({
                       </time>
                     </span>
                   </span>
+                </button>
+                <button
+                  type="button"
+                  aria-label={
+                    item.selected
+                      ? `${item.title} is the active topic`
+                      : `Use ${item.title} as active topic`
+                  }
+                  aria-pressed={item.selected}
+                  disabled={item.threadId === null || item.selected || selectingKey !== null}
+                  onClick={() => void selectTopic(item)}
+                  className="my-1 flex w-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-sidebar-muted-foreground outline-none hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring disabled:cursor-default disabled:opacity-50"
+                >
+                  <CircleDotIcon
+                    aria-hidden
+                    className={cn("size-3.5", item.selected && "text-sky-500")}
+                  />
                 </button>
               </li>
             ))}

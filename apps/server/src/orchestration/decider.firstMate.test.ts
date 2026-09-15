@@ -80,6 +80,20 @@ it.layer(NodeServices.layer)("FirstMate orchestration decider", (it) => {
         },
       ]);
 
+      const selectedResult = yield* decideOrchestrationCommand({
+        command: {
+          type: "firstmate.topic.select",
+          commandId: CommandId.make("cmd-firstmate-select-topic"),
+          projectId,
+          topicId,
+          createdAt: now,
+        },
+        readModel: projected,
+      });
+      const selectedEvent = Array.isArray(selectedResult) ? selectedResult[0]! : selectedResult;
+      const selected = yield* projectEvent(projected, { ...selectedEvent, sequence: 3 });
+      assert.equal(selected.projects[0]?.firstMate?.selectedTopicId, topicId);
+
       const duplicate = yield* decideOrchestrationCommand({
         command: {
           type: "firstmate.topic.create",

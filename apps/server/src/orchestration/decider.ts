@@ -367,6 +367,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
 
     case "firstmate.supervisor.link":
     case "firstmate.topic.create":
+    case "firstmate.topic.select":
     case "firstmate.topic.update":
     case "firstmate.topic.delegate":
     case "firstmate.decision.open":

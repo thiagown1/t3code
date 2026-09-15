@@ -1,16 +1,16 @@
 import { EnvironmentId } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import { finalizeFirstMateDecisionCommand } from "./FirstMateDecisionInbox.actions";
+import { finalizeFirstMateShellCommand } from "./firstMateShellCommand";
 
-describe("finalizeFirstMateDecisionCommand", () => {
+describe("finalizeFirstMateShellCommand", () => {
   const environmentId = EnvironmentId.make("environment-local");
 
-  it("refreshes the authoritative shell after a successful decision command", () => {
+  it("refreshes the authoritative shell after a successful command", () => {
     const refreshEnvironmentShell = vi.fn();
 
     expect(
-      finalizeFirstMateDecisionCommand({
+      finalizeFirstMateShellCommand({
         result: { _tag: "Success" },
         environmentId,
         refreshEnvironmentShell,
@@ -20,11 +20,11 @@ describe("finalizeFirstMateDecisionCommand", () => {
     expect(refreshEnvironmentShell).toHaveBeenCalledWith(environmentId);
   });
 
-  it("does not refresh after a failed decision command", () => {
+  it("does not refresh after a failed command", () => {
     const refreshEnvironmentShell = vi.fn();
 
     expect(
-      finalizeFirstMateDecisionCommand({
+      finalizeFirstMateShellCommand({
         result: { _tag: "Failure" },
         environmentId,
         refreshEnvironmentShell,

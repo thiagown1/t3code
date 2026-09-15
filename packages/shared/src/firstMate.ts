@@ -3,6 +3,7 @@ import type {
   FirstMateDecision,
   FirstMateEvent,
   FirstMateTopic,
+  FirstMateTopicId,
   FirstMateTopicOperationalStatus,
   FirstMateTopicReadModel,
   FirstMateTopicRuntimeFacts,
@@ -30,6 +31,7 @@ export function createEmptyFirstMateWorkspace(
   return {
     projectId,
     supervisorThreadId: null,
+    selectedTopicId: null,
     topics: [],
     decisions: [],
     updatedAt: now,
@@ -86,6 +88,20 @@ export function decideFirstMateCommand(
               updatedAt: command.createdAt,
               completedAt: command.stage === "completed" ? command.createdAt : null,
             },
+            occurredAt: command.createdAt,
+          },
+        ],
+      };
+
+    case "firstmate.topic.select":
+      if (!topic) return reject("topic-not-found");
+      return {
+        accepted: true,
+        events: [
+          {
+            type: "firstmate.topic-selected",
+            projectId: command.projectId,
+            topicId: command.topicId,
             occurredAt: command.createdAt,
           },
         ],
@@ -223,6 +239,9 @@ export function projectFirstMateEvent(
         updatedAt: event.occurredAt,
       };
 
+    case "firstmate.topic-selected":
+      return { ...state, selectedTopicId: event.topicId, updatedAt: event.occurredAt };
+
     case "firstmate.topic-updated":
       return {
         ...state,
@@ -287,6 +306,114 @@ export function replayFirstMateEvents(
   events: ReadonlyArray<FirstMateEvent>,
 ): FirstMateWorkspaceState {
   return events.reduce(projectFirstMateEvent, initial);
+}
+
+export type FirstMateMessageRouteReason = "selected-topic" | "explicit-mention";
+export type FirstMateMessageRoutingFailure =
+  | "no-selected-topic"
+  | "selected-topic-not-found"
+  | "mentioned-topic-not-found"
+  | "multiple-topic-mentions"
+  | "topic-not-delegated";
+
+export type FirstMateMessageRoutingResult =
+  | {
+      readonly status: "routed";
+      readonly reason: FirstMateMessageRouteReason;
+      readonly topicId: FirstMateTopicId;
+      readonly threadId: NonNullable<FirstMateTopic["threadId"]>;
+      readonly message: string;
+    }
+  | {
+      readonly status: "needs-confirmation";
+      readonly reason: FirstMateMessageRoutingFailure;
+      readonly candidateTopicIds: ReadonlyArray<FirstMateTopicId>;
+    };
+
+export function firstMateTopicMention(topicId: FirstMateTopicId): string {
+  return `@topic:${encodeURIComponent(topicId)}`;
+}
+
+function mentionedFirstMateTopicIds(message: string): ReadonlyArray<string> {
+  const matches = message.matchAll(/(?:^|\s)@topic:([^\s]+)/gu);
+  const mentions: string[] = [];
+  for (const match of matches) {
+    const encoded = match[1];
+    if (encoded === undefined) continue;
+    try {
+      const topicId = decodeURIComponent(encoded);
+      if (!mentions.includes(topicId)) mentions.push(topicId);
+    } catch {
+      if (!mentions.includes(encoded)) mentions.push(encoded);
+    }
+  }
+  return mentions;
+}
+
+function routeToTopic(
+  topic: FirstMateTopic,
+  reason: FirstMateMessageRouteReason,
+  message: string,
+): FirstMateMessageRoutingResult {
+  if (topic.threadId === null) {
+    return {
+      status: "needs-confirmation",
+      reason: "topic-not-delegated",
+      candidateTopicIds: [topic.id],
+    };
+  }
+  return {
+    status: "routed",
+    reason,
+    topicId: topic.id,
+    threadId: topic.threadId,
+    message,
+  };
+}
+
+/** Resolve one supervisor message without guessing between topics or threads. */
+export function routeFirstMateMessage(
+  state: FirstMateWorkspaceState,
+  message: string,
+): FirstMateMessageRoutingResult {
+  const mentionedTopicIds = mentionedFirstMateTopicIds(message);
+  if (mentionedTopicIds.length > 1) {
+    const mentioned = new Set(mentionedTopicIds);
+    return {
+      status: "needs-confirmation",
+      reason: "multiple-topic-mentions",
+      candidateTopicIds: state.topics
+        .filter((topic) => mentioned.has(topic.id))
+        .map((topic) => topic.id),
+    };
+  }
+  if (mentionedTopicIds.length === 1) {
+    const topic = state.topics.find((entry) => entry.id === mentionedTopicIds[0]);
+    return topic === undefined
+      ? {
+          status: "needs-confirmation",
+          reason: "mentioned-topic-not-found",
+          candidateTopicIds: [],
+        }
+      : routeToTopic(topic, "explicit-mention", message);
+  }
+
+  const selectedTopicId = state.selectedTopicId ?? null;
+  if (selectedTopicId === null) {
+    return {
+      status: "needs-confirmation",
+      reason: "no-selected-topic",
+      candidateTopicIds: state.topics.map((topic) => topic.id),
+    };
+  }
+  const selectedTopic = state.topics.find((topic) => topic.id === selectedTopicId);
+  return selectedTopic === undefined
+    ? {
+        status: "needs-confirmation",
+        reason: "selected-topic-not-found",
+        candidateTopicIds: state.topics.map((topic) => topic.id),
+      }
+    : routeToTopic(selectedTopic, "selected-topic", message);
 }
 
 const stageStatus: Record<FirstMateTopic["stage"], FirstMateTopicOperationalStatus> = {

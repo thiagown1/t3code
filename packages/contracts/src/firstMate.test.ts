@@ -5,6 +5,7 @@ import {
   FirstMateEvent,
   FirstMateMachineAlertSummary,
   FirstMateTopicId,
+  FirstMateWorkspaceState,
   ProjectId,
   ThreadId,
 } from "./index.ts";
@@ -15,6 +16,7 @@ const decodeCommand = Schema.decodeUnknownSync(FirstMateCommand);
 const decodeDecision = Schema.decodeUnknownSync(FirstMateDecision);
 const decodeEvent = Schema.decodeUnknownSync(FirstMateEvent);
 const decodeMachineAlerts = Schema.decodeUnknownSync(FirstMateMachineAlertSummary);
+const decodeWorkspace = Schema.decodeUnknownSync(FirstMateWorkspaceState);
 
 describe("FirstMate contracts", () => {
   it("decodes a provider-agnostic topic command", () => {
@@ -88,5 +90,17 @@ describe("FirstMate contracts", () => {
     });
 
     expect(event).toMatchObject({ type: "firstmate.decision-resolved", selectedOptionId: null });
+  });
+
+  it("decodes workspaces created before active-topic selection existed", () => {
+    const workspace = decodeWorkspace({
+      projectId: "project-1",
+      supervisorThreadId: null,
+      topics: [],
+      decisions: [],
+      updatedAt: "2026-09-14T21:00:00.000Z",
+    });
+
+    expect(workspace.selectedTopicId).toBeNull();
   });
 });

@@ -446,6 +446,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           firstMate: {
             projectId: asProjectId("project-1"),
             supervisorThreadId: null,
+            selectedTopicId: null,
             topics: [],
             decisions: [],
             updatedAt: "2026-02-24T00:00:01.000Z",
@@ -580,6 +581,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           firstMate: {
             projectId: asProjectId("project-1"),
             supervisorThreadId: null,
+            selectedTopicId: null,
             topics: [],
             decisions: [],
             updatedAt: "2026-02-24T00:00:01.000Z",

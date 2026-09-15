@@ -13,10 +13,12 @@ import {
   createFirstMateTopic,
   openFirstMateDecision,
   resolveFirstMateDecision,
+  selectFirstMateTopic,
   type CancelFirstMateDecisionInput,
   type CreateFirstMateTopicInput,
   type OpenFirstMateDecisionInput,
   type ResolveFirstMateDecisionInput,
+  type SelectFirstMateTopicInput,
 } from "../operations/commands.ts";
 
 export type {
@@ -24,6 +26,7 @@ export type {
   CreateFirstMateTopicInput,
   OpenFirstMateDecisionInput,
   ResolveFirstMateDecisionInput,
+  SelectFirstMateTopicInput,
 } from "../operations/commands.ts";
 
 export function createOrchestrationEnvironmentAtoms<R, E>(
@@ -39,6 +42,15 @@ export function createOrchestrationEnvironmentAtoms<R, E>(
         mode: "serial" as const,
         key: ({ environmentId, input }) =>
           JSON.stringify([environmentId, input.projectId, input.topicId]),
+      },
+    }),
+    selectFirstMateTopic: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:firstmate:select-topic",
+      execute: (input: SelectFirstMateTopicInput) => selectFirstMateTopic(input),
+      scheduler: firstMateScheduler,
+      concurrency: {
+        mode: "serial" as const,
+        key: ({ environmentId, input }) => JSON.stringify([environmentId, input.projectId]),
       },
     }),
     openFirstMateDecision: createEnvironmentCommand(runtime, {

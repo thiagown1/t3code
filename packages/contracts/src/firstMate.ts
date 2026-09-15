@@ -83,6 +83,9 @@ export type FirstMateDecision = typeof FirstMateDecision.Type;
 export const FirstMateWorkspaceState = Schema.Struct({
   projectId: ProjectId,
   supervisorThreadId: Schema.NullOr(ThreadId),
+  selectedTopicId: Schema.NullOr(FirstMateTopicId).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
   topics: Schema.Array(FirstMateTopic),
   decisions: Schema.Array(FirstMateDecision),
   updatedAt: IsoDateTime,
@@ -128,6 +131,11 @@ export const FirstMateCommand = Schema.Union([
     threadId: Schema.NullOr(ThreadId),
     responsibleAgentId: Schema.NullOr(TrimmedNonEmptyString),
   }),
+  Schema.Struct({
+    ...FirstMateCommandBase,
+    type: Schema.Literal("firstmate.topic.select"),
+    topicId: FirstMateTopicId,
+  }),
   FirstMateTopicUpdateCommand,
   Schema.Struct({
     ...FirstMateCommandBase,
@@ -171,6 +179,12 @@ export const FirstMateEvent = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("firstmate.topic-created"),
     topic: FirstMateTopic,
+    occurredAt: IsoDateTime,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("firstmate.topic-selected"),
+    projectId: ProjectId,
+    topicId: FirstMateTopicId,
     occurredAt: IsoDateTime,
   }),
   Schema.Struct({

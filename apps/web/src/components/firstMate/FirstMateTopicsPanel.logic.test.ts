@@ -69,6 +69,7 @@ function thread(overrides: Partial<EnvironmentThreadShell> = {}): EnvironmentThr
 const workspace: NonNullable<EnvironmentProject["firstMate"]> = {
   projectId,
   supervisorThreadId: null,
+  selectedTopicId: null,
   topics: [
     {
       id: topicId,
@@ -107,13 +108,14 @@ describe("FirstMate topics panel model", () => {
 
   it("derives waiting deploy from the linked thread without persisting another status", () => {
     const model = buildFirstMatePanelModel({
-      projects: [project(workspace)],
+      projects: [project({ ...workspace, selectedTopicId: topicId })],
       threads: [thread({ deliveryStatus: "waiting-deploy" })],
       scopedProjectKeys: null,
     });
 
     expect(model.items[0]).toMatchObject({
       status: "waiting-deploy",
+      selected: true,
       threadId,
       pendingDecisionCount: 0,
     });

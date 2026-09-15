@@ -1,6 +1,6 @@
 import type { EnvironmentId } from "@t3tools/contracts";
 
-export function finalizeFirstMateDecisionCommand(input: {
+export function finalizeFirstMateShellCommand(input: {
   readonly result: { readonly _tag: string };
   readonly environmentId: EnvironmentId;
   readonly refreshEnvironmentShell: (environmentId: EnvironmentId) => void;
