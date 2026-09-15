@@ -173,6 +173,16 @@ also survive normalization; a display label is not necessarily a valid reply.
 
 ## Attachments and stored history
 
+Archiving is event-driven rather than a transport side effect. After
+`thread.archived` commits, the
+[archive reactor](../../apps/server/src/orchestration/Layers/ThreadArchiveReactor.ts) asks the
+bound adapter to archive the provider-native conversation, then stops the runtime and closes
+terminal panes without deleting their history. It appends one durable activity receipt that keeps
+the local archive, provider result, runtime stop, and transcript preservation separate. Codex uses
+its native `thread/archive` request. Providers without a supported archive API report
+`unsupported`; do not emulate that operation through browser automation or by moving provider-owned
+storage files.
+
 Attachments live outside the project workspace. [ProviderService](../../apps/server/src/provider/Layers/ProviderService.ts)
 puts their environment-local paths in turn input and lets adapters choose native input formats.
 A path in the prompt does not grant filesystem access. Keep provider sandbox and approval rules

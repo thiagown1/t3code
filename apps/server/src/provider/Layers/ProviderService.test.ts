@@ -2119,6 +2119,19 @@ routing.layer("ProviderServiceLive routing", (it) => {
     }),
   );
 
+  it.effect("reports a thread without a provider binding as not linked", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-archive-not-linked");
+      routing.codex.archiveThread.mockClear();
+
+      const result = yield* provider.archiveConversation(threadId);
+
+      assert.deepStrictEqual(result, { status: "not-linked" });
+      assert.strictEqual(routing.codex.archiveThread.mock.calls.length, 0);
+    }),
+  );
+
   it.effect("recovers a stopped Codex session before archiving its conversation", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService.ProviderService;

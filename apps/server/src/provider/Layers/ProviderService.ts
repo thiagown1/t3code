@@ -2097,6 +2097,10 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   const archiveConversation: ProviderServiceMethod<"archiveConversation"> = Effect.fn(
     "archiveConversation",
   )(function* (threadId) {
+    const binding = yield* directory.getBinding(threadId);
+    if (Option.isNone(binding)) {
+      return { status: "not-linked" } as const;
+    }
     let routed = yield* resolveRoutableSession({
       threadId,
       operation: "ProviderService.archiveConversation",

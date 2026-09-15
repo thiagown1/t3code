@@ -36,10 +36,12 @@ import type { ProviderServiceError } from "../Errors.ts";
 import type { ProviderAdapterCapabilities } from "./ProviderAdapter.ts";
 import type { ProviderInstanceRoutingInfo } from "./ProviderAdapterRegistry.ts";
 
-export interface ProviderConversationArchiveResult {
-  readonly provider: ProviderDriverKind;
-  readonly status: "archived" | "unsupported";
-}
+export type ProviderConversationArchiveResult =
+  | {
+      readonly provider: ProviderDriverKind;
+      readonly status: "archived" | "unsupported";
+    }
+  | { readonly status: "not-linked" };
 
 /**
  * ProviderServiceShape - Service API for provider session and turn orchestration.
@@ -95,8 +97,9 @@ export interface ProviderServiceShape {
   ) => Effect.Effect<void, ProviderServiceError>;
 
   /** Archive the provider-native conversation when its adapter exposes a
-   * supported API. Unsupported providers return an explicit result and are
-   * never emulated through browser automation or provider-owned files. */
+   * supported API. Missing bindings and unsupported providers return explicit
+   * results and are never emulated through browser automation or
+   * provider-owned files. */
   readonly archiveConversation: (
     threadId: ThreadId,
   ) => Effect.Effect<ProviderConversationArchiveResult, ProviderServiceError>;
