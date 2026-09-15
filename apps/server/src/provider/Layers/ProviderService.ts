@@ -2094,6 +2094,50 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     },
   );
 
+  const archiveConversation: ProviderServiceMethod<"archiveConversation"> = Effect.fn(
+    "archiveConversation",
+  )(function* (threadId) {
+    let routed = yield* resolveRoutableSession({
+      threadId,
+      operation: "ProviderService.archiveConversation",
+      allowRecovery: false,
+    });
+    const archiveThread = routed.adapter.archiveThread;
+    if (archiveThread === undefined) {
+      return {
+        provider: routed.adapter.provider,
+        status: "unsupported",
+      } as const;
+    }
+    if (!routed.isActive) {
+      routed = yield* resolveRoutableSession({
+        threadId,
+        operation: "ProviderService.archiveConversation",
+        allowRecovery: true,
+      });
+    }
+    const recoveredArchiveThread = routed.adapter.archiveThread;
+    if (recoveredArchiveThread === undefined) {
+      return {
+        provider: routed.adapter.provider,
+        status: "unsupported",
+      } as const;
+    }
+    yield* Effect.annotateCurrentSpan({
+      "provider.operation": "archive-conversation",
+      "provider.kind": routed.adapter.provider,
+      "provider.thread_id": threadId,
+    });
+    yield* recoveredArchiveThread(routed.threadId);
+    yield* analytics.record("provider.conversation.archived", {
+      provider: routed.adapter.provider,
+    });
+    return {
+      provider: routed.adapter.provider,
+      status: "archived",
+    } as const;
+  });
+
   const listSessions: ProviderServiceMethod<"listSessions"> = Effect.fn("listSessions")(
     function* () {
       const currentAdapters = yield* getAdapterEntries;
@@ -2406,6 +2450,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     respondToRequest,
     respondToUserInput,
     stopSession,
+    archiveConversation,
     listSessions,
     getCapabilities,
     getInstanceInfo,

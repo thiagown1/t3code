@@ -257,6 +257,10 @@ function makeFakeCodexAdapter(
       Effect.succeed({ threadId, turns: [] }),
   );
 
+  const archiveThread = vi.fn(
+    (_threadId: ThreadId): Effect.Effect<void, ProviderAdapterError> => Effect.void,
+  );
+
   const uploadFeedback = vi.fn(
     (
       input: ProviderUploadFeedbackInput,
@@ -294,6 +298,7 @@ function makeFakeCodexAdapter(
     hasSession,
     readThread,
     rollbackThread,
+    ...(provider === CODEX_DRIVER ? { archiveThread } : {}),
     ...(provider === CODEX_DRIVER ? { uploadFeedback } : {}),
     stopAll,
     get streamEvents() {
@@ -331,6 +336,7 @@ function makeFakeCodexAdapter(
     hasSession,
     readThread,
     rollbackThread,
+    archiveThread,
     uploadFeedback,
     stopAll,
   };
@@ -2091,6 +2097,68 @@ routing.layer("ProviderServiceLive routing", (it) => {
       assert.deepStrictEqual(routing.codex.uploadFeedback.mock.calls, [
         [{ threadId, reason: "The agent stopped early." }],
       ]);
+    }),
+  );
+
+  it.effect("routes native conversation archive to the active Codex adapter", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-archive-route");
+      yield* provider.startSession(threadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        threadId,
+        runtimeMode: "full-access",
+      });
+      routing.codex.archiveThread.mockClear();
+
+      const result = yield* provider.archiveConversation(threadId);
+
+      assert.deepStrictEqual(result, { provider: CODEX_DRIVER, status: "archived" });
+      assert.deepStrictEqual(routing.codex.archiveThread.mock.calls, [[threadId]]);
+    }),
+  );
+
+  it.effect("recovers a stopped Codex session before archiving its conversation", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-archive-recover");
+      yield* provider.startSession(threadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        threadId,
+        cwd: fixtureCwd("archive-project"),
+        runtimeMode: "full-access",
+      });
+      yield* routing.codex.stopSession(threadId);
+      routing.codex.startSession.mockClear();
+      routing.codex.archiveThread.mockClear();
+
+      const result = yield* provider.archiveConversation(threadId);
+
+      assert.deepStrictEqual(result, { provider: CODEX_DRIVER, status: "archived" });
+      assert.strictEqual(routing.codex.startSession.mock.calls.length, 1);
+      assert.deepStrictEqual(routing.codex.archiveThread.mock.calls, [[threadId]]);
+    }),
+  );
+
+  it.effect("reports unsupported without restarting a provider that has no archive API", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-archive-unsupported");
+      yield* provider.startSession(threadId, {
+        provider: CLAUDE_AGENT_DRIVER,
+        providerInstanceId: claudeAgentInstanceId,
+        threadId,
+        runtimeMode: "full-access",
+      });
+      yield* routing.claude.stopSession(threadId);
+      routing.claude.startSession.mockClear();
+
+      const result = yield* provider.archiveConversation(threadId);
+
+      assert.deepStrictEqual(result, { provider: CLAUDE_AGENT_DRIVER, status: "unsupported" });
+      assert.strictEqual(routing.claude.startSession.mock.calls.length, 0);
     }),
   );
 

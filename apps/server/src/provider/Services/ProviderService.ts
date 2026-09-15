@@ -12,6 +12,7 @@
  * @module ProviderService
  */
 import type {
+  ProviderDriverKind,
   ProviderInterruptTurnInput,
   ProviderInstanceId,
   ProviderRespondToRequestInput,
@@ -34,6 +35,11 @@ import type * as Stream from "effect/Stream";
 import type { ProviderServiceError } from "../Errors.ts";
 import type { ProviderAdapterCapabilities } from "./ProviderAdapter.ts";
 import type { ProviderInstanceRoutingInfo } from "./ProviderAdapterRegistry.ts";
+
+export interface ProviderConversationArchiveResult {
+  readonly provider: ProviderDriverKind;
+  readonly status: "archived" | "unsupported";
+}
 
 /**
  * ProviderServiceShape - Service API for provider session and turn orchestration.
@@ -87,6 +93,13 @@ export interface ProviderServiceShape {
   readonly stopSession: (
     input: ProviderStopSessionInput,
   ) => Effect.Effect<void, ProviderServiceError>;
+
+  /** Archive the provider-native conversation when its adapter exposes a
+   * supported API. Unsupported providers return an explicit result and are
+   * never emulated through browser automation or provider-owned files. */
+  readonly archiveConversation: (
+    threadId: ThreadId,
+  ) => Effect.Effect<ProviderConversationArchiveResult, ProviderServiceError>;
 
   /**
    * List active provider sessions.
