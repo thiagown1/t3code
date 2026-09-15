@@ -22,3 +22,9 @@ The dry-run planner maps projects by canonical repository identity (or source pr
 repository identity exists), detects duplicates, missing or ambiguous projects, and unavailable
 provider instances. Import is fail-closed unless every selected thread is ready. This contract and
 planner do not write any target state; server persistence and UI confirmation are separate adapters.
+
+The read-only `server.exportThreadBundle` RPC accepts one to fifty unique thread IDs. It reads each
+full persisted projection snapshot, resolves its project, selects only FirstMate decisions whose
+topic is linked to that thread, and applies the shared sanitizer before returning the bundle. A
+missing thread/project or failed snapshot aborts the whole export. The RPC requires orchestration
+read scope and never starts, resumes, interrupts, or mutates a provider session.

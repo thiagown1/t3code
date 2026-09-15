@@ -1086,6 +1086,14 @@ export function createServerEnvironmentAtoms<R, E>(
         key: ({ environmentId, input }) => JSON.stringify([environmentId, input.credentialRefs]),
       },
     }),
+    exportThreadBundle: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:export-thread-bundle",
+      tag: WS_METHODS.serverExportThreadBundle,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId, input }) => JSON.stringify([environmentId, input.threadIds]),
+      },
+    }),
     updateProvider: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:update-provider",
       tag: WS_METHODS.serverUpdateProvider,

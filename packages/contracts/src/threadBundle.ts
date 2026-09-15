@@ -125,3 +125,25 @@ export const ThreadBundle = Schema.Struct({
   threads: Schema.Array(ThreadBundleThread),
 });
 export type ThreadBundle = typeof ThreadBundle.Type;
+
+export const ThreadBundleExportInput = Schema.Struct({
+  threadIds: Schema.Array(ThreadId).check(Schema.isMinLength(1), Schema.isMaxLength(50)),
+});
+export type ThreadBundleExportInput = typeof ThreadBundleExportInput.Type;
+
+export const ThreadBundleExportErrorReason = Schema.Literals([
+  "duplicate-thread",
+  "thread-not-found",
+  "project-not-found",
+  "snapshot-failed",
+]);
+export type ThreadBundleExportErrorReason = typeof ThreadBundleExportErrorReason.Type;
+
+export class ThreadBundleExportError extends Schema.TaggedError<ThreadBundleExportError>()(
+  "ThreadBundleExportError",
+  {
+    reason: ThreadBundleExportErrorReason,
+    message: TrimmedNonEmptyString,
+    threadId: Schema.optionalKey(ThreadId),
+  },
+) {}

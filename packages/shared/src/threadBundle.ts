@@ -43,7 +43,7 @@ export function buildThreadBundle(input: {
   readonly exportedAt: string;
   readonly sourceEnvironmentId: string;
   readonly entries: ReadonlyArray<{
-    readonly project: OrchestrationProject;
+    readonly project: Pick<OrchestrationProject, "id" | "title" | "repositoryIdentity">;
     readonly thread: OrchestrationThread;
     readonly decisions?: ReadonlyArray<FirstMateDecision>;
   }>;

@@ -69,6 +69,7 @@ import {
   RpcClientId,
   EnvironmentAuthorizationError,
   ThreadId,
+  ThreadBundleExportError,
   type TerminalAttachStreamEvent,
   type TerminalError,
   type TerminalEvent,
@@ -156,6 +157,7 @@ import {
   loadEnvironmentBundleServerInventory,
 } from "./environment/EnvironmentBundleInventory.ts";
 import { resolveEnvironmentBundleCredentialReferences } from "./environment/EnvironmentBundleCredentials.ts";
+import { exportThreadBundleFromProjection } from "./orchestration/ThreadBundleExport.ts";
 import { summarizeResourceTelemetry } from "./resourceTelemetry/ResourceTelemetrySummary.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
@@ -2551,6 +2553,32 @@ const makeWsRpcLayer = (
           observeRpcEffect(
             WS_METHODS.serverResolveEnvironmentBundleCredentials,
             Effect.succeed(resolveEnvironmentBundleCredentialReferences(credentialRefs)),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.serverExportThreadBundle]: ({ threadIds }) =>
+          observeRpcEffect(
+            WS_METHODS.serverExportThreadBundle,
+            Effect.gen(function* () {
+              const environment = yield* serverEnvironment.getDescriptor;
+              const bundleId = yield* crypto.randomUUIDv4.pipe(
+                Effect.mapError(
+                  () =>
+                    new ThreadBundleExportError({
+                      reason: "snapshot-failed",
+                      message: "Failed to generate the Thread Bundle identifier",
+                    }),
+                ),
+              );
+              return yield* exportThreadBundleFromProjection(
+                {
+                  threadIds,
+                  sourceEnvironmentId: environment.environmentId,
+                  bundleId,
+                  exportedAt: yield* nowIso,
+                },
+                projectionSnapshotQuery,
+              );
+            }),
             { "rpc.aggregate": "server" },
           ),
         [WS_METHODS.serverDiscoverSourceControl]: (_input) =>

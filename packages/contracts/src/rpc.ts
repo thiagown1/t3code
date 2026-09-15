@@ -25,6 +25,7 @@ import {
 } from "./background.ts";
 import { EnvironmentBundleCredentialResolutions } from "./environmentBundle.ts";
 import { PortableCredentialReference } from "./capabilityProfile.ts";
+import { ThreadBundle, ThreadBundleExportError, ThreadBundleExportInput } from "./threadBundle.ts";
 import {
   FilesystemBrowseInput,
   FilesystemBrowseResult,
@@ -370,6 +371,7 @@ export const WS_METHODS = {
   serverGetSettings: "server.getSettings",
   serverUpdateSettings: "server.updateSettings",
   serverResolveEnvironmentBundleCredentials: "server.resolveEnvironmentBundleCredentials",
+  serverExportThreadBundle: "server.exportThreadBundle",
   serverDiscoverSourceControl: "server.discoverSourceControl",
   serverGetTraceDiagnostics: "server.getTraceDiagnostics",
   serverGetProcessDiagnostics: "server.getProcessDiagnostics",
@@ -593,6 +595,12 @@ const WsServerResolveEnvironmentBundleCredentialsRpc = Rpc.make(
     error: EnvironmentAuthorizationError,
   },
 );
+
+const WsServerExportThreadBundleRpc = Rpc.make(WS_METHODS.serverExportThreadBundle, {
+  payload: ThreadBundleExportInput,
+  success: ThreadBundle,
+  error: Schema.Union([ThreadBundleExportError, EnvironmentAuthorizationError]),
+});
 
 const WsServerDiscoverSourceControlRpc = Rpc.make(WS_METHODS.serverDiscoverSourceControl, {
   payload: Schema.Struct({}),
@@ -1406,6 +1414,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGetSettingsRpc,
   WsServerUpdateSettingsRpc,
   WsServerResolveEnvironmentBundleCredentialsRpc,
+  WsServerExportThreadBundleRpc,
   WsServerDiscoverSourceControlRpc,
   WsServerGetTraceDiagnosticsRpc,
   WsServerGetProcessDiagnosticsRpc,
