@@ -54,6 +54,10 @@ and `disabled_tools` from the configured user home and root project config. Comm
 URLs, environment values, tokens, absolute paths, and unrecognized fields are discarded before the
 inventory or its hash is built. Single-line allow/block lists are supported; other providers and
 more complex TOML remain partial. The browser must not derive inventory from raw provider config.
+Nested Codex MCP `env` tables contribute only their variable names as portable
+`environment-variable` credential references. Values are never returned or hashed; destinations
+must resolve each name from their own environment before any future enablement adapter may report
+the MCP as ready. Inline or provider-specific credential layouts remain outside the partial scan.
 The inventory dialog exposes logical identities, enabled state, origin, coverage, and abbreviated
 instruction hashes so operators can inspect what a bundle would contain before exporting it.
 

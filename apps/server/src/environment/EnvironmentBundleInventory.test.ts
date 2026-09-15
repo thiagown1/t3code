@@ -90,6 +90,7 @@ disabled_tools = ["delete"] # keep writes blocked
 
 [mcp_servers.firebase.env]
 API_TOKEN = "do-not-export"
+FIREBASE_PROFILE = "also-do-not-export"
 
 [mcp_servers."logs.remote"]
 url = "https://example.invalid?token=do-not-export"
@@ -101,7 +102,15 @@ command = "do-not-export"
     expect([...parsed.entries()]).toEqual([
       [
         "firebase",
-        { enabled: false, allowedTools: ["delete", "query", "read"], blockedTools: ["delete"] },
+        {
+          enabled: false,
+          allowedTools: ["delete", "query", "read"],
+          blockedTools: ["delete"],
+          credentialRefs: [
+            { kind: "environment-variable", id: "API_TOKEN" },
+            { kind: "environment-variable", id: "FIREBASE_PROFILE" },
+          ],
+        },
       ],
       ["logs.remote", {}],
     ]);
@@ -109,6 +118,7 @@ command = "do-not-export"
       "enabled",
       "allowedTools",
       "blockedTools",
+      "credentialRefs",
     ]);
     expect(Object.keys(parsed.get("logs.remote")!)).toEqual([]);
   });
@@ -124,7 +134,7 @@ command = "do-not-export"
       yield* fileSystem.makeDirectory(homePath, { recursive: true });
       yield* fileSystem.writeFileString(
         path.join(homePath, "config.toml"),
-        '[mcp_servers.firebase]\ncommand = "secret-command"\nenabled = true\nenabled_tools = ["query", "write"]\ndisabled_tools = ["write"]\n',
+        '[mcp_servers.firebase]\ncommand = "secret-command"\nenabled = true\nenabled_tools = ["query", "write"]\ndisabled_tools = ["write"]\n[mcp_servers.firebase.env]\nFIREBASE_TOKEN = "secret-token"\n',
       );
       yield* fileSystem.writeFileString(
         path.join(root, ".codex", "config.toml"),
@@ -143,7 +153,7 @@ command = "do-not-export"
           origin: "codex:codex-work:effective-config",
           enabled: false,
           configurationRef: "codex:codex-work:mcp:firebase",
-          credentialRefs: [],
+          credentialRefs: [{ kind: "environment-variable", id: "FIREBASE_TOKEN" }],
           allowedTools: ["query"],
           blockedTools: ["write"],
           configurationHash: expect.stringMatching(/^[a-f0-9]{64}$/),
@@ -159,6 +169,7 @@ command = "do-not-export"
         const exportedValues = Object.values(server).flat().join(" ");
         expect(exportedValues).not.toContain("secret-command");
         expect(exportedValues).not.toContain("secret-url");
+        expect(exportedValues).not.toContain("secret-token");
         expect(exportedValues).not.toContain(homePath);
       }
     }).pipe(Effect.provide(NodeServices.layer)),

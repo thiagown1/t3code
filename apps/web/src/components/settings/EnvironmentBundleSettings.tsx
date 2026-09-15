@@ -132,7 +132,7 @@ function EnvironmentBundleInventoryDialog({
               items={bundle.mcpServers.map((server) => ({
                 id: server.serverId,
                 label: server.serverId,
-                detail: `${server.origin} · ${server.allowedTools.length} allowed · ${server.blockedTools.length} blocked`,
+                detail: `${server.origin} · ${server.credentialRefs.length} credential refs · ${server.allowedTools.length} allowed · ${server.blockedTools.length} blocked`,
                 enabled: server.enabled,
               }))}
             />

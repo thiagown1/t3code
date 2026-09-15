@@ -26,6 +26,7 @@ interface ParsedCodexMcpServer {
   readonly enabled?: boolean;
   readonly allowedTools?: ReadonlyArray<string>;
   readonly blockedTools?: ReadonlyArray<string>;
+  readonly credentialRefs?: EnvironmentBundleMcpServer["credentialRefs"];
 }
 
 function recordValue(value: unknown, key: string): unknown {
@@ -110,6 +111,15 @@ function parseMcpServerSection(value: string): string | null {
   return name && /^[a-zA-Z0-9_.-]{1,256}$/.test(name) ? name : null;
 }
 
+function parseMcpServerEnvironmentSection(value: string): string | null {
+  const section = value.trim();
+  const bare = /^mcp_servers\.([a-zA-Z0-9_-]{1,256})\.env$/.exec(section)?.[1];
+  if (bare) return bare;
+  const quoted = /^mcp_servers\.(?:"([^"\\]{1,256})"|'([^']{1,256})')\.env$/.exec(section);
+  const name = quoted?.[1]?.trim() || quoted?.[2]?.trim();
+  return name && /^[a-zA-Z0-9_.-]{1,256}$/.test(name) ? name : null;
+}
+
 function stripTomlComment(value: string): string {
   let quote: '"' | "'" | null = null;
   let escaped = false;
@@ -159,15 +169,32 @@ export function parseSanitizedCodexMcpConfig(
 ): ReadonlyMap<string, ParsedCodexMcpServer> {
   const servers = new Map<string, ParsedCodexMcpServer>();
   let currentServerId: string | null = null;
+  let readingEnvironment = false;
 
   for (const line of contents.split(/\r?\n/)) {
     const section = /^\s*\[([^\]]+)]\s*(?:#.*)?$/.exec(line);
     if (section) {
-      currentServerId = parseMcpServerSection(section[1]!);
+      const environmentServerId = parseMcpServerEnvironmentSection(section[1]!);
+      currentServerId = environmentServerId ?? parseMcpServerSection(section[1]!);
+      readingEnvironment = environmentServerId !== null;
       if (currentServerId && !servers.has(currentServerId)) servers.set(currentServerId, {});
       continue;
     }
     if (!currentServerId) continue;
+    if (readingEnvironment) {
+      const credentialName = /^\s*([a-zA-Z_][a-zA-Z0-9_]{0,255})\s*=/.exec(line)?.[1];
+      if (!credentialName) continue;
+      const existing = servers.get(currentServerId) ?? {};
+      const ids = new Set((existing.credentialRefs ?? []).map((reference) => reference.id));
+      ids.add(credentialName);
+      servers.set(currentServerId, {
+        ...existing,
+        credentialRefs: [...ids]
+          .sort((left, right) => left.localeCompare(right))
+          .map((id) => ({ kind: "environment-variable" as const, id })),
+      });
+      continue;
+    }
     const field = /^\s*(enabled|enabled_tools|disabled_tools)\s*=\s*(.+?)\s*$/.exec(line);
     if (!field) continue;
     const existing = servers.get(currentServerId) ?? {};
@@ -203,7 +230,24 @@ function mergeMcpConfigs(
 ): ReadonlyMap<string, ParsedCodexMcpServer> {
   const merged = new Map(base);
   for (const [serverId, entry] of override) {
-    merged.set(serverId, { ...merged.get(serverId), ...entry });
+    const previous = merged.get(serverId);
+    const credentialRefs = new Map(
+      [...(previous?.credentialRefs ?? []), ...(entry.credentialRefs ?? [])].map((reference) => [
+        `${reference.kind}:${reference.id}`,
+        reference,
+      ]),
+    );
+    merged.set(serverId, {
+      ...previous,
+      ...entry,
+      ...(credentialRefs.size > 0
+        ? {
+            credentialRefs: [...credentialRefs.values()].sort((left, right) =>
+              left.id.localeCompare(right.id),
+            ),
+          }
+        : {}),
+    });
   }
   return merged;
 }
@@ -217,6 +261,7 @@ function sanitizedConfigurationHash(server: EnvironmentBundleMcpServer): string 
         enabled: server.enabled,
         allowedTools: server.allowedTools,
         blockedTools: server.blockedTools,
+        credentialRefs: server.credentialRefs,
       }),
     )
     .digest("hex");
@@ -256,7 +301,7 @@ const loadCodexMcpInventory = Effect.fn("loadEnvironmentBundleCodexMcpInventory"
             origin: `codex:${source.instanceId}:effective-config`,
             enabled: source.enabled && config.enabled !== false,
             configurationRef: boundedMcpId(`codex:${source.instanceId}:mcp`, name),
-            credentialRefs: [],
+            credentialRefs: [...(config.credentialRefs ?? [])],
             // A contradictory native config must remain fail-closed in the
             // portable representation: block wins over allow.
             allowedTools: [...(config.allowedTools ?? [])].filter(
