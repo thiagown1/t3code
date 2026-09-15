@@ -11,6 +11,7 @@ import {
   type ProviderInstanceId,
   type ScopedThreadRef,
   type SidebarProjectGroupingMode,
+  type ThreadArchiveReceipt,
 } from "@t3tools/contracts";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import {
@@ -143,6 +144,7 @@ import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { ThemeLibrary } from "./ThemeSettings";
 import {
+  archiveReceiptPresentation,
   backgroundActivityOverrideSettings,
   backgroundActivitySharedPolicySettings,
   durationToSeconds,
@@ -3098,6 +3100,39 @@ export function GeneralSettingsPanel() {
   );
 }
 
+const ARCHIVE_RECEIPT_TONE_CLASS = {
+  success: "text-success",
+  warning: "text-warning",
+  neutral: "text-muted-foreground",
+  error: "text-destructive",
+} as const;
+
+const ARCHIVE_RECEIPT_DOT_CLASS = {
+  success: "bg-success",
+  warning: "bg-warning",
+  neutral: "bg-muted-foreground",
+  error: "bg-destructive",
+} as const;
+
+function ArchivedThreadReceiptStatus({
+  receipt,
+}: {
+  readonly receipt: ThreadArchiveReceipt | null | undefined;
+}) {
+  const presentation = archiveReceiptPresentation(receipt);
+  return (
+    <span
+      className={`inline-flex items-start gap-1.5 text-xs ${ARCHIVE_RECEIPT_TONE_CLASS[presentation.tone]}`}
+    >
+      <span
+        aria-hidden
+        className={`mt-[0.4em] size-1.5 shrink-0 rounded-full ${ARCHIVE_RECEIPT_DOT_CLASS[presentation.tone]}`}
+      />
+      <span>{presentation.text}</span>
+    </span>
+  );
+}
+
 export function ArchivedThreadsPanel() {
   const { scope } = useSettingsScope();
   const { unarchiveThread, confirmAndDeleteThread } = useThreadActions();
@@ -3274,11 +3309,14 @@ export function ArchivedThreadsPanel() {
                 }}
                 title={thread.title}
                 description={
-                  <>
-                    Archived {formatRelativeTimeLabel(thread.archivedAt ?? thread.createdAt)}
-                    {" \u00b7 Created "}
-                    {formatRelativeTimeLabel(thread.createdAt)}
-                  </>
+                  <span className="flex flex-col gap-1">
+                    <span>
+                      Archived {formatRelativeTimeLabel(thread.archivedAt ?? thread.createdAt)}
+                      {" \u00b7 Created "}
+                      {formatRelativeTimeLabel(thread.createdAt)}
+                    </span>
+                    <ArchivedThreadReceiptStatus receipt={thread.archiveReceipt} />
+                  </span>
                 }
                 control={
                   <Button

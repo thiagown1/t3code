@@ -607,6 +607,34 @@ export const OrchestrationThreadActivity = Schema.Struct({
 });
 export type OrchestrationThreadActivity = typeof OrchestrationThreadActivity.Type;
 
+export const ThreadArchiveReceiptPayload = Schema.Struct({
+  local: Schema.Struct({
+    status: Schema.Literal("archived"),
+    transcript: Schema.Literal("preserved"),
+  }),
+  provider: Schema.Union([
+    Schema.Struct({
+      status: Schema.Literals(["archived", "unsupported"]),
+      provider: TrimmedNonEmptyString,
+    }),
+    Schema.Struct({ status: Schema.Literals(["not-linked", "failed"]) }),
+  ]),
+  runtime: Schema.Struct({ status: Schema.Literals(["succeeded", "not-running", "failed"]) }),
+  terminals: Schema.Struct({
+    status: Schema.Literals(["succeeded", "failed"]),
+    history: Schema.Literal("preserved"),
+  }),
+});
+export type ThreadArchiveReceiptPayload = typeof ThreadArchiveReceiptPayload.Type;
+
+export const ThreadArchiveReceipt = Schema.Struct({
+  ...ThreadArchiveReceiptPayload.fields,
+  tone: OrchestrationThreadActivityTone,
+  summary: TrimmedNonEmptyString,
+  createdAt: IsoDateTime,
+});
+export type ThreadArchiveReceipt = typeof ThreadArchiveReceipt.Type;
+
 const OrchestrationLatestTurnState = Schema.Literals([
   "running",
   "interrupted",
@@ -852,6 +880,8 @@ export const OrchestrationThreadShell = Schema.Struct({
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   archivedAt: Schema.NullOr(IsoDateTime).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
+  // Optional on the wire so older servers can still serve newer clients.
+  archiveReceipt: Schema.optional(Schema.NullOr(ThreadArchiveReceipt)),
   deliveryStatus: Schema.optional(Schema.NullOr(ThreadDeliveryStatus)),
   settledOverride: Schema.NullOr(Schema.Literals(["settled", "active"])).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),

@@ -1045,6 +1045,30 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       `;
 
       yield* sql`
+        INSERT INTO projection_thread_activities (
+          activity_id,
+          thread_id,
+          turn_id,
+          tone,
+          kind,
+          summary,
+          payload_json,
+          sequence,
+          created_at
+        ) VALUES (
+          'archive-receipt-test',
+          'thread-archived',
+          NULL,
+          'info',
+          'thread.archive.receipt',
+          'Provider conversation archived (codex). Runtime stopped. Local transcript preserved.',
+          '{"local":{"status":"archived","transcript":"preserved"},"provider":{"status":"archived","provider":"codex"},"runtime":{"status":"succeeded"},"terminals":{"status":"succeeded","history":"preserved"}}',
+          5,
+          '2026-04-06T00:00:06.500Z'
+        )
+      `;
+
+      yield* sql`
         INSERT INTO projection_state (projector, last_applied_sequence, updated_at)
         VALUES
           (${ORCHESTRATION_PROJECTOR_NAMES.projects}, 4, '2026-04-06T00:00:07.000Z'),
@@ -1076,6 +1100,16 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       );
       assert.equal(archivedShellSnapshot.threads[0]?.archivedAt, "2026-04-06T00:00:06.000Z");
       assert.deepEqual(archivedShellSnapshot.threads[0]?.branchPullRequest, branchPullRequest);
+      assert.deepEqual(archivedShellSnapshot.threads[0]?.archiveReceipt, {
+        local: { status: "archived", transcript: "preserved" },
+        provider: { status: "archived", provider: "codex" },
+        runtime: { status: "succeeded" },
+        terminals: { status: "succeeded", history: "preserved" },
+        tone: "info",
+        summary:
+          "Provider conversation archived (codex). Runtime stopped. Local transcript preserved.",
+        createdAt: "2026-04-06T00:00:06.500Z",
+      });
       const activeContext = yield* snapshotQuery.getThreadRuntimeContext(
         ThreadId.make("thread-active"),
       );

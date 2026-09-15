@@ -181,7 +181,8 @@ terminal panes without deleting their history. It appends one durable activity r
 the local archive, provider result, runtime stop, and transcript preservation separate. Codex uses
 its native `thread/archive` request. Providers without a supported archive API report
 `unsupported`; do not emulate that operation through browser automation or by moving provider-owned
-storage files.
+storage files. The archived-thread settings page projects the latest receipt so pending, archived,
+unsupported, unlinked, and failed outcomes stay visible after the thread leaves the active sidebar.
 
 Attachments live outside the project workspace. [ProviderService](../../apps/server/src/provider/Layers/ProviderService.ts)
 puts their environment-local paths in turn input and lets adapters choose native input formats.

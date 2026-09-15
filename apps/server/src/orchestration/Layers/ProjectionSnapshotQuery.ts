@@ -34,6 +34,8 @@ import {
   ThreadId,
   ThreadPullRequestSnapshot,
   ThreadPullRequestStack,
+  ThreadArchiveReceiptPayload,
+  type ThreadArchiveReceipt,
   type ThreadPullRequestLink,
 } from "@t3tools/contracts";
 import { legacyLinkedPullRequestOf } from "@t3tools/shared/threadPullRequests";
@@ -92,6 +94,7 @@ const decodeImportedTranscriptsPayload = Schema.decodeUnknownOption(
   ),
 );
 const decodeAgentSessionImportSource = Schema.decodeUnknownOption(AgentSessionImportSource);
+const decodeThreadArchiveReceiptPayload = Schema.decodeUnknownOption(ThreadArchiveReceiptPayload);
 // Keep detail reads consistent with the in-memory projector's retained
 // activity window. Applying the limit in SQL avoids decoding an unbounded
 // payload_json set before the projector can enforce that invariant.
@@ -484,6 +487,19 @@ function mapThreadActivityRow(
   };
 }
 
+function mapThreadArchiveReceiptRow(
+  row: Schema.Schema.Type<typeof ProjectionThreadActivityDbRowSchema>,
+): ThreadArchiveReceipt | null {
+  const payload = decodeThreadArchiveReceiptPayload(row.payload);
+  if (Option.isNone(payload)) return null;
+  return {
+    ...payload.value,
+    tone: row.tone,
+    summary: row.summary,
+    createdAt: row.createdAt,
+  };
+}
+
 function toPersistenceSqlOrDecodeError(sqlOperation: string, decodeOperation: string) {
   return (cause: unknown): ProjectionRepositoryError =>
     Schema.isSchemaError(cause)
@@ -687,6 +703,41 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         WHERE deleted_at IS NULL
           AND archived_at IS NOT NULL
         ORDER BY project_id ASC, archived_at DESC, thread_id DESC
+      `,
+  });
+
+  const listArchivedThreadArchiveReceiptRows = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: ProjectionThreadActivityDbRowSchema,
+    execute: () =>
+      sql`
+        SELECT
+          a.activity_id AS "activityId",
+          a.thread_id AS "threadId",
+          a.turn_id AS "turnId",
+          a.tone,
+          a.kind,
+          a.summary,
+          a.payload_json AS "payload",
+          a.sequence,
+          a.created_at AS "createdAt"
+        FROM projection_thread_activities a
+        JOIN projection_threads t ON t.thread_id = a.thread_id
+        WHERE a.kind = 'thread.archive.receipt'
+          AND t.deleted_at IS NULL
+          AND t.archived_at IS NOT NULL
+          AND a.activity_id = (
+            SELECT latest.activity_id
+            FROM projection_thread_activities latest
+            WHERE latest.thread_id = a.thread_id
+              AND latest.kind = 'thread.archive.receipt'
+            ORDER BY
+              COALESCE(latest.sequence, -1) DESC,
+              latest.created_at DESC,
+              latest.activity_id DESC
+            LIMIT 1
+          )
+        ORDER BY a.thread_id ASC
       `,
   });
 
@@ -2775,6 +2826,14 @@ pending_approval_requests AS (
               ),
             ),
           ),
+          listArchivedThreadArchiveReceiptRows(undefined).pipe(
+            Effect.mapError(
+              toPersistenceSqlOrDecodeError(
+                "ProjectionSnapshotQuery.getArchivedShellSnapshot:listArchiveReceipts:query",
+                "ProjectionSnapshotQuery.getArchivedShellSnapshot:listArchiveReceipts:decodeRows",
+              ),
+            ),
+          ),
           listArchivedThreadSessionRows(undefined).pipe(
             Effect.mapError(
               toPersistenceSqlOrDecodeError(
@@ -2811,7 +2870,15 @@ pending_approval_requests AS (
       )
       .pipe(
         Effect.flatMap(
-          ([projectRows, threadRows, sessionRows, pullRequestRows, latestTurnRows, stateRows]) =>
+          ([
+            projectRows,
+            threadRows,
+            archiveReceiptRows,
+            sessionRows,
+            pullRequestRows,
+            latestTurnRows,
+            stateRows,
+          ]) =>
             Effect.gen(function* () {
               let updatedAt: string | null = null;
               for (const row of projectRows) {
@@ -2819,6 +2886,9 @@ pending_approval_requests AS (
               }
               for (const row of threadRows) {
                 updatedAt = maxIso(updatedAt, row.updatedAt);
+              }
+              for (const row of archiveReceiptRows) {
+                updatedAt = maxIso(updatedAt, row.createdAt);
               }
               for (const row of sessionRows) {
                 updatedAt = maxIso(updatedAt, row.updatedAt);
@@ -2846,6 +2916,12 @@ pending_approval_requests AS (
               );
               const sessionByThread = new Map(
                 sessionRows.map((row) => [row.threadId, mapSessionRow(row)] as const),
+              );
+              const archiveReceiptByThread = new Map(
+                archiveReceiptRows.flatMap((row) => {
+                  const receipt = mapThreadArchiveReceiptRow(row);
+                  return receipt === null ? [] : [[row.threadId, receipt] as const];
+                }),
               );
 
               const snapshot = {
@@ -2876,6 +2952,7 @@ pending_approval_requests AS (
                   createdAt: row.createdAt,
                   updatedAt: row.updatedAt,
                   archivedAt: row.archivedAt,
+                  archiveReceipt: archiveReceiptByThread.get(row.threadId) ?? null,
                   settledOverride: row.settledOverride,
                   settledAt: row.settledAt,
                   unsettledAt: row.unsettledAt,

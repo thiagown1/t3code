@@ -3,6 +3,7 @@ import {
   EventId,
   type OrchestrationEvent,
   type ProviderDriverKind,
+  type ThreadArchiveReceiptPayload,
 } from "@t3tools/contracts";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import * as Cause from "effect/Cause";
@@ -114,6 +115,12 @@ export const processThreadArchived = Effect.fn("processThreadArchived")(function
   }
   const terminals = Exit.isSuccess(terminalExit) ? "succeeded" : "failed";
   const hasFailure = provider.status === "failed" || runtime === "failed" || terminals === "failed";
+  const receiptPayload = {
+    local: { status: "archived", transcript: "preserved" },
+    provider,
+    runtime: { status: runtime },
+    terminals: { status: terminals, history: "preserved" },
+  } satisfies ThreadArchiveReceiptPayload;
 
   yield* orchestrationEngine.dispatch({
     type: "thread.activity.append",
@@ -125,12 +132,7 @@ export const processThreadArchived = Effect.fn("processThreadArchived")(function
       tone: hasFailure ? "error" : "info",
       kind: "thread.archive.receipt",
       summary: archiveSummary({ provider, runtime, terminals }),
-      payload: {
-        local: { status: "archived", transcript: "preserved" },
-        provider,
-        runtime: { status: runtime },
-        terminals: { status: terminals, history: "preserved" },
-      },
+      payload: receiptPayload,
       turnId: null,
       createdAt: event.occurredAt,
     },
