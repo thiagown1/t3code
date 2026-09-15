@@ -151,7 +151,10 @@ import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import * as HostResources from "./resourceTelemetry/HostResources.ts";
-import { loadEnvironmentBundleServerInventory } from "./environment/EnvironmentBundleInventory.ts";
+import {
+  codexMcpInventorySourcesFromSettings,
+  loadEnvironmentBundleServerInventory,
+} from "./environment/EnvironmentBundleInventory.ts";
 import { summarizeResourceTelemetry } from "./resourceTelemetry/ResourceTelemetrySummary.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
@@ -1761,9 +1764,8 @@ const makeWsRpcLayer = (
           const providers = options.usageLimitsCommand
             ? withUsageLimitsCommands(currentProviders, yield* usageLimitSources.current)
             : currentProviders;
-          const settings = ServerSettings.redactServerSettingsForClient(
-            yield* serverSettings.getSettings,
-          );
+          const rawSettings = yield* serverSettings.getSettings;
+          const settings = ServerSettings.redactServerSettingsForClient(rawSettings);
           const environment = yield* serverEnvironment.getDescriptor;
           const auth = yield* serverAuth.getDescriptor();
           const availableEditors: ReadonlyArray<EditorId> = yield* resolveAvailableEditorsForConfig(
@@ -1774,9 +1776,10 @@ const makeWsRpcLayer = (
                 externalLauncher.resolveFileManagerRevealKind(),
               )
             : undefined;
-          const environmentBundleInventory = yield* loadEnvironmentBundleServerInventory(
-            config.cwd,
-          );
+          const environmentBundleInventory = yield* loadEnvironmentBundleServerInventory({
+            cwd: config.cwd,
+            codexMcpSources: codexMcpInventorySourcesFromSettings(rawSettings),
+          });
 
           return {
             environment,

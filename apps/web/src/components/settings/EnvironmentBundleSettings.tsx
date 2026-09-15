@@ -235,14 +235,14 @@ export function EnvironmentBundleSettings() {
     : targets.length !== 1
       ? "Select one environment to create a portable snapshot"
       : bundle
-        ? `${bundle.providers.length} providers · ${bundle.skills.length} skills · ${bundle.pluginsAndApps.length} plugins/apps · ${bundle.projectInstructions.length} instructions${serverConfig?.environmentBundleInventory?.mcpCoverage === "unavailable" ? " · MCP inventory unavailable" : ` · ${bundle.mcpServers.length} MCPs`}`
+        ? `${bundle.providers.length} providers · ${bundle.skills.length} skills · ${bundle.pluginsAndApps.length} plugins/apps · ${bundle.projectInstructions.length} instructions${serverConfig?.environmentBundleInventory?.mcpCoverage === "unavailable" ? " · MCP inventory unavailable" : ` · ${bundle.mcpServers.length} MCPs${serverConfig?.environmentBundleInventory?.mcpCoverage === "partial" ? " (partial)" : ""}`}`
         : "Connect the selected environment to build its inventory";
 
   return (
     <SettingsSection id="environment-bundle" title="Environment portability">
       <SettingsRow
         title="Environment Bundle"
-        description="Secret-free snapshot of capability policy, provider versions, skills, and known project-instruction hashes. MCP inventory remains unavailable until provider adapters expose sanitized metadata."
+        description="Secret-free snapshot of capability policy, provider versions, skills, known instruction hashes, and sanitized MCP metadata. Coverage remains explicit when a provider cannot report safely."
         status={status}
         control={
           <>

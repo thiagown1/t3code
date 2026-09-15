@@ -44,8 +44,11 @@ installation paths. Import remains review-only: the canonical dry run lists each
 remove operation and marks provider reloads and required health checks. The server hashes known
 root instruction files without returning their contents or absolute paths, and marks that coverage
 as partial until provider adapters report the exact files loaded by a session. MCP inventory stays
-explicitly unavailable until those adapters can expose sanitized metadata; the browser must not
-derive it from raw provider configuration or local files.
+explicit about coverage. The Codex adapter scans only MCP table names, `enabled`, `enabled_tools`,
+and `disabled_tools` from the configured user home and root project config. Commands, arguments,
+URLs, environment values, tokens, absolute paths, and unrecognized fields are discarded before the
+inventory or its hash is built. Single-line allow/block lists are supported; other providers and
+more complex TOML remain partial. The browser must not derive inventory from raw provider config.
 
 ## Process and account isolation
 
