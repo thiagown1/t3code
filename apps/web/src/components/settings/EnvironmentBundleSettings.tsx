@@ -413,15 +413,20 @@ function EnvironmentBundleImportDialog({
             {step === "review" ? "Close review" : "Cancel"}
           </Button>
           {step === "review" ? (
-            <Button
-              variant="outline"
-              onClick={() => {
-                if (reviewBundle) setJson(serializeEnvironmentBundle(reviewBundle));
-                setStep("edit");
-              }}
-            >
-              Back
-            </Button>
+            <>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  if (reviewBundle) setJson(serializeEnvironmentBundle(reviewBundle));
+                  setStep("edit");
+                }}
+              >
+                Back
+              </Button>
+              <Button onClick={() => reviewBundle && downloadBundle(reviewBundle)}>
+                <DownloadIcon /> Export prepared bundle
+              </Button>
+            </>
           ) : (
             <Button
               onClick={() => {
