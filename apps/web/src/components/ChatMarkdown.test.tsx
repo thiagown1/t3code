@@ -65,6 +65,13 @@ import ChatMarkdown, {
 } from "./ChatMarkdown";
 import { PullRequestMarkdown } from "./pullRequest/PullRequestMarkdown";
 
+const mermaid = vi.hoisted(() => ({
+  initialize: vi.fn(),
+  render: vi.fn(),
+}));
+
+vi.mock("mermaid", () => ({ default: mermaid }));
+
 function codeButton(renderer: ReactTestRenderer, label: string) {
   const button = renderer.root
     .findAllByType(Button)
@@ -94,6 +101,60 @@ describe("ChatMarkdown Mermaid diagrams", () => {
 
     expect(html).toContain('data-mermaid-state="pending"');
     expect(html).toContain("Rendering Mermaid diagram");
+  });
+
+  it("lets chat surfaces render a Mermaid fence on demand and return to its source", async () => {
+    mermaid.initialize.mockReset();
+    mermaid.render.mockReset();
+    mermaid.render.mockResolvedValue({ svg: '<svg aria-label="Chat flow"></svg>' });
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    let renderer: ReactTestRenderer | undefined;
+
+    try {
+      await act(async () => {
+        renderer = create(<ChatMarkdown cwd="/tmp/project" text={diagram} offerMermaidRendering />);
+      });
+      const mounted = renderer!;
+
+      expect(codeButton(mounted, "Render diagram")).toBeDefined();
+      expect(mermaid.render).not.toHaveBeenCalled();
+
+      await act(async () => {
+        codeButton(mounted, "Render diagram").onClick?.(
+          {} as Parameters<NonNullable<ComponentProps<typeof Button>["onClick"]>>[0],
+        );
+      });
+
+      expect(mermaid.initialize).toHaveBeenCalledWith(
+        expect.objectContaining({ securityLevel: "strict", maxEdges: 500 }),
+      );
+      expect(mermaid.render).toHaveBeenCalledWith(
+        expect.any(String),
+        diagram.split("\n").slice(1, -1).join("\n") + "\n",
+      );
+      expect(mounted.root.findByProps({ "data-mermaid-state": "rendered" })).toBeDefined();
+
+      await act(async () => {
+        codeButton(mounted, "Show source").onClick?.(
+          {} as Parameters<NonNullable<ComponentProps<typeof Button>["onClick"]>>[0],
+        );
+      });
+
+      expect(mounted.root.findAllByProps({ "data-mermaid-state": "rendered" })).toHaveLength(0);
+      expect(mounted.root.findByProps({ "data-language": "mermaid" })).toBeDefined();
+    } finally {
+      await act(async () => renderer?.unmount());
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("does not offer Mermaid rendering while an assistant response is still streaming", () => {
+    const html = renderToStaticMarkup(
+      <ChatMarkdown cwd="/tmp/project" text={diagram} offerMermaidRendering isStreaming />,
+    );
+
+    expect(html).not.toContain("Render diagram");
+    expect(html).toContain("flowchart LR");
   });
 });
 

@@ -214,6 +214,8 @@ interface ChatMarkdownProps {
   parseRawHtml?: boolean;
   /** Render fenced Mermaid diagrams. Kept opt-in so ordinary chat code blocks stay lightweight. */
   renderMermaidDiagrams?: boolean;
+  /** Offer a per-block control that lazily renders completed Mermaid fences. */
+  offerMermaidRendering?: boolean;
   /** Append a prompt that invokes a newly created artifact-template skill. */
   onUseArtifactTemplate?: ((template: CodexArtifactTemplate) => void) | undefined;
   /** Directory that anchors relative links and images; defaults to `cwd`. Set
@@ -919,12 +921,19 @@ function MarkdownCodeBlock({
   language,
   fenceTitle,
   theme,
+  mermaidView,
   children,
 }: {
   code: string;
   language: string;
   fenceTitle: string | null;
   theme: "light" | "dark";
+  mermaidView?:
+    | {
+        rendered: boolean;
+        onToggle: () => void;
+      }
+    | undefined;
   children: ReactNode;
 }) {
   const [copied, setCopied] = useState(false);
@@ -932,6 +941,7 @@ function MarkdownCodeBlock({
   const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const wrapLabel = wrapped ? "Disable line wrap" : "Wrap lines";
   const copyLabel = copied ? "Copied" : "Copy code";
+  const mermaidLabel = mermaidView?.rendered ? "Show source" : "Render diagram";
 
   const handleCopy = useCallback(() => {
     if (typeof navigator === "undefined" || navigator.clipboard == null) {
@@ -976,6 +986,7 @@ function MarkdownCodeBlock({
       className="chat-markdown-codeblock my-[0.65rem] overflow-hidden rounded-[var(--radius)] border border-border/70 bg-secondary leading-snug dark:border-transparent dark:bg-input/32"
       data-language={language}
       data-wrap={wrapped ? "true" : "false"}
+      data-mermaid-view={mermaidView ? (mermaidView.rendered ? "diagram" : "source") : undefined}
     >
       <div className="chat-markdown-codeblock-header flex items-center justify-between gap-2 pt-1.5 pr-1.5 pb-0 pl-3 select-none">
         <span className="inline-flex min-w-0 items-center gap-[0.4rem] [font-family:var(--font-mono,ui-monospace,SFMono-Regular,monospace)] [font-size:0.6875rem]">
@@ -986,24 +997,50 @@ function MarkdownCodeBlock({
           />
         </span>
         <span className="flex items-center gap-0.5" role="toolbar" aria-label="Code block actions">
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-xs"
-                  className="chat-markdown-chrome-action"
-                  aria-pressed={wrapped}
-                  onClick={() => setWrapped((value) => !value)}
-                  aria-label={wrapLabel}
-                />
-              }
-            >
-              <WrapTextIcon className="size-3" />
-            </TooltipTrigger>
-            <TooltipPopup side="top">{wrapLabel}</TooltipPopup>
-          </Tooltip>
+          {mermaidView ? (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-xs"
+                    className="chat-markdown-chrome-action"
+                    aria-pressed={mermaidView.rendered}
+                    onClick={mermaidView.onToggle}
+                    aria-label={mermaidLabel}
+                  />
+                }
+              >
+                {mermaidView.rendered ? (
+                  <FileTextIcon className="size-3" />
+                ) : (
+                  <PresentationIcon className="size-3" />
+                )}
+              </TooltipTrigger>
+              <TooltipPopup side="top">{mermaidLabel}</TooltipPopup>
+            </Tooltip>
+          ) : null}
+          {!mermaidView?.rendered ? (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-xs"
+                    className="chat-markdown-chrome-action"
+                    aria-pressed={wrapped}
+                    onClick={() => setWrapped((value) => !value)}
+                    aria-label={wrapLabel}
+                  />
+                }
+              >
+                <WrapTextIcon className="size-3" />
+              </TooltipTrigger>
+              <TooltipPopup side="top">{wrapLabel}</TooltipPopup>
+            </Tooltip>
+          ) : null}
           <Tooltip>
             <TooltipTrigger
               render={
@@ -1025,6 +1062,42 @@ function MarkdownCodeBlock({
       </div>
       {children}
     </div>
+  );
+}
+
+function OnDemandMermaidCodeBlock({
+  code,
+  language,
+  fenceTitle,
+  theme,
+  sourceContent,
+}: {
+  code: string;
+  language: string;
+  fenceTitle: string | null;
+  theme: "light" | "dark";
+  sourceContent: ReactNode;
+}) {
+  const [renderedSource, setRenderedSource] = useState<string | null>(null);
+  const rendered = renderedSource === code;
+
+  return (
+    <MarkdownCodeBlock
+      code={code}
+      language={language}
+      fenceTitle={fenceTitle}
+      theme={theme}
+      mermaidView={{
+        rendered,
+        onToggle: () => setRenderedSource(rendered ? null : code),
+      }}
+    >
+      {rendered ? (
+        <MermaidDiagram source={code} appearance={theme} fallback={sourceContent} />
+      ) : (
+        sourceContent
+      )}
+    </MarkdownCodeBlock>
   );
 }
 
@@ -2237,6 +2310,7 @@ function useChatMarkdownState({
   renderContextReference,
   headingLevelOffset = 0,
   renderMermaidDiagrams = false,
+  offerMermaidRendering = false,
 }: ChatMarkdownProps) {
   const { resolvedTheme } = useTheme();
   const [localMediaPreview, setLocalMediaPreview] = useState<ExpandedImagePreview | null>(null);
@@ -2636,6 +2710,7 @@ function useChatMarkdownState({
       fileLinkChip,
       renderContextReference,
       renderMermaidDiagrams,
+      offerMermaidRendering,
       headingLevelOffset,
       imageBaseDir,
       resolveImageResource,
@@ -2667,6 +2742,7 @@ function useChatMarkdownState({
       fileLinkChip,
       renderContextReference,
       renderMermaidDiagrams,
+      offerMermaidRendering,
       headingLevelOffset,
       imageBaseDir,
       resolveImageResource,
@@ -3212,9 +3288,13 @@ const CHAT_MARKDOWN_COMPONENTS = {
     return <MarkdownDetails open={detailsOpen}>{children}</MarkdownDetails>;
   },
   pre: function MarkdownPre({ node, children, ...props }) {
-    const { resolvedTheme, diffThemeName, isStreaming, renderMermaidDiagrams } = use(
-      ChatMarkdownRendererContext,
-    );
+    const {
+      resolvedTheme,
+      diffThemeName,
+      isStreaming,
+      renderMermaidDiagrams,
+      offerMermaidRendering,
+    } = use(ChatMarkdownRendererContext);
     const codeBlock = extractCodeBlock(children);
     if (!codeBlock) {
       return <pre {...props}>{children}</pre>;
@@ -3222,6 +3302,29 @@ const CHAT_MARKDOWN_COMPONENTS = {
 
     const language = extractFenceLanguage(codeBlock.className);
     const fenceTitle = extractFenceTitle(extractPreCodeMeta(node));
+    const sourceContent = (
+      <RenderErrorBoundary
+        resetKeys={[codeBlock.code, language, diffThemeName, isStreaming]}
+        fallback={<pre {...props}>{children}</pre>}
+      >
+        {/* Reserve the block's height but stay hidden until Shiki has colored
+            it, so plain text never flashes before the highlighted version. */}
+        <Suspense
+          fallback={
+            <pre {...props} className="invisible" aria-hidden>
+              {children}
+            </pre>
+          }
+        >
+          <SuspenseShikiCodeBlock
+            className={codeBlock.className}
+            code={codeBlock.code}
+            themeName={diffThemeName}
+            isStreaming={isStreaming}
+          />
+        </Suspense>
+      </RenderErrorBoundary>
+    );
     const sourceBlock = (
       <MarkdownCodeBlock
         code={codeBlock.code}
@@ -3229,34 +3332,27 @@ const CHAT_MARKDOWN_COMPONENTS = {
         fenceTitle={fenceTitle}
         theme={resolvedTheme}
       >
-        <RenderErrorBoundary
-          resetKeys={[codeBlock.code, language, diffThemeName, isStreaming]}
-          fallback={<pre {...props}>{children}</pre>}
-        >
-          {/* Reserve the block's height but stay hidden until Shiki has colored
-              it, so plain text never flashes before the highlighted version. */}
-          <Suspense
-            fallback={
-              <pre {...props} className="invisible" aria-hidden>
-                {children}
-              </pre>
-            }
-          >
-            <SuspenseShikiCodeBlock
-              className={codeBlock.className}
-              code={codeBlock.code}
-              themeName={diffThemeName}
-              isStreaming={isStreaming}
-            />
-          </Suspense>
-        </RenderErrorBoundary>
+        {sourceContent}
       </MarkdownCodeBlock>
     );
-    return renderMermaidDiagrams && language.toLowerCase() === "mermaid" ? (
-      <MermaidDiagram source={codeBlock.code} appearance={resolvedTheme} fallback={sourceBlock} />
-    ) : (
-      sourceBlock
-    );
+    if (language.toLowerCase() !== "mermaid") return sourceBlock;
+    if (renderMermaidDiagrams) {
+      return (
+        <MermaidDiagram source={codeBlock.code} appearance={resolvedTheme} fallback={sourceBlock} />
+      );
+    }
+    if (offerMermaidRendering && !isStreaming) {
+      return (
+        <OnDemandMermaidCodeBlock
+          code={codeBlock.code}
+          language={language}
+          fenceTitle={fenceTitle}
+          theme={resolvedTheme}
+          sourceContent={sourceContent}
+        />
+      );
+    }
+    return sourceBlock;
   },
 } satisfies Components;
 
