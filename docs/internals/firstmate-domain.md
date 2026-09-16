@@ -96,3 +96,28 @@ references, and topics without a linked thread return `needs-confirmation`
 instead of guessing. This increment does not yet dispatch the routed message;
 the supervisor composer must consume this result and preserve the same
 fail-closed behavior before automatic routing is enabled.
+
+## PR ownership and automatic continuation
+
+PR supervision belongs to the existing thread/PR link, not to an independent
+scheduler database. Registration, resume budget and deduplication keys replay
+with link events. One internal command consumes a resume and emits the user
+message and turn-start request together; duplicate receipts cannot spend twice.
+The existing PR sync sweep runs at most two adapters per pass. It waits for
+active turns, queued work, approvals and user questions before resuming.
+
+The first adapter is the reviewed Turbo Station `next/scripts/ci/pr-supervisor.cjs`.
+It owns GitHub evidence and the shared fast-forward-only writer register used
+by both Coder workflows. A ready host snapshot alone must never authorize a
+writer. Enrollment is off until the repository operator enables
+`FIRSTMATE_PR_SUPERVISION_ENABLED`; installing T3 alone does not activate it.
+
+No clock-based lock stealing is allowed. Restarted T3 reuses the persisted
+owner, bound to its environment identity and database path. A copied database
+cannot acquire, resume or release that owner from a different home. If T3 is unavailable, Coder cannot assume its writer died. Stop/archive,
+closed PRs or exhausted supervision release ownership only after the thread is
+idle. Deletion and unlinking are refused until release has been persisted.
+The adapter is executed in the enrolled thread checkout, which must contain the
+reviewed implementation; this pilot is for trusted implementation workspaces,
+not untrusted fork reviews. Other repositories need a reviewed adapter before
+enrollment. Three resumes/two hours bound this pilot, not provider dollar spend.

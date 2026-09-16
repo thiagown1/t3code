@@ -19,6 +19,8 @@ import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 
+import { runPrSupervisionAdapter } from "../../../orchestration/PrSupervisionAdapter.ts";
+import { supervisionEnvironmentKey } from "../../../orchestration/PrSupervisionEnvironment.ts";
 import * as OrchestrationEngine from "../../../orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
@@ -118,6 +120,7 @@ function entryOf(
     number: link.number,
     url: link.url,
     source: link.source,
+    ...(link.supervision ? { supervision: link.supervision } : {}),
     state: link.snapshot?.state ?? null,
     title: link.snapshot?.title ?? null,
     headBranch: link.snapshot?.headBranch ?? null,
@@ -189,6 +192,105 @@ const make = Effect.gen(function* () {
         : Effect.fail(new Failure({ cause }));
 
   return PullRequestsToolkit.of({
+    supervise_pull_request: (input) =>
+      Effect.gen(function* () {
+        const environmentKey = yield* supervisionEnvironmentKey;
+        const thread = yield* requireThread(PullRequestLinkFailedError);
+        const project = yield* projectOf(thread, PullRequestLinkFailedError);
+        const target = yield* resolveTarget(input, project);
+        const link = thread.pullRequests.find(
+          (link) =>
+            link.host === target.host &&
+            link.repository === target.repository &&
+            link.number === target.number,
+        );
+        if (!link || !project)
+          return yield* new PullRequestLinkFailedError({
+            cause: "Link the PR before enrolling supervision.",
+          });
+        if (
+          link.supervision &&
+          link.supervision.state !== "stopped" &&
+          link.supervision.environmentKey !== environmentKey
+        )
+          return yield* new PullRequestLinkFailedError({
+            cause: "Supervision belongs to another environment. Use its original server.",
+          });
+        if (input.action === "start" && link.supervision && link.supervision.state !== "stopped") {
+          return {
+            owner: link.supervision.owner,
+            state: link.supervision.state,
+            reason: link.supervision.lastReason,
+          };
+        }
+        if (
+          input.action === "stop" &&
+          (!link.supervision || link.supervision.state === "stopped")
+        ) {
+          return {
+            owner: link.supervision?.owner ?? "",
+            state: "stopped",
+            reason: link.supervision?.lastReason ?? null,
+          };
+        }
+        const owner =
+          input.action === "stop"
+            ? link.supervision?.owner
+            : `firstmate:${yield* crypto.randomUUIDv4.pipe(Effect.mapError((cause) => new PullRequestLinkFailedError({ cause })))}`;
+        if (!owner) return { owner: "", state: "stopped", reason: null };
+        yield* engine
+          .dispatch({
+            type: "thread.pull-request.supervise",
+            commandId: yield* commandId("mcp-pr-supervise", thread.id),
+            threadId: thread.id,
+            host: target.host,
+            repository: target.repository,
+            number: target.number,
+            action: input.action,
+            owner,
+            environmentKey,
+            baseRef: input.baseRef,
+            headRef: input.headRef,
+          })
+          .pipe(Effect.catchCause(dispatchFailure(PullRequestLinkFailedError)));
+        if (input.action === "stop")
+          return {
+            owner,
+            state: "stopping",
+            reason: "The writer is released after this thread is idle.",
+          };
+        const receipt = yield* runPrSupervisionAdapter({
+          cwd: thread.worktreePath ?? project.workspaceRoot,
+          operation: "enroll",
+          repository: target.repository,
+          pullRequest: target.number,
+          owner,
+          baseRef: input.baseRef,
+          headRef: input.headRef,
+        }).pipe(Effect.mapError((cause) => new PullRequestLinkFailedError({ cause })));
+        yield* engine
+          .dispatch({
+            type: "thread.pull-request.supervise",
+            commandId: yield* commandId("mcp-pr-enrolled", thread.id),
+            threadId: thread.id,
+            host: target.host,
+            repository: target.repository,
+            number: target.number,
+            action: receipt.enrolled ? "enrolled" : "blocked",
+            owner,
+            environmentKey,
+            baseRef: input.baseRef,
+            headRef: input.headRef,
+            reason: receipt.reason ?? "Exclusive writer registered.",
+          })
+          .pipe(Effect.catchCause(dispatchFailure(PullRequestLinkFailedError)));
+        return {
+          owner,
+          state: receipt.enrolled ? "watching" : "unavailable",
+          reason: receipt.reason ?? null,
+        };
+      }),
+
     link_pull_request: (input) =>
       Effect.gen(function* () {
         const thread = yield* requireThread(PullRequestLinkFailedError);

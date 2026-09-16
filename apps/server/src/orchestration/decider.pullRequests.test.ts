@@ -114,6 +114,156 @@ const snapshot: ThreadPullRequestSnapshot = {
   syncedAt: NOW,
 };
 
+const supervisorOwner = "firstmate:00000000-0000-4000-8000-000000000001";
+const superviseCommand = (action: "start" | "wake" | "stop", overrides = {}) => ({
+  type: "thread.pull-request.supervise" as const,
+  commandId: CommandId.make(`supervise-${action}`),
+  threadId: THREAD_ID,
+  host: "github.com",
+  repository: "t3tools/t3code",
+  number: 42,
+  action,
+  owner: supervisorOwner,
+  environmentKey: "environment-a",
+  baseRef: "main",
+  headRef: "feature",
+  ...overrides,
+});
+const supervisedLink = () =>
+  makeLink({
+    supervision: {
+      owner: supervisorOwner,
+      environmentKey: "environment-a",
+      state: "watching",
+      baseRef: "main",
+      headRef: "feature",
+      expiresAt: "2999-01-01T00:00:00.000Z",
+      resumes: 0,
+      lastResumeKey: null,
+      lastReason: null,
+    },
+  });
+
+it.layer(NodeServices.layer)("PR owner supervision", (it) => {
+  it.effect("rejects a resume from a copied environment or pending enrollment", () =>
+    Effect.gen(function* () {
+      const link = supervisedLink();
+      for (const changed of [
+        { ...link, supervision: { ...link.supervision!, environmentKey: "other-environment" } },
+        { ...link, supervision: { ...link.supervision!, state: "pending" as const } },
+      ]) {
+        const result = yield* decideOrchestrationCommand({
+          readModel: makeReadModel([changed]),
+          command: superviseCommand("wake", { resumeKey: "signal", message: "Repair" }),
+        }).pipe(Effect.result);
+        expect(result._tag).toBe("Failure");
+      }
+    }),
+  );
+  it.effect("registers bounded supervision as a replayable link fact", () =>
+    Effect.gen(function* () {
+      const model = makeReadModel([makeLink()]);
+      const events = yield* decideOrchestrationCommand({
+        readModel: model,
+        command: superviseCommand("start"),
+      });
+      const event = expectSingleEvent(events, "thread.pull-request-linked");
+      const replayed = yield* projectEvent(model, { ...event, sequence: 1 });
+      expect(replayed.threads[0]?.pullRequests[0]?.supervision).toMatchObject({
+        owner: supervisorOwner,
+        environmentKey: "environment-a",
+        resumes: 0,
+        state: "pending",
+      });
+      expect(
+        Date.parse(event.payload.link.supervision!.expiresAt) - Date.parse(event.occurredAt),
+      ).toBe(7_200_000);
+    }),
+  );
+
+  it.effect("consumes one resume and starts the original thread in one decision", () =>
+    Effect.gen(function* () {
+      const model = makeReadModel([supervisedLink()]);
+      const command = superviseCommand("wake", {
+        resumeKey: "head-a:failed:20",
+        message: "Inspect this current-head failure.",
+      });
+      const events = yield* decideOrchestrationCommand({ readModel: model, command });
+      const list = Array.isArray(events) ? events : [events];
+      expect(list.map((event) => event.type)).toEqual([
+        "thread.pull-request-linked",
+        "thread.message-sent",
+        "thread.turn-start-requested",
+      ]);
+      const changed = expectSingleEvent(events, "thread.pull-request-linked");
+      expect(changed.payload.link.supervision).toMatchObject({
+        resumes: 1,
+        lastResumeKey: "head-a:failed:20",
+      });
+      let replayed = model;
+      for (const event of list)
+        replayed = yield* projectEvent(replayed, {
+          ...event,
+          sequence: replayed.snapshotSequence + 1,
+        });
+      const duplicate = yield* decideOrchestrationCommand({ readModel: replayed, command }).pipe(
+        Effect.flip,
+      );
+      expect(duplicate._tag).toBe("OrchestrationCommandInvariantError");
+      expect(replayed.threads[0]?.messages[0]?.role).toBe("user");
+    }),
+  );
+
+  it.effect("refuses missing enrollment, exhausted budget and a stale owner", () =>
+    Effect.gen(function* () {
+      const link = supervisedLink();
+      for (const candidate of [
+        makeLink(),
+        { ...link, supervision: { ...link.supervision!, resumes: 3 } },
+        {
+          ...link,
+          supervision: {
+            ...link.supervision!,
+            owner: "firstmate:00000000-0000-4000-8000-000000000002",
+          },
+        },
+      ]) {
+        const error = yield* decideOrchestrationCommand({
+          readModel: makeReadModel([candidate]),
+          command: superviseCommand("wake", { resumeKey: "signal", message: "Repair" }),
+        }).pipe(Effect.flip);
+        expect(error._tag).toBe("OrchestrationCommandInvariantError");
+      }
+    }),
+  );
+
+  it.effect("cannot delete or unlink a thread while its writer still needs release", () =>
+    Effect.gen(function* () {
+      const model = makeReadModel([supervisedLink()]);
+      for (const command of [
+        {
+          type: "thread.delete" as const,
+          commandId: CommandId.make("delete-supervised"),
+          threadId: THREAD_ID,
+        },
+        {
+          type: "thread.pull-request.unlink" as const,
+          commandId: CommandId.make("unlink-supervised"),
+          threadId: THREAD_ID,
+          host: "github.com",
+          repository: "t3tools/t3code",
+          number: 42,
+        },
+      ]) {
+        const error = yield* decideOrchestrationCommand({ readModel: model, command }).pipe(
+          Effect.flip,
+        );
+        expect(error._tag).toBe("OrchestrationCommandInvariantError");
+      }
+    }),
+  );
+});
+
 it.layer(NodeServices.layer)("pull request link decider", (it) => {
   it.effect("links the same Forgejo number on two ports and unlinks an older portless record", () =>
     Effect.gen(function* () {

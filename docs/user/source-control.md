@@ -169,6 +169,22 @@ feature flag, or post-deploy validation remains. Neither action is selected auto
 Cross-repository links use a project on the same host. Azure DevOps reviews require a project checked
 out from the matching organization and repository.
 
+## Let the original agent follow a PR
+
+For a repository configured for FirstMate supervision, ask the implementing
+agent to supervise its linked PR. The agent enrolls the same conversation and
+reports whether enrollment succeeded. FirstMate watches without calling a model
+and resumes that conversation when a CI/review failure needs work or passing
+gates need final functional evidence. It never merges or deploys the PR.
+
+Keep the T3 server running. Supervision survives a server restart, but it cannot
+repair while the server is offline. The pilot allows three automatic resumptions
+within two hours and waits while the thread is busy or needs your answer. Ask
+the agent to stop supervision to cancel it; stopping releases its writer after
+the current work is idle. Ask for supervision status to see its progress and
+why it stopped. Unavailable credentials, exhausted limits and unavailable
+coordination are recorded in thread activity.
+
 ## GitHub stacks
 
 The Pull Requests page shows each PR's position in its GitHub stack. Open the stack badge in a

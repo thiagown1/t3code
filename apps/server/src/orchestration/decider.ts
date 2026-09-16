@@ -12,6 +12,7 @@ import {
   type OrchestrationThread,
   type ThreadPullRequestKey,
   type ThreadPullRequestLink,
+  type ThreadPullRequestSupervision,
   type OrchestrationThreadActivity,
 } from "@t3tools/contracts";
 import {
@@ -454,11 +455,19 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.delete": {
-      yield* requireThread({
+      const thread = yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
       });
+      if (
+        thread.pullRequests.some((link) => link.supervision && link.supervision.state !== "stopped")
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Stop PR supervision and release its writer before deleting the thread.",
+        });
+      }
       const occurredAt = yield* nowIso;
       return {
         ...(yield* withEventBase({
@@ -1080,6 +1089,162 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
+    case "thread.pull-request.supervise": {
+      const thread = yield* requireThread({ readModel, command, threadId: command.threadId });
+      const key = normalizeThreadPullRequestKey(command);
+      const link = findPullRequestLink(thread, key);
+      const reject = (detail: string) =>
+        new OrchestrationCommandInvariantError({ commandType: command.type, detail });
+      if (!link || link.source === "stack-dismissed" || key.host !== "github.com")
+        return yield* reject("Supervision requires a visible GitHub PR link.");
+      if (!/^firstmate:[a-f0-9-]{36}$/.test(command.owner))
+        return yield* reject("Invalid supervision owner.");
+      const occurredAt = yield* nowIso;
+      const previous = link.supervision;
+      let supervision: ThreadPullRequestSupervision;
+      let turnEvents: ReadonlyArray<PlannedOrchestrationEvent> = [];
+      if (command.action === "start") {
+        if (thread.archivedAt !== null || thread.interactionMode !== "default")
+          return yield* reject("Thread is archived or in plan mode.");
+        if (previous && previous.state !== "stopped")
+          return yield* reject("PR already supervised in this thread.");
+        const active = readModel.threads.flatMap((t) =>
+          t.pullRequests.filter((l) => l.supervision && l.supervision.state !== "stopped"),
+        );
+        if (active.length >= 4 || active.some((l) => threadPullRequestKeysEqual(l, key)))
+          return yield* reject("Supervision capacity reached or PR already has an owner.");
+        supervision = {
+          owner: command.owner,
+          environmentKey: command.environmentKey,
+          state: "pending",
+          baseRef: command.baseRef,
+          headRef: command.headRef,
+          expiresAt: DateTime.formatIso(
+            DateTime.add(DateTime.makeUnsafe(occurredAt), { hours: 2 }),
+          ),
+          resumes: 0,
+          lastResumeKey: null,
+          lastReason: null,
+        };
+      } else {
+        if (
+          !previous ||
+          previous.owner !== command.owner ||
+          previous.environmentKey !== command.environmentKey ||
+          previous.state === "stopped"
+        )
+          return yield* reject("Supervision owner is no longer current.");
+        supervision = { ...previous };
+        if (command.action === "enrolled") {
+          if (previous.state !== "pending")
+            return yield* reject("Enrollment is no longer pending.");
+          supervision = { ...previous, state: "watching", lastReason: null };
+        } else if (command.action === "wake") {
+          if (
+            previous.state !== "watching" ||
+            previous.resumes >= 3 ||
+            Date.parse(previous.expiresAt) <= Date.parse(occurredAt) ||
+            !command.resumeKey ||
+            !command.message ||
+            command.resumeKey === previous.lastResumeKey
+          )
+            return yield* reject("Supervision signal is duplicate, expired or out of budget.");
+          if (
+            thread.archivedAt !== null ||
+            thread.snoozedUntil != null ||
+            thread.interactionMode !== "default" ||
+            thread.session?.status === "starting" ||
+            thread.session?.status === "running" ||
+            thread.session?.status === "error" ||
+            openRequests(thread).size > 0 ||
+            hasQueuedTurnStartForThread(thread, occurredAt)
+          )
+            return yield* reject("Thread has active or operator-owned work.");
+          const workspace = readModel.projects.find(
+            (project) => project.id === thread.projectId,
+          )?.firstMate;
+          const decisionPending = workspace?.decisions.some(
+            (decision) =>
+              decision.status === "pending" &&
+              workspace.topics.some(
+                (topic) => topic.id === decision.topicId && topic.threadId === thread.id,
+              ),
+          );
+          if (decisionPending) return yield* reject("Project has a pending FirstMate decision.");
+          const events = yield* decideOrchestrationCommand({
+            readModel,
+            command: {
+              type: "thread.turn.start",
+              commandId: command.commandId,
+              threadId: thread.id,
+              message: {
+                messageId: MessageId.make(`pr-supervision:${command.commandId}`),
+                role: "user",
+                text: command.message,
+                attachments: [],
+              },
+              runtimeMode: thread.runtimeMode,
+              interactionMode: thread.interactionMode,
+              createdAt: occurredAt,
+            },
+          });
+          turnEvents = Array.isArray(events) ? events : [events as PlannedOrchestrationEvent];
+          supervision = {
+            ...previous,
+            resumes: previous.resumes + 1,
+            lastResumeKey: command.resumeKey,
+            lastReason: null,
+          };
+        } else {
+          supervision = {
+            ...previous,
+            state:
+              command.action === "released"
+                ? "stopped"
+                : command.action === "stop"
+                  ? "stopping"
+                  : "blocked",
+            lastReason: command.reason?.slice(0, 300) ?? null,
+          };
+        }
+      }
+      const event: PlannedOrchestrationEvent = {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: thread.id,
+          occurredAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.pull-request-linked",
+        payload: { threadId: thread.id, link: { ...link, supervision }, updatedAt: occurredAt },
+      };
+      if (command.action === "blocked" || command.action === "released") {
+        const activity = yield* decideOrchestrationCommand({
+          readModel,
+          command: {
+            type: "thread.activity.append",
+            commandId: command.commandId,
+            threadId: thread.id,
+            createdAt: occurredAt,
+            activity: {
+              id: EventId.make(`pr-supervision:${command.commandId}`),
+              tone: command.action === "blocked" ? "error" : "info",
+              kind: `pr.supervision.${command.action}`,
+              summary: command.reason ?? "PR supervision changed.",
+              payload: { repository: link.repository, number: link.number, owner: command.owner },
+              turnId: null,
+              createdAt: occurredAt,
+            },
+          },
+        });
+        return [
+          event,
+          ...(Array.isArray(activity) ? activity : [activity as PlannedOrchestrationEvent]),
+        ];
+      }
+      return [event, ...turnEvents];
+    }
+
     case "thread.pull-request.link": {
       const thread = yield* requireThread({
         readModel,
@@ -1138,6 +1303,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
           detail: `pull request ${key.host}/${key.repository}#${key.number} is not linked to thread ${command.threadId}`,
+        });
+      }
+      if (existing.supervision && existing.supervision.state !== "stopped") {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Stop PR supervision and release its writer before unlinking the PR.",
         });
       }
       const occurredAt = yield* nowIso;

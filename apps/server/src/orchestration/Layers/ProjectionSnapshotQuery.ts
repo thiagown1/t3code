@@ -34,6 +34,7 @@ import {
   ThreadId,
   ThreadPullRequestSnapshot,
   ThreadPullRequestStack,
+  ThreadPullRequestSupervision,
   ThreadArchiveReceiptPayload,
   type ThreadArchiveReceipt,
   type ThreadPullRequestLink,
@@ -129,6 +130,7 @@ const ProjectionThreadPullRequestDbRowSchema = ProjectionThreadPullRequest.mapFi
   Struct.assign({
     snapshot: Schema.NullOr(Schema.fromJsonString(ThreadPullRequestSnapshot)),
     stack: Schema.NullOr(Schema.fromJsonString(ThreadPullRequestStack)),
+    supervision: Schema.NullOr(Schema.fromJsonString(ThreadPullRequestSupervision)),
   }),
 );
 const ProjectionThreadDbRowSchema = ProjectionThread.mapFields(
@@ -441,6 +443,7 @@ function mapPullRequestRow(
     linkedAt: row.linkedAt,
     snapshot: row.snapshot,
     stack: row.stack,
+    ...(row.supervision ? { supervision: row.supervision } : {}),
   };
 }
 
@@ -795,7 +798,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           source,
           linked_at AS "linkedAt",
           snapshot_json AS "snapshot",
-          stack_json AS "stack"
+          stack_json AS "stack",
+          supervision_json AS "supervision"
         FROM projection_thread_pull_requests
         ORDER BY thread_id ASC, linked_at ASC, number ASC
       `,
@@ -815,7 +819,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           links.source,
           links.linked_at AS "linkedAt",
           links.snapshot_json AS "snapshot",
-          links.stack_json AS "stack"
+          links.stack_json AS "stack",
+          links.supervision_json AS "supervision"
         FROM projection_thread_pull_requests links
         INNER JOIN projection_threads threads
           ON threads.thread_id = links.thread_id
@@ -839,7 +844,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           links.source,
           links.linked_at AS "linkedAt",
           links.snapshot_json AS "snapshot",
-          links.stack_json AS "stack"
+          links.stack_json AS "stack",
+          links.supervision_json AS "supervision"
         FROM projection_thread_pull_requests links
         INNER JOIN projection_threads threads
           ON threads.thread_id = links.thread_id
@@ -1432,7 +1438,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           source,
           linked_at AS "linkedAt",
           snapshot_json AS "snapshot",
-          stack_json AS "stack"
+          stack_json AS "stack",
+          supervision_json AS "supervision"
         FROM projection_thread_pull_requests
         WHERE thread_id = ${threadId}
         ORDER BY linked_at ASC, number ASC

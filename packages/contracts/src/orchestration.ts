@@ -867,7 +867,21 @@ export const ThreadDeliveryStatus = Schema.Literals([
 ]);
 export type ThreadDeliveryStatus = typeof ThreadDeliveryStatus.Type;
 
+export const ThreadPullRequestSupervision = Schema.Struct({
+  owner: TrimmedNonEmptyString,
+  environmentKey: TrimmedNonEmptyString,
+  state: Schema.Literals(["pending", "watching", "stopping", "stopped", "blocked"]),
+  baseRef: TrimmedNonEmptyString,
+  headRef: TrimmedNonEmptyString,
+  expiresAt: IsoDateTime,
+  resumes: NonNegativeInt,
+  lastResumeKey: Schema.NullOr(Schema.String),
+  lastReason: Schema.NullOr(Schema.String),
+});
+export type ThreadPullRequestSupervision = typeof ThreadPullRequestSupervision.Type;
+
 export const ThreadPullRequestLink = Schema.Struct({
+  supervision: Schema.optional(Schema.NullOr(ThreadPullRequestSupervision)),
   ...ThreadPullRequestKey.fields,
   url: TrimmedNonEmptyString,
   source: ThreadPullRequestLinkSource,
@@ -1767,7 +1781,23 @@ const ThreadPullRequestLinkSyncCommand = Schema.Struct({
   stack: Schema.NullOr(ThreadPullRequestStack),
 });
 
+const ThreadPullRequestSupervisionCommand = Schema.Struct({
+  type: Schema.Literal("thread.pull-request.supervise"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  ...ThreadPullRequestKey.fields,
+  action: Schema.Literals(["start", "enrolled", "stop", "released", "blocked", "wake"]),
+  owner: TrimmedNonEmptyString,
+  environmentKey: TrimmedNonEmptyString,
+  baseRef: TrimmedNonEmptyString,
+  headRef: TrimmedNonEmptyString,
+  resumeKey: Schema.optional(TrimmedNonEmptyString),
+  message: Schema.optional(Schema.String),
+  reason: Schema.optional(Schema.String),
+});
+
 const InternalOrchestrationCommand = Schema.Union([
+  ThreadPullRequestSupervisionCommand,
   ThreadAutoSettleCommand,
   ThreadPullRequestSyncCommand,
   ThreadPullRequestLinkSyncCommand,
