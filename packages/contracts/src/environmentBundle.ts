@@ -133,3 +133,28 @@ export const EnvironmentBundleServerInventory = Schema.Struct({
   projectInstructionsCoverage: EnvironmentBundleInventoryCoverage,
 });
 export type EnvironmentBundleServerInventory = typeof EnvironmentBundleServerInventory.Type;
+
+export const EnvironmentBundleApplyOperation = Schema.Struct({
+  component: Schema.Literal("skill"),
+  operation: Schema.Literal("disable"),
+  adapter: Schema.Literal("claude-project-skill-override"),
+  skillName: StableId,
+  targetIds: Schema.Array(StableId).check(Schema.isMinLength(1)),
+  providerInstanceIds: Schema.Array(StableId).check(Schema.isMinLength(1)),
+  requiresProviderReload: Schema.Literal(true),
+});
+export type EnvironmentBundleApplyOperation = typeof EnvironmentBundleApplyOperation.Type;
+
+/**
+ * Authoritative, secret-free plan produced immediately before an Environment
+ * Bundle mutation. `targetStateHash` binds confirmation to the exact local
+ * destination contents without exposing those contents or their path.
+ */
+export const EnvironmentBundleApplyPlan = Schema.Struct({
+  bundleId: StableId,
+  canApply: Schema.Boolean,
+  operations: Schema.Array(EnvironmentBundleApplyOperation),
+  blockers: Schema.Array(TrimmedNonEmptyString),
+  targetStateHash: ContentHash,
+});
+export type EnvironmentBundleApplyPlan = typeof EnvironmentBundleApplyPlan.Type;
