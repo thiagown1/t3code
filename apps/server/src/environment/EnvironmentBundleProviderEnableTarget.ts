@@ -1,5 +1,5 @@
-import NodeCrypto from "node:crypto";
-import { isDeepStrictEqual } from "node:util";
+import * as NodeCrypto from "node:crypto";
+import * as NodeUtil from "node:util";
 
 import { ProviderInstanceId } from "@t3tools/contracts";
 import type {
@@ -110,11 +110,11 @@ export function canRollbackProviderEnables(input: {
       return (
         currentInstance !== null &&
         writtenInstance !== null &&
-        isDeepStrictEqual(currentInstance, writtenInstance)
+        NodeUtil.isDeepStrictEqual(currentInstance, writtenInstance)
       );
     }
     const current = legacyProviderSettings(input.current, operation);
     const written = legacyProviderSettings(input.written, operation);
-    return current !== null && written !== null && isDeepStrictEqual(current, written);
+    return current !== null && written !== null && NodeUtil.isDeepStrictEqual(current, written);
   });
 }

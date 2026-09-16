@@ -7,7 +7,10 @@ import type {
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it } from "@effect/vitest";
+import * as Schema from "effect/Schema";
+
+const encodeBundle = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 
 import type { ProjectionSnapshotQueryShape } from "./Services/ProjectionSnapshotQuery.ts";
 import { exportThreadBundleFromProjection } from "./ThreadBundleExport.ts";
@@ -147,60 +150,66 @@ function projection(
 }
 
 describe("Thread Bundle export", () => {
-  it("reads selected snapshots and includes only decisions linked to that thread", async () => {
-    const bundle = await Effect.runPromise(
-      exportThreadBundleFromProjection(
-        {
-          threadIds: [THREAD_ID],
-          sourceEnvironmentId: "desk-source",
-          bundleId: "bundle-one",
-          exportedAt: NOW,
-        },
-        projection(),
-      ),
-    );
-
-    expect(bundle.threads).toHaveLength(1);
-    expect(
-      bundle.threads[0]?.resolvedDecisions.map((decision) => decision.sourceDecisionId),
-    ).toEqual(["decision-linked"]);
-    expect(JSON.stringify(bundle)).not.toMatch(/credential-secret|internal-source|other-source/);
-  });
-
-  it("fails closed for duplicate, missing thread, and missing project selections", async () => {
-    const base = {
-      sourceEnvironmentId: "desk-source",
-      bundleId: "bundle-one",
-      exportedAt: NOW,
-    };
-    const duplicate = await Effect.runPromise(
-      Effect.flip(
+  it.effect("reads selected snapshots and includes only decisions linked to that thread", () =>
+    Effect.gen(function* () {
+      const bundle = yield* Effect.suspend(() =>
         exportThreadBundleFromProjection(
-          { ...base, threadIds: [THREAD_ID, THREAD_ID] },
+          {
+            threadIds: [THREAD_ID],
+            sourceEnvironmentId: "desk-source",
+            bundleId: "bundle-one",
+            exportedAt: NOW,
+          },
           projection(),
         ),
-      ),
-    );
-    expect(duplicate.reason).toBe("duplicate-thread");
+      );
 
-    const missingThread = await Effect.runPromise(
-      Effect.flip(
-        exportThreadBundleFromProjection(
-          { ...base, threadIds: [THREAD_ID] },
-          projection({ missingThread: true }),
-        ),
-      ),
-    );
-    expect(missingThread).toMatchObject({ reason: "thread-not-found", threadId: THREAD_ID });
+      expect(bundle.threads).toHaveLength(1);
+      expect(
+        bundle.threads[0]?.resolvedDecisions.map((decision) => decision.sourceDecisionId),
+      ).toEqual(["decision-linked"]);
+      expect(yield* encodeBundle(bundle)).not.toMatch(
+        /credential-secret|internal-source|other-source/,
+      );
+    }),
+  );
 
-    const missingProject = await Effect.runPromise(
-      Effect.flip(
-        exportThreadBundleFromProjection(
-          { ...base, threadIds: [THREAD_ID] },
-          projection({ missingProject: true }),
+  it.effect("fails closed for duplicate, missing thread, and missing project selections", () =>
+    Effect.gen(function* () {
+      const base = {
+        sourceEnvironmentId: "desk-source",
+        bundleId: "bundle-one",
+        exportedAt: NOW,
+      };
+      const duplicate = yield* Effect.suspend(() =>
+        Effect.flip(
+          exportThreadBundleFromProjection(
+            { ...base, threadIds: [THREAD_ID, THREAD_ID] },
+            projection(),
+          ),
         ),
-      ),
-    );
-    expect(missingProject).toMatchObject({ reason: "project-not-found", threadId: THREAD_ID });
-  });
+      );
+      expect(duplicate.reason).toBe("duplicate-thread");
+
+      const missingThread = yield* Effect.suspend(() =>
+        Effect.flip(
+          exportThreadBundleFromProjection(
+            { ...base, threadIds: [THREAD_ID] },
+            projection({ missingThread: true }),
+          ),
+        ),
+      );
+      expect(missingThread).toMatchObject({ reason: "thread-not-found", threadId: THREAD_ID });
+
+      const missingProject = yield* Effect.suspend(() =>
+        Effect.flip(
+          exportThreadBundleFromProjection(
+            { ...base, threadIds: [THREAD_ID] },
+            projection({ missingProject: true }),
+          ),
+        ),
+      );
+      expect(missingProject).toMatchObject({ reason: "project-not-found", threadId: THREAD_ID });
+    }),
+  );
 });
