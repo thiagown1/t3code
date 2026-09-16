@@ -3,20 +3,53 @@ import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
 // @effect-diagnostics-next-line nodeBuiltinImport:off - synchronous CLI path comparison has no Effect runtime
 import * as NodePath from "node:path";
-import { pathToFileURL } from "node:url";
-import { DatabaseSync } from "node:sqlite";
+import * as NodeURL from "node:url";
+import * as NodeSqlite from "node:sqlite";
 
+import Mime from "@effect/platform-node/Mime";
 import { ProjectId, RepositoryIdentity } from "@t3tools/contracts";
+import type { ThreadBundleAttachmentReference, ThreadBundleThread } from "@t3tools/contracts";
 import { normalizeGitRemoteUrl } from "@t3tools/shared/git";
 import * as Schema from "effect/Schema";
 import {
   buildThreadBundle,
+  embedThreadBundleAttachments,
+  MAX_THREAD_BUNDLE_BYTES,
   parseThreadBundleJson,
   serializeThreadBundle,
 } from "@t3tools/shared/threadBundle";
 import * as DateTime from "effect/DateTime";
 
-const MAX_THREAD_BUNDLE_BYTES = 5 * 1024 * 1024;
+const LEGACY_THREAD_BUNDLE_BYTES = 5 * 1024 * 1024;
+
+const IMAGE_EXTENSION_BY_MIME_TYPE: Readonly<Record<string, string>> = {
+  "image/avif": ".avif",
+  "image/bmp": ".bmp",
+  "image/gif": ".gif",
+  "image/heic": ".heic",
+  "image/heif": ".heif",
+  "image/jpeg": ".jpg",
+  "image/jpg": ".jpg",
+  "image/png": ".png",
+  "image/svg+xml": ".svg",
+  "image/tiff": ".tiff",
+  "image/webp": ".webp",
+};
+const SAFE_IMAGE_FILE_EXTENSIONS = new Set([
+  ".avif",
+  ".bmp",
+  ".gif",
+  ".heic",
+  ".heif",
+  ".ico",
+  ".jpeg",
+  ".jpg",
+  ".png",
+  ".svg",
+  ".tiff",
+  ".webp",
+]);
+const MAX_ATTACHMENT_READ_BYTES = 5 * 1024 * 1024;
 
 const REQUIRED_COLUMNS = {
   projection_projects: ["project_id", "title"],
@@ -70,6 +103,8 @@ export interface ExportT3ThreadBundleOptions {
   readonly projectIdentitiesPath?: string;
   readonly bundleId?: string;
   readonly exportedAt?: string;
+  /** Explicit native attachment store root; never serialized into the bundle. */
+  readonly attachmentsDir?: string;
 }
 
 export interface ExportT3ThreadBundleResult {
@@ -150,6 +185,9 @@ const ProjectIdentityOverride = Schema.Struct({
 const ProjectIdentityFile = Schema.Struct({
   projects: Schema.Array(ProjectIdentityOverride),
 });
+const decodeProjectIdentityFile = Schema.decodeUnknownSync(ProjectIdentityFile, {
+  onExcessProperty: "error",
+});
 
 type ProjectIdentityOverride = typeof ProjectIdentityOverride.Type;
 
@@ -184,9 +222,7 @@ function readProjectIdentityOverrides(path: string): ReadonlyArray<ProjectIdenti
     return fail("invalid-source", "Project identity metadata is invalid");
   }
   try {
-    return Schema.decodeUnknownSync(ProjectIdentityFile, {
-      onExcessProperty: "error",
-    })(json).projects;
+    return decodeProjectIdentityFile(json).projects;
   } catch {
     return fail("invalid-source", "Project identity metadata is invalid");
   }
@@ -256,6 +292,118 @@ function sqliteBoolean(value: unknown, label: string): boolean {
   return value === 1;
 }
 
+function attachmentFileExtension(fileName: string): string {
+  const extension = NodePath.extname(fileName).toLowerCase();
+  // Keep this in lockstep with apps/server/src/attachmentStore.ts. In-flight
+  // .part files and unknown extensions are stored as opaque .bin files.
+  if (extension === ".part" || !/^\.[a-z0-9]{1,10}$/.test(extension)) return ".bin";
+  return extension;
+}
+
+function inferImageExtension(mimeType: string, fileName: string): string {
+  const fromMime = IMAGE_EXTENSION_BY_MIME_TYPE[mimeType.toLowerCase()];
+  if (fromMime) return fromMime;
+  const fromMimeExtension = Mime.getExtension(mimeType);
+  if (fromMimeExtension && SAFE_IMAGE_FILE_EXTENSIONS.has(fromMimeExtension)) {
+    return fromMimeExtension;
+  }
+  const match = /\.([a-z0-9]{1,8})$/i.exec(fileName.trim());
+  const fromName = match ? `.${match[1]!.toLowerCase()}` : "";
+  return SAFE_IMAGE_FILE_EXTENSIONS.has(fromName) ? fromName : ".bin";
+}
+
+function attachmentRelativePath(attachment: ThreadBundleAttachmentReference): string {
+  const extension =
+    attachment.type === "file"
+      ? attachmentFileExtension(attachment.name)
+      : attachment.type === "image"
+        ? inferImageExtension(attachment.mimeType, attachment.name)
+        : null;
+  if (!extension) throw new Error("Unsupported attachment type");
+  // IDs are opaque metadata, not paths. The attachment store uses one file
+  // name under its root; reject every path-bearing form before joining.
+  if (
+    !/^[a-z0-9_-]+$/i.test(attachment.sourceAttachmentId) ||
+    attachment.sourceAttachmentId.includes("..")
+  ) {
+    throw new Error("Unsafe attachment source ID");
+  }
+  return `${attachment.sourceAttachmentId}${extension}`;
+}
+
+function isWithin(root: string, candidate: string): boolean {
+  return candidate === root || candidate.startsWith(`${root}${NodePath.sep}`);
+}
+
+function prepareAttachmentRoot(attachmentsDir: string): string {
+  try {
+    const root = NodeFS.realpathSync.native(attachmentsDir);
+    if (!NodeFS.statSync(root).isDirectory()) throw new Error("not a directory");
+    return root;
+  } catch {
+    return fail("invalid-source", "Attachment directory is missing or invalid");
+  }
+}
+
+function readAttachmentFromStore(
+  root: string,
+  attachment: ThreadBundleAttachmentReference,
+  _thread: ThreadBundleThread,
+): Uint8Array {
+  let descriptor: number | undefined;
+  try {
+    const relativePath = attachmentRelativePath(attachment);
+    const lexicalPath = NodePath.resolve(root, relativePath);
+    if (!isWithin(root, lexicalPath)) throw new Error("attachment path escapes root");
+    const realPath = NodeFS.realpathSync.native(lexicalPath);
+    if (!isWithin(root, realPath)) throw new Error("attachment path escapes root");
+
+    descriptor = NodeFS.openSync(realPath, "r");
+    const before = NodeFS.fstatSync(descriptor);
+    if (
+      !before.isFile() ||
+      before.size !== attachment.sizeBytes ||
+      attachment.sizeBytes > MAX_ATTACHMENT_READ_BYTES
+    ) {
+      throw new Error("attachment size mismatch");
+    }
+    // Read at most the declared size plus one byte. A file replaced or grown
+    // after the initial fstat must not turn this offline tool into an
+    // unbounded read.
+    const bytes = Buffer.allocUnsafe(attachment.sizeBytes + 1);
+    let bytesRead = 0;
+    while (bytesRead < bytes.byteLength) {
+      const read = NodeFS.readSync(
+        descriptor,
+        bytes,
+        bytesRead,
+        bytes.byteLength - bytesRead,
+        null,
+      );
+      if (read === 0) break;
+      bytesRead += read;
+    }
+    const after = NodeFS.fstatSync(descriptor);
+    if (
+      !after.isFile() ||
+      after.size !== attachment.sizeBytes ||
+      bytesRead !== attachment.sizeBytes ||
+      before.mtimeMs !== after.mtimeMs ||
+      before.ctimeMs !== after.ctimeMs
+    ) {
+      throw new Error("attachment changed while reading");
+    }
+    return bytes.subarray(0, bytesRead);
+  } catch {
+    throw new OfflineThreadBundleExportError(
+      "invalid-source",
+      "Attachment file is missing, unsafe, unreadable, or has an invalid size",
+    );
+  } finally {
+    if (descriptor !== undefined) NodeFS.closeSync(descriptor);
+  }
+}
+
 function parseModelSelection(value: unknown): {
   readonly instanceId: string;
   readonly model: string;
@@ -282,7 +430,7 @@ function quoteIdentifier(identifier: string): string {
   return `"${identifier.replaceAll('"', '""')}"`;
 }
 
-function tableColumns(database: DatabaseSync, table: string): Set<string> {
+function tableColumns(database: NodeSqlite.DatabaseSync, table: string): Set<string> {
   return new Set(
     database
       .prepare(`PRAGMA table_info(${quoteIdentifier(table)})`)
@@ -291,7 +439,7 @@ function tableColumns(database: DatabaseSync, table: string): Set<string> {
   );
 }
 
-function assertSupportedSchema(database: DatabaseSync): void {
+function assertSupportedSchema(database: NodeSqlite.DatabaseSync): void {
   for (const [table, columns] of Object.entries(REQUIRED_COLUMNS)) {
     const available = tableColumns(database, table);
     if (available.size === 0 || columns.some((column) => !available.has(column))) {
@@ -300,7 +448,10 @@ function assertSupportedSchema(database: DatabaseSync): void {
   }
 }
 
-function assertNoUnmappedDecisions(database: DatabaseSync, selectedThreadIdsJson: string): void {
+function assertNoUnmappedDecisions(
+  database: NodeSqlite.DatabaseSync,
+  selectedThreadIdsJson: string,
+): void {
   const projectColumns = tableColumns(database, "projection_projects");
   if (projectColumns.has("firstmate_json")) {
     const invalid = database
@@ -358,7 +509,10 @@ function assertNoUnmappedDecisions(database: DatabaseSync, selectedThreadIdsJson
   }
 }
 
-function selectThreads(database: DatabaseSync, selection: ExportSelection): Array<ThreadRow> {
+function selectThreads(
+  database: NodeSqlite.DatabaseSync,
+  selection: ExportSelection,
+): Array<ThreadRow> {
   const base = `SELECT
       threads.thread_id AS threadId,
       threads.project_id AS projectId,
@@ -414,7 +568,7 @@ function selectedIds(selection: ExportSelection, rows: ReadonlyArray<ThreadRow>)
   return ids;
 }
 
-function selectMessages(database: DatabaseSync, idsJson: string): Array<MessageRow> {
+function selectMessages(database: NodeSqlite.DatabaseSync, idsJson: string): Array<MessageRow> {
   return database
     .prepare(
       `SELECT
@@ -433,7 +587,10 @@ function selectMessages(database: DatabaseSync, idsJson: string): Array<MessageR
     .all(idsJson) as unknown as Array<MessageRow>;
 }
 
-function selectAttachments(database: DatabaseSync, idsJson: string): Array<AttachmentRow> {
+function selectAttachments(
+  database: NodeSqlite.DatabaseSync,
+  idsJson: string,
+): Array<AttachmentRow> {
   const invalid = database
     .prepare(
       `SELECT COUNT(*) AS count
@@ -481,7 +638,7 @@ function selectAttachments(database: DatabaseSync, idsJson: string): Array<Attac
     .all(idsJson) as unknown as Array<AttachmentRow>;
 }
 
-function selectPlans(database: DatabaseSync, idsJson: string): Array<PlanRow> {
+function selectPlans(database: NodeSqlite.DatabaseSync, idsJson: string): Array<PlanRow> {
   return database
     .prepare(
       `SELECT
@@ -498,7 +655,7 @@ function selectPlans(database: DatabaseSync, idsJson: string): Array<PlanRow> {
     .all(idsJson) as unknown as Array<PlanRow>;
 }
 
-function readBundleInput(database: DatabaseSync, options: ExportT3ThreadBundleOptions) {
+function readBundleInput(database: NodeSqlite.DatabaseSync, options: ExportT3ThreadBundleOptions) {
   assertSupportedSchema(database);
   const threadRows = selectThreads(database, options.selection);
   const ids = selectedIds(options.selection, threadRows);
@@ -668,7 +825,7 @@ export function exportT3ThreadBundle(
   }
   const database = (() => {
     try {
-      return new DatabaseSync(options.databasePath, { readOnly: true });
+      return new NodeSqlite.DatabaseSync(options.databasePath, { readOnly: true });
     } catch {
       return fail("invalid-source", "Failed to open the source database read-only");
     }
@@ -693,16 +850,26 @@ export function exportT3ThreadBundle(
     return fail("invalid-source", "Failed to read a consistent source database snapshot");
   }
   input = applyProjectIdentityOverrides(input, options.projectIdentitiesPath);
+  const attachmentRoot =
+    options.attachmentsDir === undefined
+      ? undefined
+      : prepareAttachmentRoot(options.attachmentsDir);
 
   let serialized: string;
   let exportedMessageCount: number;
   try {
-    const bundle = buildThreadBundle({
+    const referenceBundle = buildThreadBundle({
       bundleId: options.bundleId ?? `offline-${NodeCrypto.randomUUID()}`,
       exportedAt: options.exportedAt ?? DateTime.formatIso(DateTime.nowUnsafe()),
       sourceEnvironmentId: options.environmentId,
       entries: input.entries,
     });
+    const bundle =
+      attachmentRoot === undefined
+        ? referenceBundle
+        : embedThreadBundleAttachments(referenceBundle, (attachment, thread) =>
+            readAttachmentFromStore(attachmentRoot, attachment, thread),
+          );
     exportedMessageCount = bundle.threads.reduce(
       (count, thread) => count + thread.messages.length,
       0,
@@ -716,10 +883,12 @@ export function exportT3ThreadBundle(
   } catch {
     return fail("invalid-source", "Source database contains invalid Thread Bundle data");
   }
-  if (Buffer.byteLength(serialized, "utf8") > MAX_THREAD_BUNDLE_BYTES) {
+  const maxBytes =
+    attachmentRoot === undefined ? LEGACY_THREAD_BUNDLE_BYTES : MAX_THREAD_BUNDLE_BYTES;
+  if (Buffer.byteLength(serialized, "utf8") > maxBytes) {
     return fail(
       "output-too-large",
-      "Thread Bundle exceeds the 5 MB import limit; select fewer threads and try again",
+      `Thread Bundle exceeds the ${maxBytes / (1024 * 1024)} MB import limit; select fewer threads and try again`,
     );
   }
   writeExclusive(options.outputPath, serialized);
@@ -733,6 +902,7 @@ export function parseExportT3ThreadBundleArgs(
   let environmentId: string | undefined;
   let outputPath: string | undefined;
   let projectIdentitiesPath: string | undefined;
+  let attachmentsDir: string | undefined;
   let open = false;
   const threadIds: Array<string> = [];
   for (let index = 0; index < args.length; index += 1) {
@@ -749,6 +919,7 @@ export function parseExportT3ThreadBundleArgs(
     else if (argument === "--environment-id") environmentId = takeValue();
     else if (argument === "--output") outputPath = takeValue();
     else if (argument === "--project-identities") projectIdentitiesPath = takeValue();
+    else if (argument === "--attachments-dir") attachmentsDir = takeValue();
     else if (argument === "--open") open = true;
     else if (argument === "--thread") {
       threadIds.push(
@@ -771,6 +942,7 @@ export function parseExportT3ThreadBundleArgs(
     outputPath,
     selection: open ? { mode: "open" } : { mode: "threads", threadIds },
     ...(projectIdentitiesPath === undefined ? {} : { projectIdentitiesPath }),
+    ...(attachmentsDir === undefined ? {} : { attachmentsDir }),
   };
 }
 
@@ -791,4 +963,4 @@ function runCli(): void {
 }
 
 const entryPoint = process.argv[1];
-if (entryPoint && import.meta.url === pathToFileURL(entryPoint).href) runCli();
+if (entryPoint && import.meta.url === NodeURL.pathToFileURL(entryPoint).href) runCli();

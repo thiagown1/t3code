@@ -12,9 +12,13 @@ snapshot accessibility metadata. Every omission is counted in the exported threa
 explain what will not be copied. Free-form message and plan text is user-selected content and must be
 reviewed before sharing the bundle outside the destination installation.
 
-Attachment entries are `reference-only` in v1. They preserve enough metadata for review, but do not
-claim that a file can be restored until a future integrity-checked asset adapter includes its
-content. Active streaming messages are omitted instead of exporting a partial turn.
+Attachment entries are `reference-only` in v1. They preserve metadata for review, not restorable
+files. Version 2 embeds every attachment's bytes as canonical base64 with its length and SHA-256;
+a missing file, size/hash mismatch, or unsupported attachment type rejects the entire bundle.
+The limits are 5 MiB per file, 10 MiB of decoded attachments in total, and 20 MiB of JSON. These
+are portability limits, independent of provider upload limits. Active streaming messages are
+omitted instead of exporting a partial turn. Attachment files, like free-form messages, can contain
+sensitive content: integrity validation does not redact them.
 
 The canonical serializer sorts threads, plans, decisions, and omission summaries while preserving
 message order. It rejects duplicate source origins and duplicate message, plan, or decision IDs.
@@ -31,17 +35,25 @@ every selected thread. It does not create threads, bind provider sessions, or wr
 server persistence and UI confirmation remain separate adapters.
 
 Settings > Integrations exposes this dry run under **Conversation portability**. The review accepts a
-Thread Bundle v1 file or pasted JSON, validates it locally, and then requests the authoritative plan.
+Thread Bundle v1 or v2 file or pasted JSON, validates it locally, and then requests the authoritative plan.
 It shows every source thread and destination status rather than collapsing a blocked batch into one
 generic error.
 
-Applying a ready plan sends the exact reviewed bundle and plan back to the server. The server
-recomputes the plan and rejects a stale or blocked confirmation. One internal orchestration command
+Applying a ready plan sends the exact reviewed bundle and plan back to the server. The plan includes
+a SHA-256 of the complete canonical bundle, including attachment contents. The server recomputes
+the plan and rejects a stale, changed-content, or blocked confirmation before publishing files.
+One internal orchestration command
 then creates every selected thread, completed message, proposed plan, generated completed FirstMate
 topic, and resolved decision. The event store and projection pipeline persist all events inside the
 engine's existing SQL transaction, so a rejection or persistence failure commits no partial batch.
 Imported threads are settled independent copies and do not create or bind provider sessions.
-Attachment metadata remains review-only because v1 has no integrity-checked content adapter.
+V1 attachment metadata remains review-only. For v2, the server first validates all bytes and
+publishes immutable, destination-local attachment files without overwriting existing files. Only
+then does it dispatch the atomic conversation import with attachment references, never base64
+content in events. Deterministic destination IDs make retries reuse verified files. A failure or
+uncertain dispatch outcome may leave unreferenced files; it must not delete published files because
+the database may already have committed or a concurrent import may reference them. No attachment
+reference is committed before its file is available.
 
 The read-only `server.exportThreadBundle` RPC accepts one to fifty unique thread IDs. It reads each
 full persisted projection snapshot, resolves its project, selects only FirstMate decisions whose
@@ -64,7 +76,15 @@ For an official installation without the export RPC, `scripts/export-t3-thread-b
 consistent SQLite snapshot in read-only mode and applies the same portable-content builder. Pass
 `--database <snapshot> --environment-id <source-id> --output <new-file> --open`, or replace `--open`
 with repeated `--thread <id>` arguments. It refuses to overwrite an output file, does not truncate
-message history, and rejects unmapped FirstMate decisions. Projects retain their source IDs; the
-destination must already provide matching projects and provider instances before import can pass
-its dry run. Keep the snapshot and bundle private: message and plan text is preserved, not
+message history, and rejects unmapped FirstMate decisions. Optional `--project-identities <json>`
+provides explicit canonical repository identities for every selected project (use `null` for
+non-Git projects); it rejects incomplete mappings and credential-bearing remotes. Only portable
+identity fields enter the bundle. The destination must already provide matching projects and
+provider instances before import can pass its dry run.
+
+Pass `--attachments-dir <source-attachments-directory>` to produce a complete v2 bundle. The
+exporter reads files without changing them and refuses absent files, unsafe paths, and size
+mismatches rather than silently falling back to references. Without that option it still produces
+metadata-only v1; the current online export RPC also remains v1. Keep snapshots and bundles private:
+message, plan and attachment content is preserved, not
 automatically redacted. Credential files and running provider state are never part of this export.

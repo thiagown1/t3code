@@ -6,12 +6,14 @@ import {
   type ThreadBundle,
   type ThreadBundleImportPlan,
 } from "@t3tools/contracts";
+import { embedThreadBundleAttachments } from "@t3tools/shared/threadBundle";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
   buildThreadBundleImportCommand,
   threadBundleImportPlansMatch,
 } from "./ThreadBundleImport.ts";
+import { prepareThreadBundleAttachments } from "./ThreadBundleAttachmentStore.ts";
 
 const bundle = {
   schemaVersion: 1,
@@ -127,5 +129,59 @@ describe("Thread Bundle atomic import command", () => {
       }),
     ).toThrow("not ready");
     expect(threadBundleImportPlansMatch(plan, { ...plan, canImport: false })).toBe(false);
+  });
+
+  it("maps v2 embedded files to destination attachment references without base64", () => {
+    const source = {
+      ...bundle,
+      threads: bundle.threads.map((thread) => ({
+        ...thread,
+        messages: thread.messages.map((message) => ({
+          ...message,
+          attachments: [
+            {
+              sourceAttachmentId: "source-attachment",
+              type: "file" as const,
+              name: "notes.txt",
+              mimeType: "text/plain",
+              sizeBytes: 5,
+              availability: "reference-only" as const,
+            },
+          ],
+        })),
+        omissions: [...thread.omissions, { kind: "attachment-content" as const, count: 1 }],
+      })),
+    } satisfies ThreadBundle;
+    const portable = embedThreadBundleAttachments(source, () => new TextEncoder().encode("notes"));
+    const preparedAttachments = prepareThreadBundleAttachments(portable);
+    const command = buildThreadBundleImportCommand({
+      bundle: portable,
+      plan: {
+        ...plan,
+        items: plan.items.map((item) => ({ ...item, attachmentReferenceCount: 1 })),
+      },
+      commandId: CommandId.make("command-import-attachments"),
+      preparedAttachments,
+    });
+
+    const attachment = command.entries[0]?.messages[0]?.attachments?.[0];
+    expect(attachment).toMatchObject({
+      type: "file",
+      name: "notes.txt",
+      mimeType: "text/plain",
+      sizeBytes: 5,
+    });
+    expect(attachment?.id).not.toBe("source-attachment");
+    expect(JSON.stringify(command)).not.toContain("contentBase64");
+    expect(() =>
+      buildThreadBundleImportCommand({
+        bundle: portable,
+        plan: {
+          ...plan,
+          items: plan.items.map((item) => ({ ...item, attachmentReferenceCount: 1 })),
+        },
+        commandId: CommandId.make("command-unprepared-attachments"),
+      }),
+    ).toThrow("not prepared");
   });
 });

@@ -61,6 +61,15 @@ function entry(targetThreadId: ThreadId, targetProjectId = projectId) {
         messageId: MessageId.make(`message-${targetThreadId}`),
         role: "system" as const,
         text: "Portable context",
+        attachments: [
+          {
+            type: "file" as const,
+            id: `imported-${targetThreadId}-00000000-0000-4000-8000-000000000001-txt`,
+            name: "notes.txt",
+            mimeType: "text/plain",
+            sizeBytes: 5,
+          },
+        ],
         createdAt,
         updatedAt: "2026-09-15T18:01:00.000Z",
       },
@@ -120,6 +129,14 @@ it.layer(NodeServices.layer)("thread bundle atomic import", (it) => {
           {
             role: "system",
             text: "Portable context",
+            attachments: [
+              {
+                type: "file",
+                name: "notes.txt",
+                mimeType: "text/plain",
+                sizeBytes: 5,
+              },
+            ],
             updatedAt: "2026-09-15T18:01:00.000Z",
           },
         ],

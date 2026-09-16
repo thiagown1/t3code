@@ -4,7 +4,7 @@ import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 // @effect-diagnostics-next-line nodeBuiltinImport:off - fixture paths are synchronous and process-local
 import * as NodePath from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import * as NodeSqlite from "node:sqlite";
 
 import { afterEach, describe, expect, it } from "@effect/vitest";
 import { parseThreadBundleJson } from "@t3tools/shared/threadBundle";
@@ -29,7 +29,9 @@ function fixture() {
   temporaryDirectories.push(directory);
   const databasePath = NodePath.join(directory, "source.sqlite");
   const outputPath = NodePath.join(directory, "bundle.json");
-  const database = new DatabaseSync(databasePath);
+  const attachmentsDir = NodePath.join(directory, "attachments");
+  NodeFS.mkdirSync(attachmentsDir);
+  const database = new NodeSqlite.DatabaseSync(databasePath);
   database.exec(`
     CREATE TABLE projection_projects (
       project_id TEXT PRIMARY KEY,
@@ -87,11 +89,11 @@ function fixture() {
   database
     .prepare("INSERT INTO projection_projects (project_id, title) VALUES (?, ?)")
     .run("project-source", "Source project");
-  return { directory, databasePath, outputPath, database };
+  return { directory, databasePath, outputPath, attachmentsDir, database };
 }
 
 function insertThread(
-  database: DatabaseSync,
+  database: NodeSqlite.DatabaseSync,
   input: {
     readonly id?: string;
     readonly modelSelection?: string | null;
@@ -128,7 +130,7 @@ function insertThread(
 }
 
 function insertMessage(
-  database: DatabaseSync,
+  database: NodeSqlite.DatabaseSync,
   input: {
     readonly id: string;
     readonly threadId: string;
@@ -157,7 +159,7 @@ function insertMessage(
     );
 }
 
-function close(database: DatabaseSync): void {
+function close(database: NodeSqlite.DatabaseSync): void {
   database.close();
 }
 
@@ -421,6 +423,214 @@ describe("offline T3 Thread Bundle exporter", () => {
     expect(exported).not.toMatch(/never-export-this-(?:path|context|source|content)/);
   });
 
+  it("embeds image and file attachments only when an explicit store is supplied", () => {
+    const { database, databasePath, outputPath, attachmentsDir } = fixture();
+    const threadId = insertThread(database);
+    const image = Buffer.from([0, 1, 2, 255]);
+    const file = Buffer.from("portable file\n", "utf8");
+    NodeFS.writeFileSync(NodePath.join(attachmentsDir, "attachment-image.png"), image);
+    NodeFS.writeFileSync(NodePath.join(attachmentsDir, "attachment-file.txt"), file);
+    insertMessage(database, {
+      id: "with-attachments",
+      threadId,
+      attachments: [
+        {
+          id: "attachment-image",
+          type: "image",
+          name: "image.png",
+          mimeType: "image/png",
+          sizeBytes: image.byteLength,
+          source: { path: "never-export-this-source-path" },
+        },
+        {
+          id: "attachment-file",
+          type: "file",
+          name: "notes.txt",
+          mimeType: "text/plain",
+          sizeBytes: file.byteLength,
+        },
+      ],
+    });
+    close(database);
+
+    exportT3ThreadBundle({
+      databasePath,
+      environmentId: "official-source",
+      outputPath,
+      attachmentsDir,
+      selection: { mode: "open" },
+      bundleId: "fixture-bundle",
+      exportedAt: NOW,
+    });
+    const exported = NodeFS.readFileSync(outputPath, "utf8");
+    const bundle = parseThreadBundleJson(exported);
+    const attachments = bundle.threads[0]?.messages[0]?.attachments;
+
+    expect(bundle.schemaVersion).toBe(2);
+    expect(attachments).toEqual([
+      {
+        sourceAttachmentId: "attachment-image",
+        type: "image",
+        name: "image.png",
+        mimeType: "image/png",
+        sizeBytes: image.byteLength,
+        availability: "embedded",
+        sha256: NodeCrypto.createHash("sha256").update(image).digest("hex"),
+        contentBase64: image.toString("base64"),
+      },
+      {
+        sourceAttachmentId: "attachment-file",
+        type: "file",
+        name: "notes.txt",
+        mimeType: "text/plain",
+        sizeBytes: file.byteLength,
+        availability: "embedded",
+        sha256: NodeCrypto.createHash("sha256").update(file).digest("hex"),
+        contentBase64: file.toString("base64"),
+      },
+    ]);
+    expect(exported).not.toContain("never-export-this-source-path");
+    expect(exported).not.toContain(attachmentsDir);
+  });
+
+  it("keeps v1 reference-only output when no attachment store is supplied", () => {
+    const { database, databasePath, outputPath } = fixture();
+    const threadId = insertThread(database);
+    insertMessage(database, {
+      id: "reference-only",
+      threadId,
+      attachments: [
+        {
+          id: "attachment-image",
+          type: "image",
+          name: "image.png",
+          mimeType: "image/png",
+          sizeBytes: 4,
+        },
+      ],
+    });
+    close(database);
+
+    exportT3ThreadBundle({
+      databasePath,
+      environmentId: "official-source",
+      outputPath,
+      selection: { mode: "open" },
+      bundleId: "fixture-bundle",
+      exportedAt: NOW,
+    });
+
+    const bundle = parseThreadBundleJson(NodeFS.readFileSync(outputPath, "utf8"));
+    expect(bundle.schemaVersion).toBe(1);
+    expect(bundle.threads[0]?.messages[0]?.attachments[0]?.availability).toBe("reference-only");
+  });
+
+  it.each([
+    ["missing", "missing-file", "missing.png", "image/png", 4, undefined],
+    ["size tampering", "tampered", "tampered.png", "image/png", 5, Buffer.from([1, 2, 3, 4])],
+  ] as const)(
+    "rejects %s attachment without creating output",
+    (_reason, id, name, mimeType, size, bytes) => {
+      const { database, databasePath, outputPath, attachmentsDir } = fixture();
+      const threadId = insertThread(database);
+      if (bytes) NodeFS.writeFileSync(NodePath.join(attachmentsDir, `${id}.png`), bytes);
+      insertMessage(database, {
+        id: "bad-attachment",
+        threadId,
+        attachments: [{ id, type: "image", name, mimeType, sizeBytes: size }],
+      });
+      close(database);
+
+      expect(() =>
+        exportT3ThreadBundle({
+          databasePath,
+          environmentId: "official-source",
+          outputPath,
+          attachmentsDir,
+          selection: { mode: "open" },
+          bundleId: "fixture-bundle",
+          exportedAt: NOW,
+        }),
+      ).toThrow(expect.objectContaining({ code: "invalid-source" }));
+      expect(NodeFS.existsSync(outputPath)).toBe(false);
+    },
+  );
+
+  it("rejects attachment ID traversal before resolving a source path", () => {
+    const { database, databasePath, outputPath, attachmentsDir } = fixture();
+    const threadId = insertThread(database);
+    insertMessage(database, {
+      id: "path-escape",
+      threadId,
+      attachments: [
+        {
+          id: "../outside",
+          type: "image",
+          name: "image.png",
+          mimeType: "image/png",
+          sizeBytes: 1,
+        },
+      ],
+    });
+    close(database);
+
+    expect(() =>
+      exportT3ThreadBundle({
+        databasePath,
+        environmentId: "official-source",
+        outputPath,
+        attachmentsDir,
+        selection: { mode: "open" },
+        bundleId: "fixture-bundle",
+        exportedAt: NOW,
+      }),
+    ).toThrow(expect.objectContaining({ code: "invalid-source" }));
+    expect(NodeFS.existsSync(outputPath)).toBe(false);
+  });
+
+  it("rejects attachment symlinks that resolve outside the explicit store", () => {
+    const { database, databasePath, outputPath, attachmentsDir, directory } = fixture();
+    const threadId = insertThread(database);
+    const outside = NodePath.join(directory, "outside-secret.bin");
+    const link = NodePath.join(attachmentsDir, "attachment-link.png");
+    NodeFS.writeFileSync(outside, Buffer.from([7]));
+    try {
+      NodeFS.symlinkSync(outside, link, "file");
+    } catch {
+      // Windows without developer mode may deny symlink creation; traversal
+      // and root containment remain covered by the preceding test.
+      close(database);
+      return;
+    }
+    insertMessage(database, {
+      id: "symlink-attachment",
+      threadId,
+      attachments: [
+        {
+          id: "attachment-link",
+          type: "image",
+          name: "link.png",
+          mimeType: "image/png",
+          sizeBytes: 1,
+        },
+      ],
+    });
+    close(database);
+
+    expect(() =>
+      exportT3ThreadBundle({
+        databasePath,
+        environmentId: "official-source",
+        outputPath,
+        attachmentsDir,
+        selection: { mode: "open" },
+        bundleId: "fixture-bundle",
+        exportedAt: NOW,
+      }),
+    ).toThrow(expect.objectContaining({ code: "invalid-source" }));
+    expect(NodeFS.existsSync(outputPath)).toBe(false);
+  });
+
   it("keeps the source database byte-identical and refuses to overwrite output", () => {
     const { database, databasePath, outputPath } = fixture();
     insertThread(database);
@@ -578,6 +788,8 @@ describe("offline T3 Thread Bundle exporter", () => {
         "bundle.json",
         "--project-identities",
         "identities.json",
+        "--attachments-dir",
+        "attachments",
         "--thread",
         "one,two",
         "--thread",
@@ -598,6 +810,20 @@ describe("offline T3 Thread Bundle exporter", () => {
         "one",
       ]).projectIdentitiesPath,
     ).toBe("identities.json");
+    expect(
+      parseExportT3ThreadBundleArgs([
+        "--database",
+        "source.sqlite",
+        "--environment-id",
+        "source",
+        "--output",
+        "bundle.json",
+        "--attachments-dir",
+        "attachments",
+        "--thread",
+        "one",
+      ]).attachmentsDir,
+    ).toBe("attachments");
     expect(() =>
       parseExportT3ThreadBundleArgs([
         "--database",

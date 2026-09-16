@@ -1,4 +1,7 @@
 import {
+  MAX_THREAD_BUNDLE_BYTES,
+  THREAD_BUNDLE_MAX_ATTACHMENT_BYTES,
+  THREAD_BUNDLE_MAX_TOTAL_ATTACHMENT_BYTES,
   ThreadBundle,
   ThreadId,
   type FirstMateDecision,
@@ -11,9 +14,86 @@ import {
   type ThreadBundleImportStatus,
   type ThreadBundleOmissionKind,
   type ThreadBundleThread,
+  type ThreadBundleEmbeddedAttachment,
+  type ThreadBundleAttachmentReference,
   type ThreadBundle as ThreadBundleType,
 } from "@t3tools/contracts";
+import { sha256 } from "@noble/hashes/sha2";
+import * as Encoding from "effect/Encoding";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
+
+export { MAX_THREAD_BUNDLE_BYTES } from "@t3tools/contracts";
+
+export function decodeThreadBundleAttachment(
+  attachment: ThreadBundleEmbeddedAttachment,
+): Uint8Array {
+  if (attachment.contentBase64.length > 4 * Math.ceil(THREAD_BUNDLE_MAX_ATTACHMENT_BYTES / 3)) {
+    throw new Error("Thread Bundle attachment exceeds the file size limit");
+  }
+  const bytes = Result.getOrThrow(Encoding.decodeBase64(attachment.contentBase64));
+  if (Encoding.encodeBase64(bytes) !== attachment.contentBase64) {
+    throw new Error("Thread Bundle attachment is not canonical base64");
+  }
+  if (
+    bytes.length === 0 ||
+    bytes.length !== attachment.sizeBytes ||
+    bytes.length > THREAD_BUNDLE_MAX_ATTACHMENT_BYTES
+  ) {
+    throw new Error("Thread Bundle attachment size does not match its content");
+  }
+  const digest = Array.from(sha256(bytes), (byte) => byte.toString(16).padStart(2, "0")).join("");
+  if (digest !== attachment.sha256) throw new Error("Thread Bundle attachment hash mismatch");
+  return bytes;
+}
+
+/** Offline/native adapters supply bytes; no host filesystem path enters the portable bundle. */
+export function embedThreadBundleAttachments(
+  bundle: ThreadBundleType,
+  readAttachment: (
+    attachment: ThreadBundleAttachmentReference,
+    thread: ThreadBundleThread,
+  ) => Uint8Array,
+): ThreadBundleType {
+  const normalized = normalizeThreadBundle(bundle);
+  let totalBytes = 0;
+  return normalizeThreadBundle({
+    ...normalized,
+    schemaVersion: 2,
+    threads: normalized.threads.map((thread) => ({
+      ...thread,
+      messages: thread.messages.map((message) => ({
+        ...message,
+        attachments: message.attachments.map((attachment) => {
+          if (attachment.availability === "embedded") return attachment;
+          if (attachment.type !== "image" && attachment.type !== "file") {
+            throw new Error("Thread Bundle attachment type cannot be restored");
+          }
+          if (attachment.sizeBytes > THREAD_BUNDLE_MAX_ATTACHMENT_BYTES) {
+            throw new Error("Thread Bundle attachment exceeds the file size limit");
+          }
+          const bytes = readAttachment(attachment, thread);
+          totalBytes += bytes.length;
+          if (bytes.length !== attachment.sizeBytes)
+            throw new Error("Thread Bundle attachment size mismatch");
+          if (totalBytes > THREAD_BUNDLE_MAX_TOTAL_ATTACHMENT_BYTES) {
+            throw new Error("Thread Bundle attachments exceed the total size limit");
+          }
+          return {
+            ...attachment,
+            type: attachment.type,
+            availability: "embedded" as const,
+            sha256: Array.from(sha256(bytes), (byte) => byte.toString(16).padStart(2, "0")).join(
+              "",
+            ),
+            contentBase64: Encoding.encodeBase64(bytes),
+          };
+        }),
+      })),
+      omissions: thread.omissions.filter((omission) => omission.kind !== "attachment-content"),
+    })),
+  });
+}
 
 type ThreadBundleBuildMessage = Pick<
   OrchestrationMessage,
@@ -216,12 +296,55 @@ export function buildThreadBundle(input: {
 }
 
 export function normalizeThreadBundle(bundle: ThreadBundleType): ThreadBundleType {
+  if (bundle.schemaVersion !== 1 && bundle.schemaVersion !== 2) {
+    throw new Error("Unsupported Thread Bundle schema version");
+  }
+  // RPC callers already have a decoded object, so enforce the product bound here
+  // as well as at the pasted/file JSON boundary.
+  if (new TextEncoder().encode(JSON.stringify(bundle)).length > MAX_THREAD_BUNDLE_BYTES) {
+    throw new Error("Thread Bundle exceeds the JSON size limit");
+  }
+  let totalBytes = 0;
   const seenOrigins = new Set<string>();
   const threads = [...bundle.threads]
     .map((thread) => {
       const key = originKey(thread.sourceEnvironmentId, thread.sourceThreadId);
       if (seenOrigins.has(key)) throw new Error(`Thread Bundle contains duplicate origin: ${key}`);
       seenOrigins.add(key);
+      const attachmentIdentities = new Map<string, string>();
+      for (const message of thread.messages) {
+        assertUnique(
+          message.attachments.map((attachment) => attachment.sourceAttachmentId),
+          "attachment ID in message",
+        );
+        for (const attachment of message.attachments) {
+          if (bundle.schemaVersion === 1 && attachment.availability !== "reference-only") {
+            throw new Error("Thread Bundle v1 cannot contain embedded attachments");
+          }
+          if (bundle.schemaVersion === 2 && attachment.availability !== "embedded") {
+            throw new Error("Thread Bundle v2 requires every attachment file");
+          }
+          if (attachment.availability === "embedded") {
+            const identity = JSON.stringify([
+              attachment.type,
+              attachment.name,
+              attachment.mimeType,
+              attachment.sizeBytes,
+              attachment.sha256,
+            ]);
+            const prior = attachmentIdentities.get(attachment.sourceAttachmentId);
+            if (prior !== undefined && prior !== identity) {
+              throw new Error("Thread Bundle attachment ID has inconsistent metadata or content");
+            }
+            attachmentIdentities.set(attachment.sourceAttachmentId, identity);
+            totalBytes += attachment.sizeBytes;
+            if (totalBytes > THREAD_BUNDLE_MAX_TOTAL_ATTACHMENT_BYTES) {
+              throw new Error("Thread Bundle attachments exceed the total size limit");
+            }
+            decodeThreadBundleAttachment(attachment);
+          }
+        }
+      }
       assertUnique(
         thread.messages.map((message) => message.sourceMessageId),
         `message ID in ${key}`,
@@ -259,7 +382,7 @@ export function normalizeThreadBundle(bundle: ThreadBundleType): ThreadBundleTyp
       ),
     );
   return {
-    schemaVersion: 1,
+    schemaVersion: bundle.schemaVersion,
     bundleId: bundle.bundleId,
     exportedAt: bundle.exportedAt,
     threads,
@@ -267,16 +390,23 @@ export function normalizeThreadBundle(bundle: ThreadBundleType): ThreadBundleTyp
 }
 
 export function serializeThreadBundle(bundle: ThreadBundleType): string {
-  return `${JSON.stringify(normalizeThreadBundle(bundle), null, 2)}\n`;
+  const json = `${JSON.stringify(normalizeThreadBundle(bundle), null, 2)}\n`;
+  if (new TextEncoder().encode(json).length > MAX_THREAD_BUNDLE_BYTES) {
+    throw new Error("Thread Bundle exceeds the JSON size limit");
+  }
+  return json;
 }
 
 export function parseThreadBundleJson(json: string): ThreadBundleType {
+  if (new TextEncoder().encode(json).length > MAX_THREAD_BUNDLE_BYTES) {
+    throw new Error("Thread Bundle exceeds the JSON size limit");
+  }
   const input: unknown = JSON.parse(json);
   const version =
     typeof input === "object" && input !== null && "schemaVersion" in input
       ? (input as { readonly schemaVersion?: unknown }).schemaVersion
       : undefined;
-  if (version !== 1) {
+  if (version !== 1 && version !== 2) {
     throw new Error(`Unsupported Thread Bundle schema version: ${String(version ?? "missing")}`);
   }
   return normalizeThreadBundle(decodeThreadBundle(input));
@@ -347,6 +477,10 @@ export function buildThreadBundleImportPlan(input: {
   });
   return {
     bundleId: input.bundle.bundleId,
+    bundleSha256: Array.from(
+      sha256(new TextEncoder().encode(serializeThreadBundle(input.bundle))),
+      (byte) => byte.toString(16).padStart(2, "0"),
+    ).join(""),
     canImport: items.length > 0 && items.every((item) => item.status === "ready"),
     items,
   };

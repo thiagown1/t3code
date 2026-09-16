@@ -26,6 +26,9 @@ const PENDING_ATTACHMENT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const PARTIAL_UPLOAD_MAX_AGE_MS = 60 * 60 * 1000;
 
 export function toSafeThreadAttachmentSegment(threadId: string): string | null {
+  if (threadId.startsWith("bundle:")) {
+    return `bundle-${NodeCrypto.createHash("sha256").update(threadId).digest("hex").slice(0, 40)}`;
+  }
   const segment = threadId
     .trim()
     .toLowerCase()

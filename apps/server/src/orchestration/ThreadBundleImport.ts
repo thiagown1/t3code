@@ -11,6 +11,11 @@ import {
 } from "@t3tools/contracts";
 import { normalizeThreadBundle, threadBundleTargetThreadId } from "@t3tools/shared/threadBundle";
 
+import {
+  threadBundleAttachmentMessageKey,
+  type PreparedThreadBundleAttachments,
+} from "./ThreadBundleAttachmentStore.ts";
+
 type ThreadBundleImportCommand = Extract<
   OrchestrationCommand,
   { readonly type: "thread.bundle.import" }
@@ -35,6 +40,7 @@ export function buildThreadBundleImportCommand(input: {
   readonly bundle: ThreadBundle;
   readonly plan: ThreadBundleImportPlan;
   readonly commandId: CommandId;
+  readonly preparedAttachments?: PreparedThreadBundleAttachments;
 }): ThreadBundleImportCommand {
   if (!input.plan.canImport || input.plan.bundleId !== input.bundle.bundleId) {
     throw new Error("Thread Bundle import plan is not ready for this bundle");
@@ -79,20 +85,33 @@ export function buildThreadBundleImportCommand(input: {
       runtimeMode: thread.runtimeMode,
       interactionMode: thread.interactionMode,
       branch: thread.branch,
-      messages: thread.messages.map((message) => ({
-        messageId: MessageId.make(
-          scopedId(
-            "bundle-message",
-            thread.sourceEnvironmentId,
-            thread.sourceThreadId,
-            message.sourceMessageId,
+      messages: thread.messages.map((message) => {
+        const attachments = input.preparedAttachments?.attachmentsByMessage.get(
+          threadBundleAttachmentMessageKey({
+            sourceEnvironmentId: thread.sourceEnvironmentId,
+            sourceThreadId: thread.sourceThreadId,
+            sourceMessageId: message.sourceMessageId,
+          }),
+        );
+        if (normalized.schemaVersion === 2 && attachments === undefined) {
+          throw new Error("Thread Bundle attachments were not prepared for import");
+        }
+        return {
+          messageId: MessageId.make(
+            scopedId(
+              "bundle-message",
+              thread.sourceEnvironmentId,
+              thread.sourceThreadId,
+              message.sourceMessageId,
+            ),
           ),
-        ),
-        role: message.role,
-        text: message.text,
-        createdAt: message.createdAt,
-        updatedAt: message.updatedAt,
-      })),
+          role: message.role,
+          text: message.text,
+          ...(attachments !== undefined ? { attachments } : {}),
+          createdAt: message.createdAt,
+          updatedAt: message.updatedAt,
+        };
+      }),
       proposedPlans: thread.proposedPlans.map((plan) => ({
         id: scopedId(
           "bundle-plan",

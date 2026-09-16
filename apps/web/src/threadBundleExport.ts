@@ -46,7 +46,10 @@ function sanitizeFilenameSegment(value: string): string {
 export interface ThreadBundleReviewSummary {
   readonly threadCount: number;
   readonly messageCount: number;
-  readonly attachmentReferenceCount: number;
+  readonly attachmentCount: number;
+  readonly embeddedAttachmentCount: number;
+  readonly embeddedAttachmentBytes: number;
+  readonly referenceAttachmentCount: number;
   readonly proposedPlanCount: number;
   readonly resolvedDecisionCount: number;
   readonly omissionCount: number;
@@ -90,10 +93,12 @@ export function combineThreadBundleExports(bundles: ReadonlyArray<ThreadBundle>)
   if (bundles.length === 0) {
     throw new Error("Thread Bundle export produced no source bundles");
   }
-  if (bundles.length === 1) return bundles[0]!;
   const first = bundles[0]!;
-  return normalizeThreadBundle({
-    schemaVersion: 1,
+  if (bundles.some((bundle) => bundle.schemaVersion !== first.schemaVersion)) {
+    throw new Error("Thread Bundle exports use incompatible schema versions");
+  }
+  const combined = normalizeThreadBundle({
+    schemaVersion: first.schemaVersion,
     bundleId: first.bundleId,
     exportedAt: bundles.reduce(
       (latest, bundle) => (bundle.exportedAt > latest ? bundle.exportedAt : latest),
@@ -101,21 +106,36 @@ export function combineThreadBundleExports(bundles: ReadonlyArray<ThreadBundle>)
     ),
     threads: bundles.flatMap((bundle) => bundle.threads),
   });
+  // RPC responses are bounded independently. Re-check the final download after
+  // combining environments so several valid responses cannot create an
+  // oversized portable document.
+  serializeThreadBundle(combined);
+  return combined;
 }
 
 export function summarizeThreadBundle(bundle: ThreadBundle): ThreadBundleReviewSummary {
   const omissions = new Map<ThreadBundleOmissionKind, number>();
   let messageCount = 0;
-  let attachmentReferenceCount = 0;
+  let attachmentCount = 0;
+  let embeddedAttachmentCount = 0;
+  let embeddedAttachmentBytes = 0;
+  let referenceAttachmentCount = 0;
   let proposedPlanCount = 0;
   let resolvedDecisionCount = 0;
 
   for (const thread of bundle.threads) {
     messageCount += thread.messages.length;
-    attachmentReferenceCount += thread.messages.reduce(
-      (count, message) => count + message.attachments.length,
-      0,
-    );
+    for (const message of thread.messages) {
+      attachmentCount += message.attachments.length;
+      for (const attachment of message.attachments) {
+        if (attachment.availability === "embedded") {
+          embeddedAttachmentCount += 1;
+          embeddedAttachmentBytes += attachment.sizeBytes;
+        } else {
+          referenceAttachmentCount += 1;
+        }
+      }
+    }
     proposedPlanCount += thread.proposedPlans.length;
     resolvedDecisionCount += thread.resolvedDecisions.length;
     for (const omission of thread.omissions) {
@@ -129,7 +149,10 @@ export function summarizeThreadBundle(bundle: ThreadBundle): ThreadBundleReviewS
   return {
     threadCount: bundle.threads.length,
     messageCount,
-    attachmentReferenceCount,
+    attachmentCount,
+    embeddedAttachmentCount,
+    embeddedAttachmentBytes,
+    referenceAttachmentCount,
     proposedPlanCount,
     resolvedDecisionCount,
     omissionCount: sortedOmissions.reduce((count, omission) => count + omission.count, 0),
@@ -148,6 +171,14 @@ export function buildThreadBundleReviewMessage(bundle: ThreadBundle): string {
           const labels = OMISSION_LABELS[kind];
           return `- ${formatCount(count, labels.singular, labels.plural)}`;
         });
+  const attachmentLines =
+    bundle.schemaVersion === 2
+      ? [
+          `- ${formatCount(summary.embeddedAttachmentCount, "embedded attachment file")} (${formatThreadBundleBytes(summary.embeddedAttachmentBytes)})`,
+        ]
+      : [
+          `- ${formatCount(summary.referenceAttachmentCount, "attachment reference")} (file contents are not included)`,
+        ];
 
   return [
     `Download Thread Bundle for “${title ?? "conversation"}”?`,
@@ -156,13 +187,21 @@ export function buildThreadBundleReviewMessage(bundle: ThreadBundle): string {
     `- ${formatCount(summary.messageCount, "completed message")}`,
     `- ${formatCount(summary.proposedPlanCount, "proposed plan")}`,
     `- ${formatCount(summary.resolvedDecisionCount, "resolved FirstMate decision")}`,
-    `- ${formatCount(summary.attachmentReferenceCount, "attachment reference")} (file contents are not included)`,
+    ...attachmentLines,
     "",
     `Omitted local/runtime state (${summary.omissionCount} records):`,
     ...omissionLines,
     "",
-    "Message and plan text may contain sensitive information. Review the JSON before sharing it.",
+    bundle.schemaVersion === 2
+      ? "Message, plan, and attachment file contents may contain sensitive information. Review the JSON before sharing it."
+      : "Message and plan text may contain sensitive information. Review the JSON before sharing it.",
   ].join("\n");
+}
+
+export function formatThreadBundleBytes(bytes: number): string {
+  if (bytes < 1024) return formatCount(bytes, "byte");
+  if (bytes < 1024 * 1024) return `${Number((bytes / 1024).toFixed(1))} KiB`;
+  return `${Number((bytes / (1024 * 1024)).toFixed(2))} MiB`;
 }
 
 export function threadBundleDownloadName(bundle: ThreadBundle): string {

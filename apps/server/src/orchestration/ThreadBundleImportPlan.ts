@@ -12,6 +12,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 
 import type { ProjectionSnapshotQueryShape } from "./Services/ProjectionSnapshotQuery.ts";
+import { prepareThreadBundleAttachments } from "./ThreadBundleAttachmentStore.ts";
 
 function snapshotError(): ThreadBundleImportError {
   return new ThreadBundleImportError({
@@ -26,6 +27,14 @@ export function planThreadBundleImportFromProjection(
   availableProviderInstanceIds: ReadonlyArray<ProviderInstanceId>,
 ): Effect.Effect<ThreadBundleImportPlan, ThreadBundleImportError> {
   return Effect.gen(function* () {
+    yield* Effect.try({
+      try: () => prepareThreadBundleAttachments(bundle),
+      catch: () =>
+        new ThreadBundleImportError({
+          reason: "blocked",
+          message: "Thread Bundle attachment integrity validation failed",
+        }),
+    });
     const projects = yield* projection.getProjectShells().pipe(Effect.mapError(snapshotError));
     const existingOrigins: Array<{
       readonly sourceEnvironmentId: string;
@@ -45,17 +54,25 @@ export function planThreadBundleImportFromProjection(
     }
 
     const providerInstanceIds = availableProviderInstanceIds.map(String);
-    return buildThreadBundleImportPlan({
-      bundle,
-      targetProjects: projects.map((project) => ({
-        projectId: project.id,
-        title: project.title,
-        ...(project.repositoryIdentity?.canonicalKey
-          ? { repositoryCanonicalKey: project.repositoryIdentity.canonicalKey }
-          : {}),
-        providerInstanceIds,
-      })),
-      existingOrigins,
+    return yield* Effect.try({
+      try: () =>
+        buildThreadBundleImportPlan({
+          bundle,
+          targetProjects: projects.map((project) => ({
+            projectId: project.id,
+            title: project.title,
+            ...(project.repositoryIdentity?.canonicalKey
+              ? { repositoryCanonicalKey: project.repositoryIdentity.canonicalKey }
+              : {}),
+            providerInstanceIds,
+          })),
+          existingOrigins,
+        }),
+      catch: () =>
+        new ThreadBundleImportError({
+          reason: "blocked",
+          message: "Thread Bundle import plan could not be generated safely",
+        }),
     });
   });
 }

@@ -172,6 +172,10 @@ import {
   threadBundleImportPlansMatch,
 } from "./orchestration/ThreadBundleImport.ts";
 import { planThreadBundleImportFromProjection } from "./orchestration/ThreadBundleImportPlan.ts";
+import {
+  prepareThreadBundleAttachments,
+  publishThreadBundleAttachments,
+} from "./orchestration/ThreadBundleAttachmentStore.ts";
 import { summarizeResourceTelemetry } from "./resourceTelemetry/ResourceTelemetrySummary.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
@@ -2679,14 +2683,40 @@ const makeWsRpcLayer = (
                     }),
                 ),
               );
+              const preparedAttachments = yield* Effect.try({
+                try: () => prepareThreadBundleAttachments(bundle),
+                catch: () =>
+                  new ThreadBundleImportError({
+                    reason: "plan-changed",
+                    message: "Thread Bundle attachment validation changed; generate a new dry run",
+                  }),
+              });
               const command = yield* Effect.try({
-                try: () => buildThreadBundleImportCommand({ bundle, plan: currentPlan, commandId }),
+                try: () =>
+                  buildThreadBundleImportCommand({
+                    bundle,
+                    plan: currentPlan,
+                    commandId,
+                    preparedAttachments,
+                  }),
                 catch: () =>
                   new ThreadBundleImportError({
                     reason: "plan-changed",
                     message: "Thread Bundle import plan no longer matches this bundle",
                   }),
               });
+              yield* publishThreadBundleAttachments({
+                attachmentsDir: config.attachmentsDir,
+                prepared: preparedAttachments,
+              }).pipe(
+                Effect.mapError(
+                  () =>
+                    new ThreadBundleImportError({
+                      reason: "persistence-failed",
+                      message: "Thread Bundle attachments were not persisted",
+                    }),
+                ),
+              );
               yield* dispatchFromClient(command).pipe(
                 Effect.mapError(
                   () =>

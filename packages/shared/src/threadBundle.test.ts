@@ -11,6 +11,9 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   buildThreadBundle,
   buildThreadBundleImportPlan,
+  embedThreadBundleAttachments,
+  decodeThreadBundleAttachment,
+  MAX_THREAD_BUNDLE_BYTES,
   parseThreadBundleJson,
   serializeThreadBundle,
   threadBundleTargetThreadId,
@@ -207,8 +210,8 @@ describe("Thread Bundle", () => {
   });
 
   it("rejects incompatible schema versions and duplicate origins", () => {
-    expect(() => parseThreadBundleJson('{"schemaVersion":2}')).toThrow(
-      "Unsupported Thread Bundle schema version: 2",
+    expect(() => parseThreadBundleJson('{"schemaVersion":3}')).toThrow(
+      "Unsupported Thread Bundle schema version: 3",
     );
     const value = bundle();
     expect(() =>
@@ -227,6 +230,169 @@ describe("Thread Bundle", () => {
     ).toThrow(/duplicate message ID/);
   });
 
+  it("carries complete attachment bytes in v2 with independently verified SHA-256", () => {
+    const value = bundle();
+    const original = value.threads[0]!;
+    const source = {
+      ...value,
+      threads: [
+        {
+          ...original,
+          messages: original.messages.map((message) => ({
+            ...message,
+            attachments: message.attachments.map((attachment) => ({ ...attachment, sizeBytes: 3 })),
+          })),
+        },
+      ],
+    };
+    const portable = embedThreadBundleAttachments(source, () => new TextEncoder().encode("abc"));
+    expect(portable.schemaVersion).toBe(2);
+    const attachment = portable.threads[0]!.messages[0]!.attachments[0]!;
+    expect(attachment).toMatchObject({
+      availability: "embedded",
+      contentBase64: "YWJj",
+      sha256: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+      sizeBytes: 3,
+    });
+    expect(
+      portable.threads[0]!.omissions.some((omission) => omission.kind === "attachment-content"),
+    ).toBe(false);
+    expect(
+      portable.threads[0]!.omissions.some((omission) => omission.kind === "attachment-source"),
+    ).toBe(true);
+    expect(parseThreadBundleJson(serializeThreadBundle(portable))).toEqual(portable);
+    if (attachment.availability !== "embedded") throw new Error("Expected embedded attachment");
+    expect(decodeThreadBundleAttachment(attachment)).toEqual(new TextEncoder().encode("abc"));
+    expect(() => decodeThreadBundleAttachment({ ...attachment, sha256: "0".repeat(64) })).toThrow(
+      /hash mismatch/,
+    );
+    expect(() => decodeThreadBundleAttachment({ ...attachment, sizeBytes: 4 })).toThrow(/size/);
+    expect(() =>
+      decodeThreadBundleAttachment({ ...attachment, contentBase64: "YWJj\n" }),
+    ).toThrow();
+    expect(() => serializeThreadBundle({ ...portable, schemaVersion: 1 })).toThrow(/v1/);
+  });
+
+  it("never promotes missing, partial, unsupported or oversized files to complete v2", () => {
+    expect(() => serializeThreadBundle({ ...bundle(), schemaVersion: 2 })).toThrow(
+      /requires every attachment/,
+    );
+    expect(() =>
+      embedThreadBundleAttachments(bundle(), () => {
+        throw new Error("Missing source file");
+      }),
+    ).toThrow(/Missing source file/);
+    expect(() => embedThreadBundleAttachments(bundle(), () => new Uint8Array(122))).toThrow(
+      /size mismatch/,
+    );
+    const source = bundle();
+    const thread = source.threads[0]!;
+    const message = thread.messages[0]!;
+    const attachment = message.attachments[0]!;
+    const changed = (patch: { type?: string; sizeBytes?: number }): ThreadBundle => ({
+      ...source,
+      threads: [
+        {
+          ...thread,
+          messages: [
+            { ...message, attachments: [{ ...attachment, ...patch } as typeof attachment] },
+          ],
+        },
+      ],
+    });
+    expect(() =>
+      embedThreadBundleAttachments(changed({ type: "future-attachment" }), () => new Uint8Array()),
+    ).toThrow(/type cannot be restored/);
+    expect(() =>
+      embedThreadBundleAttachments(
+        changed({ sizeBytes: 5 * 1024 * 1024 + 1 }),
+        () => new Uint8Array(),
+      ),
+    ).toThrow(/file size limit/);
+  });
+
+  it("bounds pasted JSON before parsing and rejects attachment integrity mismatches from JSON", () => {
+    expect(() => parseThreadBundleJson(" ".repeat(MAX_THREAD_BUNDLE_BYTES + 1))).toThrow(
+      /JSON size limit/,
+    );
+    const source = bundle();
+    const complete = embedThreadBundleAttachments(source, () => new Uint8Array(123));
+    const json = serializeThreadBundle(complete).replace(
+      /"sha256": "[a-f0-9]{64}"/,
+      `"sha256": "${"f".repeat(64)}"`,
+    );
+    expect(() => parseThreadBundleJson(json)).toThrow(/hash mismatch/);
+  });
+
+  it("rejects inconsistent identities and enforces the aggregate decoded-byte limit", () => {
+    const source = bundle();
+    const complete = embedThreadBundleAttachments(source, () => new Uint8Array(123));
+    const thread = complete.threads[0]!;
+    const message = thread.messages[0]!;
+    const attachment = message.attachments[0]!;
+    expect(() =>
+      serializeThreadBundle({
+        ...complete,
+        threads: [
+          {
+            ...thread,
+            messages: [
+              message,
+              {
+                ...message,
+                sourceMessageId: "another-message" as typeof message.sourceMessageId,
+                attachments: [{ ...attachment, name: "different-name.png" }],
+              },
+            ],
+          },
+        ],
+      }),
+    ).toThrow(/inconsistent metadata/);
+
+    const bytes = new Uint8Array(4 * 1024 * 1024);
+    const large = embedThreadBundleAttachments(
+      {
+        ...source,
+        threads: [
+          {
+            ...source.threads[0]!,
+            messages: [
+              {
+                ...source.threads[0]!.messages[0]!,
+                attachments: [
+                  {
+                    ...source.threads[0]!.messages[0]!.attachments[0]!,
+                    sizeBytes: bytes.length,
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+      () => bytes,
+    );
+    const largeThread = large.threads[0]!;
+    const largeMessage = largeThread.messages[0]!;
+    expect(() =>
+      serializeThreadBundle({
+        ...large,
+        threads: [
+          {
+            ...largeThread,
+            messages: [
+              largeMessage,
+              ...[1, 2].map((index) => ({
+                ...largeMessage,
+                sourceMessageId: `message-${index}` as typeof message.sourceMessageId,
+              })),
+            ],
+          },
+        ],
+      }),
+    ).toThrow(/total size limit/);
+  });
+
   it("dry-runs project, provider, and duplicate conflicts atomically", () => {
     const value = bundle();
     const projectId = "project-target" as ProjectId;
@@ -237,6 +403,29 @@ describe("Thread Bundle", () => {
       repositoryCanonicalKey: "github.com/acme/turbo-station",
       providerInstanceIds: ["codex-work"],
     };
+
+    const originalPlan = buildThreadBundleImportPlan({
+      bundle: value,
+      targetProjects: [target],
+      existingOrigins: [],
+    });
+    const alteredPlan = buildThreadBundleImportPlan({
+      bundle: {
+        ...value,
+        threads: value.threads.map((thread) => ({
+          ...thread,
+          messages: thread.messages.map((message) => ({
+            ...message,
+            text: "changed after review",
+          })),
+        })),
+      },
+      targetProjects: [target],
+      existingOrigins: [],
+    });
+    expect(originalPlan.bundleSha256).toMatch(/^[a-f0-9]{64}$/);
+    expect(alteredPlan.bundleSha256).not.toBe(originalPlan.bundleSha256);
+    expect(alteredPlan.items).toEqual(originalPlan.items);
 
     expect(
       buildThreadBundleImportPlan({ bundle: value, targetProjects: [target], existingOrigins: [] }),

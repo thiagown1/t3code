@@ -36,11 +36,38 @@ export const ThreadBundleAttachmentReference = Schema.Struct({
 });
 export type ThreadBundleAttachmentReference = typeof ThreadBundleAttachmentReference.Type;
 
+export const THREAD_BUNDLE_MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
+export const THREAD_BUNDLE_MAX_TOTAL_ATTACHMENT_BYTES = 10 * 1024 * 1024;
+export const MAX_THREAD_BUNDLE_BYTES = 20 * 1024 * 1024;
+
+export const ThreadBundleEmbeddedAttachment = Schema.Struct({
+  sourceAttachmentId: StableReference,
+  type: Schema.Literals(["image", "file"]),
+  name: TrimmedNonEmptyString.check(Schema.isMaxLength(255)),
+  mimeType: TrimmedNonEmptyString.check(Schema.isMaxLength(100)),
+  sizeBytes: NonNegativeInt.check(
+    Schema.isGreaterThanOrEqualTo(1),
+    Schema.isLessThanOrEqualTo(THREAD_BUNDLE_MAX_ATTACHMENT_BYTES),
+  ),
+  availability: Schema.Literal("embedded"),
+  sha256: Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/)),
+  contentBase64: Schema.String.check(
+    Schema.isMaxLength(4 * Math.ceil(THREAD_BUNDLE_MAX_ATTACHMENT_BYTES / 3)),
+  ),
+});
+export type ThreadBundleEmbeddedAttachment = typeof ThreadBundleEmbeddedAttachment.Type;
+
+export const ThreadBundleAttachment = Schema.Union([
+  ThreadBundleAttachmentReference,
+  ThreadBundleEmbeddedAttachment,
+]);
+export type ThreadBundleAttachment = typeof ThreadBundleAttachment.Type;
+
 export const ThreadBundleMessage = Schema.Struct({
   sourceMessageId: MessageId,
   role: OrchestrationMessageRole,
   text: Schema.String,
-  attachments: Schema.Array(ThreadBundleAttachmentReference),
+  attachments: Schema.Array(ThreadBundleAttachment),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -119,7 +146,7 @@ export type ThreadBundleThread = typeof ThreadBundleThread.Type;
  * representation in this schema.
  */
 export const ThreadBundle = Schema.Struct({
-  schemaVersion: Schema.Literal(1),
+  schemaVersion: Schema.Literals([1, 2]),
   bundleId: StableReference,
   exportedAt: IsoDateTime,
   threads: Schema.Array(ThreadBundleThread),
@@ -174,6 +201,9 @@ export type ThreadBundleImportPlanItem = typeof ThreadBundleImportPlanItem.Type;
 
 export const ThreadBundleImportPlan = Schema.Struct({
   bundleId: StableReference,
+  // Optional for reading plans from older servers. New servers include it and
+  // reject an apply if the complete reviewed content no longer matches.
+  bundleSha256: Schema.optionalKey(Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/))),
   canImport: Schema.Boolean,
   items: Schema.Array(ThreadBundleImportPlanItem),
 });

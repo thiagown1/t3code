@@ -6,6 +6,7 @@ import type {
   ThreadBundle,
   ThreadId,
 } from "@t3tools/contracts";
+import { MAX_THREAD_BUNDLE_BYTES } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -61,12 +62,35 @@ const bundle: ThreadBundle = {
   ],
 };
 
+const embeddedBundle: ThreadBundle = {
+  ...bundle,
+  schemaVersion: 2,
+  threads: bundle.threads.map((thread) => ({
+    ...thread,
+    messages: thread.messages.map((message) => ({
+      ...message,
+      attachments: message.attachments.map((attachment) => ({
+        ...attachment,
+        type: "image" as const,
+        sizeBytes: 3,
+        availability: "embedded" as const,
+        sha256: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+        contentBase64: "YWJj",
+      })),
+    })),
+    omissions: thread.omissions.filter((omission) => omission.kind !== "attachment-content"),
+  })),
+};
+
 describe("Thread Bundle export review", () => {
   it("summarizes portable content and omitted state before download", () => {
     expect(summarizeThreadBundle(bundle)).toEqual({
       threadCount: 1,
       messageCount: 1,
-      attachmentReferenceCount: 1,
+      attachmentCount: 1,
+      embeddedAttachmentCount: 0,
+      embeddedAttachmentBytes: 0,
+      referenceAttachmentCount: 1,
       proposedPlanCount: 0,
       resolvedDecisionCount: 0,
       omissionCount: 2,
@@ -81,6 +105,20 @@ describe("Thread Bundle export review", () => {
     expect(message).toContain("1 attachment reference (file contents are not included)");
     expect(message).toContain("1 runtime session");
     expect(message).toContain("Review the JSON before sharing it");
+  });
+
+  it("reviews embedded attachment files separately from v1 references", () => {
+    expect(summarizeThreadBundle(embeddedBundle)).toMatchObject({
+      attachmentCount: 1,
+      embeddedAttachmentCount: 1,
+      embeddedAttachmentBytes: 3,
+      referenceAttachmentCount: 0,
+    });
+
+    const message = buildThreadBundleReviewMessage(embeddedBundle);
+    expect(message).toContain("1 embedded attachment file (3 bytes)");
+    expect(message).toContain("attachment file contents may contain sensitive information");
+    expect(message).not.toContain("file contents are not included");
   });
 
   it("creates a stable filesystem-safe download name", () => {
@@ -139,5 +177,49 @@ describe("Thread Bundle export review", () => {
       "environment-1",
       "environment-2",
     ]);
+  });
+
+  it("preserves v2 exports and rejects mixed versions", () => {
+    const secondEmbeddedBundle: ThreadBundle = {
+      ...embeddedBundle,
+      bundleId: "bundle-2",
+      threads: embeddedBundle.threads.map((thread) => ({
+        ...thread,
+        sourceEnvironmentId: "environment-2",
+        sourceThreadId: "thread-2" as ThreadId,
+      })),
+    };
+
+    expect(combineThreadBundleExports([embeddedBundle, secondEmbeddedBundle]).schemaVersion).toBe(
+      2,
+    );
+    expect(() => combineThreadBundleExports([bundle, embeddedBundle])).toThrow(
+      "incompatible schema versions",
+    );
+  });
+
+  it("rejects source bundles whose combined JSON exceeds the byte limit", () => {
+    const large: ThreadBundle = {
+      ...bundle,
+      threads: bundle.threads.map((thread) => ({
+        ...thread,
+        messages: thread.messages.map((message) => ({
+          ...message,
+          text: "x".repeat(Math.floor(MAX_THREAD_BUNDLE_BYTES * 0.55)),
+        })),
+      })),
+    };
+    const secondLarge: ThreadBundle = {
+      ...large,
+      bundleId: "bundle-2",
+      threads: large.threads.map((thread) => ({
+        ...thread,
+        sourceEnvironmentId: "environment-2",
+        sourceThreadId: "thread-2" as ThreadId,
+      })),
+    };
+
+    expect(() => combineThreadBundleExports([large])).not.toThrow();
+    expect(() => combineThreadBundleExports([large, secondLarge])).toThrow("JSON size limit");
   });
 });

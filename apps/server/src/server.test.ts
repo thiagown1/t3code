@@ -28,6 +28,8 @@ import {
   TerminalNotRunningError,
   type OrchestrationCommand,
   type OrchestrationEvent,
+  type OrchestrationReadModel,
+  type ThreadBundle,
   ORCHESTRATION_WS_METHODS,
   type PreviewEvent,
   ProjectId,
@@ -54,6 +56,7 @@ import {
 } from "@t3tools/shared/dpop";
 import { RELAY_HEALTH_REQUEST_TYP, RELAY_MINT_REQUEST_TYP } from "@t3tools/shared/relayJwt";
 import * as RelayClient from "@t3tools/shared/relayClient";
+import { embedThreadBundleAttachments } from "@t3tools/shared/threadBundle";
 import { assert, it } from "@effect/vitest";
 import { assertFailure, assertInclude, assertTrue } from "@effect/vitest/utils";
 import * as Clock from "effect/Clock";
@@ -133,6 +136,8 @@ import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite.ts";
 import { OrchestrationEventStoreLive } from "./persistence/Layers/OrchestrationEventStore.ts";
 import { OrchestrationEventStore } from "./persistence/Services/OrchestrationEventStore.ts";
 import { PersistenceSqlError } from "./persistence/Errors.ts";
+import { decideOrchestrationCommand } from "./orchestration/decider.ts";
+import { projectEvent } from "./orchestration/projector.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
 import * as ProviderService from "./provider/Services/ProviderService.ts";
 import { ProviderAuthService } from "./provider/Services/ProviderAuthService.ts";
@@ -5785,6 +5790,188 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               attachmentId: uploadedFile.attachmentId,
             });
             assert.isFalse(yield* fileSystem.exists(uploadedFilePath));
+          }),
+        ),
+      );
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("imports v2 attachment bytes before persisting references over websocket rpc", () =>
+    Effect.gen(function* () {
+      const attachmentBytes = new TextEncoder().encode("portable notes");
+      const imageBytes = Uint8Array.from([
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0,
+        0, 6, 0, 0, 0, 4,
+      ]);
+      const metadataBundle = {
+        schemaVersion: 1,
+        bundleId: "rpc-bundle-with-attachment",
+        exportedAt: "2026-09-16T12:00:00.000Z",
+        threads: [
+          {
+            sourceEnvironmentId: "source-environment",
+            sourceThreadId: ThreadId.make("source-thread"),
+            project: { sourceProjectId: defaultProjectId, title: "Default Project" },
+            title: "Imported with attachment",
+            preferredModel: { providerInstanceRef: "codex", model: "gpt-5-codex" },
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            branch: null,
+            messages: [
+              {
+                sourceMessageId: MessageId.make("source-message"),
+                role: "user",
+                text: "Read the notes",
+                attachments: [
+                  {
+                    sourceAttachmentId: "source-attachment",
+                    type: "file",
+                    name: "notes.txt",
+                    mimeType: "text/plain",
+                    sizeBytes: attachmentBytes.length,
+                    availability: "reference-only",
+                  },
+                  {
+                    sourceAttachmentId: "source-image",
+                    type: "image",
+                    name: "screenshot.png",
+                    mimeType: "image/png",
+                    sizeBytes: imageBytes.length,
+                    availability: "reference-only",
+                  },
+                ],
+                createdAt: "2026-09-16T12:00:00.000Z",
+                updatedAt: "2026-09-16T12:00:00.000Z",
+              },
+            ],
+            proposedPlans: [],
+            resolvedDecisions: [],
+            omissions: [{ kind: "attachment-content", count: 1 }],
+            createdAt: "2026-09-16T12:00:00.000Z",
+            updatedAt: "2026-09-16T12:00:00.000Z",
+          },
+        ],
+      } satisfies ThreadBundle;
+      const bundle = embedThreadBundleAttachments(metadataBundle, (attachment) =>
+        attachment.sourceAttachmentId === "source-image" ? imageBytes : attachmentBytes,
+      );
+      let projected: OrchestrationReadModel = makeDefaultOrchestrationReadModel();
+      let capturedCommand: OrchestrationCommand | undefined;
+      const codex = {
+        instanceId: ProviderInstanceId.make("codex"),
+        driver: ProviderDriverKind.make("codex"),
+        enabled: true,
+        installed: true,
+        version: "1.0.0",
+        status: "ready" as const,
+        auth: { status: "authenticated" as const },
+        checkedAt: "2026-09-16T12:00:00.000Z",
+        models: [],
+        slashCommands: [],
+        skills: [],
+      };
+      yield* buildAppUnderTest({
+        layers: {
+          providerRegistry: { getProviders: Effect.succeed([codex]) },
+          projectionSnapshotQuery: {
+            getProjectShells: () =>
+              Effect.succeed([
+                {
+                  id: defaultProjectId,
+                  title: "Default Project",
+                  repositoryIdentity: null,
+                } as never,
+              ]),
+            getThreadDetailById: () => Effect.succeed(Option.none()),
+          },
+          orchestrationEngine: {
+            dispatch: (command) =>
+              Effect.sync(() => {
+                capturedCommand = command;
+                return { sequence: 1 };
+              }),
+          },
+        },
+      });
+      const wsUrl = yield* getWsServerUrl("/ws");
+
+      yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          Effect.gen(function* () {
+            const plan = yield* client[WS_METHODS.serverPlanThreadBundleImport]({ bundle });
+            assert.isTrue(plan.canImport);
+
+            const changedBundle = {
+              ...bundle,
+              threads: bundle.threads.map((thread) => ({
+                ...thread,
+                messages: thread.messages.map((message) => ({
+                  ...message,
+                  text: `${message.text} changed after review`,
+                })),
+              })),
+            } satisfies ThreadBundle;
+            const stalePlanError = yield* client[WS_METHODS.serverImportThreadBundle]({
+              bundle: changedBundle,
+              expectedPlan: plan,
+            }).pipe(Effect.flip);
+            assert.equal(stalePlanError._tag, "ThreadBundleImportError");
+            if (stalePlanError._tag === "ThreadBundleImportError") {
+              assert.equal(stalePlanError.reason, "plan-changed");
+            }
+            assert.isUndefined(capturedCommand);
+
+            yield* client[WS_METHODS.serverImportThreadBundle]({ bundle, expectedPlan: plan });
+
+            assert.isDefined(capturedCommand);
+            const command = capturedCommand!;
+            const decided = yield* decideOrchestrationCommand({ command, readModel: projected });
+            for (const event of Array.isArray(decided) ? decided : [decided]) {
+              projected = yield* projectEvent(projected, {
+                ...event,
+                sequence: projected.snapshotSequence + 1,
+              });
+            }
+
+            const imported = projected.threads.find(
+              (thread) => thread.id === ThreadId.make("bundle:source-environment:source-thread"),
+            );
+            const attachment = imported?.messages[0]?.attachments?.[0];
+            const image = imported?.messages[0]?.attachments?.[1];
+            assert.isDefined(attachment);
+            assert.isDefined(image);
+            assert.notEqual(attachment?.id, "source-attachment");
+            assert.notEqual(image?.id, "source-image");
+            assert.isFalse(image?.id.endsWith("-png") ?? true);
+            assert.equal(imported?.session, null);
+            assert.isFalse("contentBase64" in attachment!);
+            assert.isFalse("contentBase64" in image!);
+
+            const issued = yield* client[WS_METHODS.assetsCreateUrl]({
+              resource: {
+                _tag: "attachment",
+                attachmentId: attachment!.id,
+                fileName: attachment!.name,
+                mimeType: attachment!.mimeType,
+              },
+            });
+            const response = yield* HttpClient.get(issued.relativeUrl);
+            assert.equal(response.status, 200);
+            assert.equal(yield* response.text, "portable notes");
+
+            const issuedImage = yield* client[WS_METHODS.assetsCreateUrl]({
+              resource: {
+                _tag: "attachment",
+                attachmentId: image!.id,
+                fileName: image!.name,
+                mimeType: image!.mimeType,
+              },
+            });
+            assert.deepEqual(issuedImage.imageDimensions, { width: 6, height: 4 });
+            const imageResponse = yield* HttpClient.get(issuedImage.relativeUrl);
+            assert.equal(imageResponse.status, 200);
+            assert.equal(imageResponse.headers["content-type"], "image/png");
+            assert.deepEqual(new Uint8Array(yield* imageResponse.arrayBuffer), imageBytes);
           }),
         ),
       );
