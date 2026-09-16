@@ -2,7 +2,12 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeHttpPlatform from "@effect/platform-node/NodeHttpPlatform";
 import * as NodeFSP from "node:fs/promises";
-import { AssetPreviewTypeValidationError, ThreadId } from "@t3tools/contracts";
+import {
+  AssetPreviewTypeValidationError,
+  AssetPullRequestImageValidationError,
+  ProjectId,
+  ThreadId,
+} from "@t3tools/contracts";
 import { PROJECT_FAVICON_FALLBACK_MARKER } from "@t3tools/shared/projectFavicon";
 import { describe, expect, it } from "@effect/vitest";
 import * as Crypto from "effect/Crypto";
@@ -13,11 +18,13 @@ import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
 import * as TestClock from "effect/testing/TestClock";
 import { HttpServerResponse } from "effect/unstable/http";
+import { ChildProcessSpawner } from "effect/unstable/process";
 import { vi } from "vite-plus/test";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../config.ts";
 import * as ProjectFaviconResolver from "../project/ProjectFaviconResolver.ts";
+import * as GitHubCli from "../sourceControl/GitHubCli.ts";
 import * as T3ProjectFileLoader from "../project/T3ProjectFileLoader.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import { assetFileResponse } from "../http.ts";
@@ -47,6 +54,81 @@ const testLayer = Layer.mergeAll(
 ).pipe(Layer.provideMerge(NodeServices.layer));
 
 describe("AssetAccess", () => {
+  it.effect("caches authenticated pull request images behind an exact signed URL", () =>
+    Effect.gen(function* () {
+      const png = Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+        "base64",
+      );
+      const execute = vi.fn<GitHubCli.GitHubCli["Service"]["execute"]>(() =>
+        Effect.succeed({
+          exitCode: ChildProcessSpawner.ExitCode(0),
+          stdout: JSON.stringify({
+            type: "file",
+            encoding: "base64",
+            content: png.toString("base64"),
+            size: png.byteLength,
+          }),
+          stderr: "",
+          stdoutTruncated: false,
+          stderrTruncated: false,
+        }),
+      );
+      const gitHubCli = { execute } as unknown as GitHubCli.GitHubCli["Service"];
+      const resource = {
+        _tag: "pull-request-image" as const,
+        projectId: ProjectId.make("project-1"),
+        number: 2123,
+        host: "github.com",
+        repository: "acme/widgets",
+        revision: "d21a35866e0a7c5866b9896354eece15d82f0610",
+        path: "docs/screens/before.png",
+      };
+
+      const first = yield* issueAssetUrl({ resource, gitHubCli });
+      const second = yield* issueAssetUrl({ resource, gitHubCli });
+      expect(execute).toHaveBeenCalledTimes(1);
+      expect(execute.mock.calls[0]?.[0].args).toEqual([
+        "api",
+        "--hostname",
+        "github.com",
+        "--method",
+        "GET",
+        "repos/acme/widgets/contents/docs/screens/before.png",
+        "-f",
+        "ref=d21a35866e0a7c5866b9896354eece15d82f0610",
+      ]);
+      expect(first.imageDimensions).toEqual({ width: 1, height: 1 });
+      expect(second.relativeUrl).toBe(first.relativeUrl);
+      const suffix = first.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
+      const separator = suffix.indexOf("/");
+      expect(
+        yield* resolveAsset(suffix.slice(0, separator), suffix.slice(separator + 1)),
+      ).toMatchObject({ kind: "file", mimeType: "image/png" });
+    }).pipe(Effect.provide(testLayer)),
+  );
+
+  it.effect("rejects mutable or traversing pull request image references before GitHub", () =>
+    Effect.gen(function* () {
+      const execute = vi.fn<GitHubCli.GitHubCli["Service"]["execute"]>();
+      const gitHubCli = { execute } as unknown as GitHubCli.GitHubCli["Service"];
+      const failure = yield* issueAssetUrl({
+        resource: {
+          _tag: "pull-request-image",
+          projectId: ProjectId.make("project-1"),
+          number: 2123,
+          host: "github.com",
+          repository: "acme/widgets",
+          revision: "main",
+          path: "../secret.png",
+        },
+        gitHubCli,
+      }).pipe(Effect.flip);
+      expect(failure).toBeInstanceOf(AssetPullRequestImageValidationError);
+      expect(execute).not.toHaveBeenCalled();
+    }).pipe(Effect.provide(testLayer)),
+  );
+
   it.effect("issues exact URLs for media and browser documents outside the workspace", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

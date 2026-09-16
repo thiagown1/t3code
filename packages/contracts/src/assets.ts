@@ -1,6 +1,12 @@
 import * as Schema from "effect/Schema";
 
-import { NonNegativeInt, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import {
+  NonNegativeInt,
+  PositiveInt,
+  ProjectId,
+  ThreadId,
+  TrimmedNonEmptyString,
+} from "./baseSchemas.ts";
 import {
   PROVIDER_SEND_TURN_MAX_FILE_BYTES,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
@@ -49,6 +55,17 @@ export const AssetResource = Schema.Union([
   }),
   Schema.TaggedStruct("native-app-icon", {
     app: ToolActivityNativeAppReference,
+  }),
+  /** An image referenced by GitHub pull-request markdown. The server resolves
+      it with its own GitHub credential and returns only a signed T3 asset URL. */
+  Schema.TaggedStruct("pull-request-image", {
+    projectId: ProjectId,
+    number: PositiveInt,
+    expectedAccountId: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(255))),
+    host: TrimmedNonEmptyString.check(Schema.isMaxLength(255)),
+    repository: TrimmedNonEmptyString.check(Schema.isMaxLength(255)),
+    revision: TrimmedNonEmptyString.check(Schema.isMaxLength(64)),
+    path: TrimmedNonEmptyString.check(Schema.isMaxLength(ASSET_PATH_MAX_LENGTH)),
   }),
 ]);
 export type AssetResource = typeof AssetResource.Type;
@@ -285,6 +302,29 @@ export class AssetSigningKeyLoadError extends Schema.TaggedError<AssetSigningKey
   }
 }
 
+export class AssetPullRequestImageValidationError extends Schema.TaggedError<AssetPullRequestImageValidationError>()(
+  "AssetPullRequestImageValidationError",
+  {
+    resource: AssetResource,
+  },
+) {
+  override get message(): string {
+    return "Pull request image reference is invalid.";
+  }
+}
+
+export class AssetPullRequestImageFetchError extends Schema.TaggedError<AssetPullRequestImageFetchError>()(
+  "AssetPullRequestImageFetchError",
+  {
+    resource: AssetResource,
+    cause: Schema.Defect(),
+  },
+) {
+  override get message(): string {
+    return "Failed to load the pull request image.";
+  }
+}
+
 export const AssetAccessError = Schema.Union([
   AssetWorkspaceContextNotFoundError,
   AssetWorkspaceContextResolutionError,
@@ -299,5 +339,7 @@ export const AssetAccessError = Schema.Union([
   AssetProjectFaviconInspectionError,
   AssetProjectFaviconNotFoundError,
   AssetSigningKeyLoadError,
+  AssetPullRequestImageValidationError,
+  AssetPullRequestImageFetchError,
 ]);
 export type AssetAccessError = typeof AssetAccessError.Type;

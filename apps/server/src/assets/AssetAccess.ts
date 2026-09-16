@@ -1,6 +1,9 @@
 import type { AssetResource } from "@t3tools/contracts";
+import * as NodeCrypto from "node:crypto";
 import {
   AssetAttachmentNotFoundError,
+  AssetPullRequestImageFetchError,
+  AssetPullRequestImageValidationError,
   AssetPreviewTypeValidationError,
   AssetProjectFaviconInspectionError,
   AssetProjectFaviconNotFoundError,
@@ -36,6 +39,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 
 import {
@@ -48,6 +52,7 @@ import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import { parseAttachmentFileExtension, resolveAttachmentPathById } from "../attachmentStore.ts";
 import * as ServerConfig from "../config.ts";
 import * as ProjectFaviconResolver from "../project/ProjectFaviconResolver.ts";
+import * as GitHubCli from "../sourceControl/GitHubCli.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import * as NativeAppIconResolver from "./NativeAppIconResolver.ts";
 import { openMediaFile, readMediaFileHeader, type OpenMediaFile } from "./MediaFile.ts";
@@ -239,6 +244,135 @@ const resolveCanonicalWorkspaceFileForRequest = (input: {
  */
 const HEADER_IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp"]);
 
+const PULL_REQUEST_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
+const PULL_REQUEST_IMAGE_API_MAX_BYTES = 15 * 1024 * 1024;
+const PULL_REQUEST_IMAGE_REPOSITORY_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u;
+const PULL_REQUEST_IMAGE_REVISION_PATTERN = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/iu;
+const PULL_REQUEST_IMAGE_HOST_PATTERN = /^(?:[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?)$/u;
+const PULL_REQUEST_IMAGE_EXTENSIONS: ReadonlySet<string> = new Set(
+  WORKSPACE_IMAGE_PREVIEW_EXTENSIONS,
+);
+const PullRequestImageContentsSchema = Schema.Struct({
+  type: Schema.Literal("file"),
+  encoding: Schema.Literal("base64"),
+  content: Schema.String,
+  size: Schema.Number,
+});
+const decodePullRequestImageContents = Schema.decodeUnknownOption(
+  Schema.fromJsonString(PullRequestImageContentsSchema),
+);
+const isPullRequestImageFetchError = Schema.is(AssetPullRequestImageFetchError);
+
+function pullRequestImagePathIsSafe(filePath: string): boolean {
+  if (filePath.length === 0 || filePath.includes("\0") || filePath.includes("\\")) return false;
+  const segments = filePath.split("/");
+  const fileName = segments.at(-1) ?? "";
+  const extensionIndex = fileName.lastIndexOf(".");
+  const extension = extensionIndex === -1 ? "" : fileName.slice(extensionIndex).toLowerCase();
+  return (
+    segments.every((segment) => segment.length > 0 && segment !== "." && segment !== "..") &&
+    PULL_REQUEST_IMAGE_EXTENSIONS.has(extension)
+  );
+}
+
+const cachePullRequestImage = Effect.fn("AssetAccess.cachePullRequestImage")(function* (
+  resource: Extract<AssetResource, { readonly _tag: "pull-request-image" }>,
+  github: GitHubCli.GitHubCli["Service"],
+) {
+  const path = yield* Path.Path;
+  if (
+    !PULL_REQUEST_IMAGE_HOST_PATTERN.test(resource.host) ||
+    !PULL_REQUEST_IMAGE_REPOSITORY_PATTERN.test(resource.repository) ||
+    !PULL_REQUEST_IMAGE_REVISION_PATTERN.test(resource.revision) ||
+    !pullRequestImagePathIsSafe(resource.path)
+  ) {
+    return yield* new AssetPullRequestImageValidationError({ resource });
+  }
+
+  const load = Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const config = yield* ServerConfig.ServerConfig;
+    const extension = path.extname(resource.path).toLowerCase();
+    const cacheKey = NodeCrypto.createHash("sha256")
+      .update(`${resource.host}\0${resource.repository}\0${resource.revision}\0${resource.path}`)
+      .digest("hex");
+    const cacheRoot = path.join(config.stateDir, "pull-request-images");
+    const cacheDirectory = path.join(cacheRoot, cacheKey);
+    const cachePath = path.join(cacheDirectory, path.basename(resource.path));
+    if (yield* fileSystem.exists(cachePath)) return cachePath;
+
+    const [owner, name] = resource.repository.split("/") as [string, string];
+    const apiPath = resource.path
+      .split("/")
+      .map((segment) => encodeURIComponent(segment))
+      .join("/");
+    const response = yield* github.execute({
+      cwd: config.stateDir,
+      args: [
+        "api",
+        "--hostname",
+        resource.host,
+        "--method",
+        "GET",
+        `repos/${owner}/${name}/contents/${apiPath}`,
+        "-f",
+        `ref=${resource.revision}`,
+      ],
+      timeoutMs: 30_000,
+      maxOutputBytes: PULL_REQUEST_IMAGE_API_MAX_BYTES,
+    });
+    if (response.stdoutTruncated) {
+      return yield* new AssetPullRequestImageFetchError({
+        resource,
+        cause: new Error("GitHub image response exceeded the read limit."),
+      });
+    }
+
+    const decoded = Option.getOrNull(decodePullRequestImageContents(response.stdout));
+    if (
+      decoded === null ||
+      !Number.isSafeInteger(decoded.size) ||
+      decoded.size <= 0 ||
+      decoded.size > PULL_REQUEST_IMAGE_MAX_BYTES
+    ) {
+      return yield* new AssetPullRequestImageFetchError({
+        resource,
+        cause: new Error("GitHub image response did not describe a supported file."),
+      });
+    }
+    const encoded = decoded.content.replaceAll("\r", "").replaceAll("\n", "");
+    const bytesResult = Encoding.decodeBase64(encoded);
+    if (Result.isFailure(bytesResult) || bytesResult.success.byteLength !== decoded.size) {
+      return yield* new AssetPullRequestImageFetchError({
+        resource,
+        cause: new Error("GitHub image response contained invalid file bytes."),
+      });
+    }
+
+    yield* fileSystem.makeDirectory(cacheDirectory, { recursive: true });
+    yield* Effect.scoped(
+      Effect.gen(function* () {
+        const tempDirectory = yield* fileSystem.makeTempDirectoryScoped({
+          directory: cacheDirectory,
+          prefix: "download.",
+        });
+        const tempPath = path.join(tempDirectory, `image${extension}`);
+        yield* fileSystem.writeFile(tempPath, bytesResult.success);
+        yield* fileSystem.rename(tempPath, cachePath);
+      }),
+    );
+    return cachePath;
+  });
+
+  return yield* load.pipe(
+    Effect.mapError((cause) =>
+      isPullRequestImageFetchError(cause)
+        ? cause
+        : new AssetPullRequestImageFetchError({ resource, cause }),
+    ),
+  );
+});
+
 /** From the identity-checked, non-blocking handle the caller already holds. */
 const readImageDimensionsFromOpenFile = (filePath: string, file: OpenMediaFile) =>
   readMediaFileHeader(filePath, file, IMAGE_DIMENSIONS_HEADER_BYTES).pipe(
@@ -400,6 +534,7 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
   readonly resource: AssetResource;
   readonly workspaceRoot?: string;
   readonly projectFaviconPath?: string;
+  readonly gitHubCli?: GitHubCli.GitHubCli["Service"];
 }) {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -541,6 +676,24 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
         expiresAt,
       };
       fileName = input.resource.fileName ?? path.basename(attachmentPath);
+      break;
+    }
+    case "pull-request-image": {
+      if (input.gitHubCli === undefined) {
+        return yield* new AssetPullRequestImageFetchError({
+          resource: input.resource,
+          cause: new Error("GitHub image loader is unavailable."),
+        });
+      }
+      const cachedPath = yield* cachePullRequestImage(input.resource, input.gitHubCli);
+      const finalized = yield* finalizeAbsoluteMediaFileAsset({
+        requestedPath: cachedPath,
+        resource: input.resource,
+        expiresAt,
+      });
+      claims = finalized.claims;
+      fileName = path.basename(input.resource.path);
+      imageDimensions = finalized.imageDimensions;
       break;
     }
     case "project-favicon": {

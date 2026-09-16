@@ -66,6 +66,7 @@ import {
   FilesystemBrowseError,
   AssetWorkspaceContextNotFoundError,
   AssetWorkspaceContextResolutionError,
+  AssetPullRequestImageFetchError,
   RpcClientId,
   EnvironmentAuthorizationError,
   ThreadId,
@@ -3175,6 +3176,32 @@ const makeWsRpcLayer = (
             WS_METHODS.assetsCreateUrl,
             Effect.gen(function* () {
               const path = yield* Path.Path;
+              if (input.resource._tag === "pull-request-image") {
+                const resource = input.resource;
+                const load = Effect.gen(function* () {
+                  const gitHubCli = yield* GitHubCli.GitHubCli;
+                  return yield* issueAssetUrl({ resource, gitHubCli });
+                }).pipe(Effect.provide(GitHubCli.layer));
+                return yield* withPullRequestViewer(
+                  {
+                    projectId: resource.projectId,
+                    host: resource.host,
+                    ...(resource.expectedAccountId === undefined
+                      ? {}
+                      : { expectedAccountId: resource.expectedAccountId }),
+                    repository: resource.repository,
+                    number: resource.number,
+                  },
+                  load,
+                ).pipe(
+                  Effect.catchTags({
+                    PullRequestUnavailableError: (cause) =>
+                      new AssetPullRequestImageFetchError({ resource, cause }),
+                    PullRequestOperationError: (cause) =>
+                      new AssetPullRequestImageFetchError({ resource, cause }),
+                  }),
+                );
+              }
               // An absolute media path can be linked from a thread on another environment.
               if (
                 input.resource._tag === "attachment" ||

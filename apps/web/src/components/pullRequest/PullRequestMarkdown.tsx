@@ -1,5 +1,5 @@
 import { ExternalLinkIcon, PaperclipIcon } from "lucide-react";
-import type { EnvironmentId, ScopedThreadRef } from "@t3tools/contracts";
+import type { EnvironmentId, PullRequestRef, ScopedThreadRef } from "@t3tools/contracts";
 import { createContext, useContext, useMemo } from "react";
 import type { Options as ReactMarkdownOptions } from "react-markdown";
 
@@ -8,10 +8,16 @@ import { PULL_REQUESTS_PANEL_REF } from "~/rightPanelStore";
 
 import ChatMarkdown from "../ChatMarkdown";
 import { MediaVideoPlayer } from "../media/MediaVideoPlayer";
-import { remarkPullRequestAutolinks, splitPullRequestBody } from "./pullRequestMarkdown.logic";
+import {
+  pullRequestImageResourceFromSource,
+  remarkPullRequestAutolinks,
+  splitPullRequestBody,
+} from "./pullRequestMarkdown.logic";
 
 export const PullRequestMarkdownContext = createContext<{
   repositoryUrl: string | null;
+  headSha?: string | undefined;
+  reference: PullRequestRef;
   threadRef: ScopedThreadRef | null;
 } | null>(null);
 
@@ -33,10 +39,20 @@ export function PullRequestMarkdown({
   const segments = splitPullRequestBody(text);
   const context = useContext(PullRequestMarkdownContext);
   const repositoryUrl = context?.repositoryUrl;
+  const headSha = context?.headSha;
+  const reference = context?.reference;
   const resolvedThreadRef = threadRef ?? context?.threadRef ?? undefined;
   const extraRemarkPlugins = useMemo<NonNullable<ReactMarkdownOptions["remarkPlugins"]>>(
     () => (repositoryUrl ? [[remarkPullRequestAutolinks, { repositoryUrl }]] : []),
     [repositoryUrl],
+  );
+  const resolveImageResource = useMemo(
+    () =>
+      repositoryUrl && reference
+        ? (source: string) =>
+            pullRequestImageResourceFromSource({ source, repositoryUrl, reference, headSha })
+        : undefined,
+    [headSha, reference, repositoryUrl],
   );
   return (
     <div
@@ -56,6 +72,7 @@ export function PullRequestMarkdown({
               threadRef={resolvedThreadRef}
               pullRequestPanelRef={resolvedThreadRef ?? PULL_REQUESTS_PANEL_REF}
               environmentId={environmentId}
+              resolveImageResource={resolveImageResource}
               extraRemarkPlugins={extraRemarkPlugins}
               renderMermaidDiagrams
             />
