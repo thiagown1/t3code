@@ -23,6 +23,14 @@ const QUEUED_MESSAGE_STORAGE_VERSION = 1;
 const MAX_PERSISTED_QUEUE_THREADS = 100;
 const MAX_PERSISTED_MESSAGES_PER_THREAD = 50;
 
+/** An explicit wait-until-finished send overrides the client's default steer preference. */
+export function shouldQueueRunningFollowUp(
+  followUpBehavior: "queue" | "steer",
+  timing: ComposerQueueTiming | undefined,
+): boolean {
+  return timing === "after-current-turn" || followUpBehavior === "queue";
+}
+
 const isPersistedImage = Schema.is(PersistedComposerImageAttachment);
 const isPersistedFile = Schema.is(PersistedComposerDraftFileAttachment);
 const isPreviewAnnotation = Schema.is(PreviewAnnotationPayloadSchema);
