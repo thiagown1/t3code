@@ -1436,6 +1436,11 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
             slashCommands: [{ name: "project" }],
             skills: [{ name: "project", path: "/workspace/SKILL.md", enabled: true }],
           } as const satisfies ServerProvider;
+          const refreshedScopedProvider = {
+            ...scopedProvider,
+            checkedAt: "2026-06-10T00:01:30.000Z",
+            skills: [{ name: "project", path: "/workspace/SKILL.md", enabled: false }],
+          } as const satisfies ServerProvider;
           const pendingScopedProvider = {
             ...scopedProvider,
             status: "error",
@@ -1446,6 +1451,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
           const returnPendingSnapshot = yield* Ref.make(true);
           const probeStarted = yield* Deferred.make<void>();
           const releaseProbe = yield* Deferred.make<void>();
+          const returnRefreshedSnapshot = yield* Ref.make(false);
           const makeInstance = (
             provider: ServerProvider,
             snapshotForCwd: NonNullable<ProviderInstance["snapshotForCwd"]>,
@@ -1481,7 +1487,9 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
               if (yield* Ref.get(returnPendingSnapshot)) return pendingScopedProvider;
               yield* Deferred.succeed(probeStarted, undefined);
               yield* Deferred.await(releaseProbe);
-              return scopedProvider;
+              return (yield* Ref.get(returnRefreshedSnapshot))
+                ? refreshedScopedProvider
+                : scopedProvider;
             }),
           );
           const rebuiltProvider = {
@@ -1557,6 +1565,17 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
             );
             yield* registry.refreshWorkspaceSnapshot({ instanceId, cwd: "/workspace" });
             assert.strictEqual(yield* Ref.get(snapshotCalls), 2);
+            yield* Ref.set(returnRefreshedSnapshot, true);
+            yield* registry.refreshWorkspaceSnapshot({
+              instanceId,
+              cwd: "/workspace",
+              force: true,
+            });
+            assert.strictEqual(yield* Ref.get(snapshotCalls), 3);
+            assert.deepStrictEqual(
+              (yield* registry.getProviders)[0]?.workspaceSnapshots?.[0]?.skills,
+              refreshedScopedProvider.skills,
+            );
 
             yield* Ref.set(instancesRef, [rebuiltInstance]);
             yield* PubSub.publish(registryChanges, undefined);

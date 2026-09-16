@@ -66,6 +66,7 @@ export const applyEnvironmentBundle = Effect.fn("applyEnvironmentBundle")(functi
   readonly refreshWorkspaceSnapshot: (input: {
     readonly instanceId: ProviderInstanceId;
     readonly cwd: string;
+    readonly force?: boolean;
   }) => Effect.Effect<ReadonlyArray<ServerProvider>>;
 }): Effect.fn.Return<
   EnvironmentBundleApplyResult,
@@ -120,7 +121,7 @@ export const applyEnvironmentBundle = Effect.fn("applyEnvironmentBundle")(functi
   const refreshResult = yield* Effect.exit(
     Effect.forEach(
       providerInstanceIds,
-      (instanceId) => input.refreshWorkspaceSnapshot({ instanceId, cwd: input.cwd }),
+      (instanceId) => input.refreshWorkspaceSnapshot({ instanceId, cwd: input.cwd, force: true }),
       { concurrency: 1 },
     ),
   );
@@ -150,7 +151,7 @@ export const applyEnvironmentBundle = Effect.fn("applyEnvironmentBundle")(functi
     }
     yield* Effect.forEach(
       providerInstanceIds,
-      (instanceId) => input.refreshWorkspaceSnapshot({ instanceId, cwd: input.cwd }),
+      (instanceId) => input.refreshWorkspaceSnapshot({ instanceId, cwd: input.cwd, force: true }),
       { concurrency: 1 },
     ).pipe(Effect.ignore);
     return yield* applyError(
