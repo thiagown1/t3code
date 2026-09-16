@@ -7,7 +7,11 @@ import {
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { evaluateFirstMateAutomaticRouting, routeFirstMateMessage } from "./firstMate.ts";
+import {
+  evaluateFirstMateAutomaticRouting,
+  routeFirstMateMessage,
+  scoreFirstMateRoutingCandidates,
+} from "./firstMate.ts";
 
 const now = "2026-09-15T02:00:00.000Z";
 const projectId = ProjectId.make("routing-evaluation-project");
@@ -84,54 +88,188 @@ function workspace(overrides: Partial<FirstMateWorkspaceState> = {}): FirstMateW
 }
 
 describe("FirstMate shadow routing evaluation scenarios", () => {
-  it("classifies a labelled bilingual smoke dataset and abstains on semantic-only wording", () => {
+  it("measures the versioned PT/EN/mixed shadow dataset", () => {
+    const tiedTopics = [
+      topic({
+        id: FirstMateTopicId.make("dataset-production-logs"),
+        title: "Production logs",
+        summary: "Runtime investigation.",
+      }),
+      topic({
+        id: FirstMateTopicId.make("dataset-firebase-logs"),
+        title: "Firebase logs",
+        summary: "Data investigation.",
+      }),
+    ];
+    const tiedWorkspace = workspace({ topics: tiedTopics });
     const scenarios = [
       {
+        id: "pt-machine",
         message: "A memória e o storage do servidor estão no limite.",
         expected: topicIds.machines,
       },
       {
+        id: "pt-ci",
         message: "Os checks do GitHub Actions falharam novamente.",
         expected: topicIds.ci,
       },
       {
+        id: "pt-deploy",
         message: "Vamos fazer o deploy atrás de uma feature flag.",
         expected: topicIds.deploy,
       },
       {
+        id: "pt-firebase",
         message: "Consultar os logs do Firebase no Firestore.",
         expected: topicIds.firebase,
       },
       {
+        id: "en-pr-images",
         message: "The image from the pull request description is not loading.",
         expected: topicIds.prImages,
       },
       {
+        id: "en-machine",
+        message: "The server has high CPU and memory pressure.",
+        expected: topicIds.machines,
+      },
+      {
+        id: "en-ci",
+        message: "Run the GitHub checks again.",
+        expected: topicIds.ci,
+      },
+      {
+        id: "en-deploy",
+        message: "The production deploy is behind a feature flag.",
+        expected: topicIds.deploy,
+      },
+      {
+        id: "en-firebase",
+        message: "Query Firebase and Firestore logs.",
+        expected: topicIds.firebase,
+      },
+      {
+        id: "mixed-machine",
+        message: "Confira o storage do host and memory usage.",
+        expected: topicIds.machines,
+      },
+      {
+        id: "mixed-ci",
+        message: "Os checks da pipeline failed novamente.",
+        expected: topicIds.ci,
+      },
+      {
+        id: "mixed-deploy",
+        message: "Fazer deploy com uma feature flag.",
+        expected: topicIds.deploy,
+      },
+      {
+        id: "mixed-pr-images",
+        message: "Carregar imagens da descrição do pull request.",
+        expected: topicIds.prImages,
+      },
+      {
+        id: "negative-semantic",
         message: "A esteira ficou vermelha.",
+        expected: null,
+      },
+      {
+        id: "negative-generic",
+        message: "Please help me with this problem.",
+        expected: null,
+      },
+      {
+        id: "negative-ambiguous",
+        message: "Verifique os logs.",
+        expected: null,
+      },
+      {
+        id: "ambiguous-tie",
+        message: "Inspect logs",
+        expected: null,
+        state: tiedWorkspace,
+      },
+      {
+        id: "degenerate-empty",
+        message: "",
+        expected: null,
+      },
+      {
+        id: "degenerate-punctuation",
+        message: "???",
         expected: null,
       },
     ] as const;
 
     const results = scenarios.map((scenario) => ({
       ...scenario,
+      state: "state" in scenario ? scenario.state : workspace(),
       evaluation: evaluateFirstMateAutomaticRouting(
-        workspace(),
+        "state" in scenario ? scenario.state : workspace(),
         scenario.message,
         scenario.expected ?? topicIds.ci,
       ),
+      candidates: scoreFirstMateRoutingCandidates(
+        "state" in scenario ? scenario.state : workspace(),
+        scenario.message,
+      ),
     }));
 
-    for (const result of results) {
-      expect(result.evaluation?.candidateTopicId).toBe(result.expected);
-    }
     const suggestions = results.filter((result) => result.evaluation?.candidateTopicId !== null);
     const correct = suggestions.filter(
       (result) => result.evaluation?.candidateTopicId === result.expected,
     );
-    expect({
+    const falsePositives = results.filter(
+      (result) => result.expected === null && result.evaluation?.candidateTopicId !== null,
+    );
+    const abstentions = results.filter((result) => result.evaluation?.candidateTopicId === null);
+    const ties = results.filter(
+      (result) =>
+        (result.candidates[0]?.score ?? 0) > 0 &&
+        result.candidates[0]?.score === result.candidates[1]?.score,
+    );
+    const metrics = {
+      total: results.length,
+      suggestions: suggestions.length,
       coverage: suggestions.length / results.length,
-      accuracyWhenSuggested: correct.length / suggestions.length,
-    }).toEqual({ coverage: 5 / 6, accuracyWhenSuggested: 1 });
+      correct: correct.length,
+      precisionWhenSuggested: correct.length / suggestions.length,
+      abstentions: abstentions.length,
+      abstentionRate: abstentions.length / results.length,
+      falsePositives: falsePositives.length,
+      ties: ties.length,
+      minimumSuggestedMargin: Math.min(
+        ...suggestions.map(
+          (result) => result.candidates[0]!.score - (result.candidates[1]?.score ?? 0),
+        ),
+      ),
+    };
+
+    expect(metrics).toEqual({
+      total: 19,
+      suggestions: 13,
+      coverage: 13 / 19,
+      correct: 13,
+      precisionWhenSuggested: 1,
+      abstentions: 6,
+      abstentionRate: 6 / 19,
+      falsePositives: 0,
+      ties: 1,
+      minimumSuggestedMargin: 3,
+    });
+
+    for (const result of results) {
+      expect(result.evaluation?.candidateTopicId).toBe(result.expected);
+      expect(
+        evaluateFirstMateAutomaticRouting(
+          result.state.topics === tiedTopics
+            ? workspace({ topics: [...tiedTopics].reverse() })
+            : workspace({ topics: [...topics].reverse() }),
+          result.message,
+          result.expected ?? topicIds.ci,
+        ),
+      ).toEqual(result.evaluation);
+    }
   });
 
   it("normalizes accents before scoring", () => {

@@ -531,15 +531,18 @@ function firstMateRoutingTokens(value: string): ReadonlySet<string> {
  * Score an automatic route in shadow mode. The result is evidence only: callers
  * must keep the deterministic or user-confirmed topic as the real destination.
  */
-export function evaluateFirstMateAutomaticRouting(
+export type FirstMateRoutingCandidateScore = {
+  readonly topicId: FirstMateTopicId;
+  readonly score: number;
+};
+
+/** Return the ordered lexical scores used by the shadow evaluator. */
+export function scoreFirstMateRoutingCandidates(
   state: FirstMateWorkspaceState,
   message: string,
-  authoritativeTopicId: FirstMateTopicId,
-): FirstMateRoutingEvaluation | null {
-  if (state.routingEvaluationMode !== "shadow") return null;
-
+): ReadonlyArray<FirstMateRoutingCandidateScore> {
   const messageTokens = firstMateRoutingTokens(message);
-  const scored = state.topics
+  return state.topics
     .filter((topic) => topic.threadId !== null && topic.threadId !== state.supervisorThreadId)
     .map((topic) => {
       const titleTokens = firstMateRoutingTokens(topic.title);
@@ -552,6 +555,16 @@ export function evaluateFirstMateAutomaticRouting(
       return { topicId: topic.id, score };
     })
     .sort((left, right) => right.score - left.score || left.topicId.localeCompare(right.topicId));
+}
+
+export function evaluateFirstMateAutomaticRouting(
+  state: FirstMateWorkspaceState,
+  message: string,
+  authoritativeTopicId: FirstMateTopicId,
+): FirstMateRoutingEvaluation | null {
+  if (state.routingEvaluationMode !== "shadow") return null;
+
+  const scored = scoreFirstMateRoutingCandidates(state, message);
   const best = scored[0];
   const runnerUp = scored[1];
   if (best === undefined || best.score < 3 || best.score === runnerUp?.score) {
