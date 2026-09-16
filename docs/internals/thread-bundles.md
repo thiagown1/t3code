@@ -59,3 +59,12 @@ The sidebar's existing multi-selection menu can export up to fifty selected thre
 bundle. Selections spanning connected environments are read independently from each authoritative
 server and combined only after every sanitized export succeeds; a failure produces no download.
 The combined bundle preserves each thread's source environment identity for duplicate detection.
+
+For an official installation without the export RPC, `scripts/export-t3-thread-bundle.ts` reads a
+consistent SQLite snapshot in read-only mode and applies the same portable-content builder. Pass
+`--database <snapshot> --environment-id <source-id> --output <new-file> --open`, or replace `--open`
+with repeated `--thread <id>` arguments. It refuses to overwrite an output file, does not truncate
+message history, and rejects unmapped FirstMate decisions. Projects retain their source IDs; the
+destination must already provide matching projects and provider instances before import can pass
+its dry run. Keep the snapshot and bundle private: message and plan text is preserved, not
+automatically redacted. Credential files and running provider state are never part of this export.

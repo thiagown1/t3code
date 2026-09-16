@@ -2,7 +2,9 @@ import {
   ThreadBundle,
   ThreadId,
   type FirstMateDecision,
+  type OrchestrationMessage,
   type OrchestrationProject,
+  type OrchestrationProposedPlan,
   type OrchestrationThread,
   type ProjectId,
   type ThreadBundleImportPlan,
@@ -12,6 +14,48 @@ import {
   type ThreadBundle as ThreadBundleType,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
+
+type ThreadBundleBuildMessage = Pick<
+  OrchestrationMessage,
+  "id" | "role" | "text" | "streaming" | "createdAt" | "updatedAt"
+> & {
+  readonly attachments?:
+    | ReadonlyArray<{
+        readonly id: string;
+        readonly type: string;
+        readonly name: string;
+        readonly mimeType: string;
+        readonly sizeBytes: number;
+        readonly source?: unknown;
+      }>
+    | undefined;
+  readonly context?: unknown;
+};
+
+type ThreadBundleBuildThread = Pick<
+  OrchestrationThread,
+  | "id"
+  | "projectId"
+  | "title"
+  | "modelSelection"
+  | "runtimeMode"
+  | "interactionMode"
+  | "branch"
+  | "createdAt"
+  | "updatedAt"
+> & {
+  readonly worktreePath: unknown | null;
+  readonly messages: ReadonlyArray<ThreadBundleBuildMessage>;
+  readonly proposedPlans: ReadonlyArray<
+    Pick<
+      OrchestrationProposedPlan,
+      "id" | "planMarkdown" | "implementedAt" | "createdAt" | "updatedAt"
+    >
+  >;
+  readonly activities: { readonly length: number };
+  readonly checkpoints: { readonly length: number };
+  readonly session: unknown | null;
+};
 
 const decodeThreadBundle = Schema.decodeUnknownSync(ThreadBundle);
 
@@ -46,7 +90,7 @@ export function buildThreadBundle(input: {
   readonly sourceEnvironmentId: string;
   readonly entries: ReadonlyArray<{
     readonly project: Pick<OrchestrationProject, "id" | "title" | "repositoryIdentity">;
-    readonly thread: OrchestrationThread;
+    readonly thread: ThreadBundleBuildThread;
     readonly decisions?: ReadonlyArray<FirstMateDecision>;
   }>;
 }): ThreadBundleType {
