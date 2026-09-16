@@ -349,6 +349,76 @@ describe("offline T3 Thread Bundle exporter", () => {
     expect(NodeFS.existsSync(invalid.outputPath)).toBe(false);
   });
 
+  it("rejects invalid runtime, timestamps, and source environment IDs before writing", () => {
+    const runtime = fixture();
+    const runtimeThread = insertThread(runtime.database);
+    runtime.database
+      .prepare("UPDATE projection_threads SET runtime_mode = ? WHERE thread_id = ?")
+      .run("unsupported-runtime", runtimeThread);
+    close(runtime.database);
+    expect(() =>
+      exportT3ThreadBundle({
+        databasePath: runtime.databasePath,
+        environmentId: "official-source",
+        outputPath: runtime.outputPath,
+        selection: { mode: "open" },
+      }),
+    ).toThrow(expect.objectContaining({ code: "invalid-source" }));
+    expect(NodeFS.existsSync(runtime.outputPath)).toBe(false);
+
+    const timestamp = fixture();
+    const timestampThread = insertThread(timestamp.database);
+    timestamp.database
+      .prepare("UPDATE projection_threads SET created_at = ? WHERE thread_id = ?")
+      .run("", timestampThread);
+    close(timestamp.database);
+    expect(() =>
+      exportT3ThreadBundle({
+        databasePath: timestamp.databasePath,
+        environmentId: "official-source",
+        outputPath: timestamp.outputPath,
+        selection: { mode: "open" },
+      }),
+    ).toThrow(expect.objectContaining({ code: "invalid-source" }));
+    expect(NodeFS.existsSync(timestamp.outputPath)).toBe(false);
+
+    const environment = fixture();
+    insertThread(environment.database);
+    close(environment.database);
+    expect(() =>
+      exportT3ThreadBundle({
+        databasePath: environment.databasePath,
+        environmentId: "",
+        outputPath: environment.outputPath,
+        selection: { mode: "open" },
+      }),
+    ).toThrow(expect.objectContaining({ code: "invalid-source" }));
+    expect(NodeFS.existsSync(environment.outputPath)).toBe(false);
+  });
+
+  it("rejects bundles larger than the import limit without writing output", () => {
+    const { database, databasePath, outputPath } = fixture();
+    const threadId = insertThread(database);
+    insertMessage(database, {
+      id: "oversized-message",
+      threadId,
+      text: "x".repeat(5 * 1024 * 1024),
+    });
+    close(database);
+
+    expect(() =>
+      exportT3ThreadBundle({
+        databasePath,
+        environmentId: "official-source",
+        outputPath,
+        selection: { mode: "open" },
+        bundleId: "fixture-bundle",
+        exportedAt: NOW,
+      }),
+    ).toThrow(expect.objectContaining({ code: "output-too-large" }));
+    expect(NodeFS.existsSync(outputPath)).toBe(false);
+  });
+
   it("rejects FirstMate decisions instead of silently omitting them", () => {
     const { database, databasePath, outputPath } = fixture();
     insertThread(database);

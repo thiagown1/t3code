@@ -6,8 +6,14 @@ import * as NodePath from "node:path";
 import { pathToFileURL } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 
-import { buildThreadBundle, serializeThreadBundle } from "@t3tools/shared/threadBundle";
+import {
+  buildThreadBundle,
+  parseThreadBundleJson,
+  serializeThreadBundle,
+} from "@t3tools/shared/threadBundle";
 import * as DateTime from "effect/DateTime";
+
+const MAX_THREAD_BUNDLE_BYTES = 5 * 1024 * 1024;
 
 const REQUIRED_COLUMNS = {
   projection_projects: ["project_id", "title"],
@@ -72,6 +78,7 @@ type SafeErrorCode =
   | "invalid-source"
   | "invalid-selection"
   | "unsupported-decisions"
+  | "output-too-large"
   | "output-exists"
   | "output-failed";
 
@@ -613,8 +620,19 @@ export function exportT3ThreadBundle(
       0,
     );
     serialized = serializeThreadBundle(bundle);
+    // Serialization normalizes the in-memory object but does not decode it
+    // against the wire schema. Validate the exact bytes before creating the
+    // destination so source rows with incompatible enum/metadata values fail
+    // closed without leaving a partial file behind.
+    parseThreadBundleJson(serialized);
   } catch {
     return fail("invalid-source", "Source database contains invalid Thread Bundle data");
+  }
+  if (Buffer.byteLength(serialized, "utf8") > MAX_THREAD_BUNDLE_BYTES) {
+    return fail(
+      "output-too-large",
+      "Thread Bundle exceeds the 5 MB import limit; select fewer threads and try again",
+    );
   }
   writeExclusive(options.outputPath, serialized);
   return { threadCount: input.entries.length, messageCount: exportedMessageCount };
