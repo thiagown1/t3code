@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it } from "vite-plus/test";
 import {
   hydratePersistedQueuedMessageStoreState,
   isQueuedMessageDue,
+  shouldQueueRunningFollowUp,
   latestCompletedToolActivityId,
   normalizePersistedQueuedMessageStoreState,
   partializeQueuedMessageStoreState,
@@ -28,6 +29,12 @@ function makeMessage(prompt: string): Omit<QueuedComposerMessage, "id"> {
 }
 
 describe("queuedMessageStore", () => {
+  it("keeps Alt+Enter queued even when ordinary follow-ups steer immediately", () => {
+    expect(shouldQueueRunningFollowUp("steer", "after-current-turn")).toBe(true);
+    expect(shouldQueueRunningFollowUp("steer", undefined)).toBe(false);
+    expect(shouldQueueRunningFollowUp("queue", undefined)).toBe(true);
+  });
+
   beforeEach(() => {
     useQueuedMessageStore.setState({ queuesByThreadKey: {}, drainGeneration: 0 });
   });
