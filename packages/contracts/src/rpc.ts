@@ -23,7 +23,14 @@ import {
   ClientActivityReportInput,
   HostPowerSnapshot,
 } from "./background.ts";
-import { EnvironmentBundleCredentialResolutions } from "./environmentBundle.ts";
+import {
+  EnvironmentBundleApplyError,
+  EnvironmentBundleApplyInput,
+  EnvironmentBundleApplyPlan,
+  EnvironmentBundleApplyPlanInput,
+  EnvironmentBundleApplyResult,
+  EnvironmentBundleCredentialResolutions,
+} from "./environmentBundle.ts";
 import { PortableCredentialReference } from "./capabilityProfile.ts";
 import {
   ThreadBundle,
@@ -380,6 +387,8 @@ export const WS_METHODS = {
   serverGetSettings: "server.getSettings",
   serverUpdateSettings: "server.updateSettings",
   serverResolveEnvironmentBundleCredentials: "server.resolveEnvironmentBundleCredentials",
+  serverPlanEnvironmentBundleApply: "server.planEnvironmentBundleApply",
+  serverApplyEnvironmentBundle: "server.applyEnvironmentBundle",
   serverExportThreadBundle: "server.exportThreadBundle",
   serverPlanThreadBundleImport: "server.planThreadBundleImport",
   serverImportThreadBundle: "server.importThreadBundle",
@@ -606,6 +615,21 @@ const WsServerResolveEnvironmentBundleCredentialsRpc = Rpc.make(
     error: EnvironmentAuthorizationError,
   },
 );
+
+const WsServerPlanEnvironmentBundleApplyRpc = Rpc.make(
+  WS_METHODS.serverPlanEnvironmentBundleApply,
+  {
+    payload: EnvironmentBundleApplyPlanInput,
+    success: EnvironmentBundleApplyPlan,
+    error: Schema.Union([EnvironmentBundleApplyError, EnvironmentAuthorizationError]),
+  },
+);
+
+const WsServerApplyEnvironmentBundleRpc = Rpc.make(WS_METHODS.serverApplyEnvironmentBundle, {
+  payload: EnvironmentBundleApplyInput,
+  success: EnvironmentBundleApplyResult,
+  error: Schema.Union([EnvironmentBundleApplyError, EnvironmentAuthorizationError]),
+});
 
 const WsServerExportThreadBundleRpc = Rpc.make(WS_METHODS.serverExportThreadBundle, {
   payload: ThreadBundleExportInput,
@@ -1437,6 +1461,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGetSettingsRpc,
   WsServerUpdateSettingsRpc,
   WsServerResolveEnvironmentBundleCredentialsRpc,
+  WsServerPlanEnvironmentBundleApplyRpc,
+  WsServerApplyEnvironmentBundleRpc,
   WsServerExportThreadBundleRpc,
   WsServerPlanThreadBundleImportRpc,
   WsServerImportThreadBundleRpc,

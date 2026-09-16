@@ -36,9 +36,38 @@ function skillOrigin(skill: Pick<ServerProviderSkill, "path" | "scope">): SkillO
   }
 }
 
-function providerSkills(provider: ServerProvider, cwd: string): ReadonlyArray<ServerProviderSkill> {
+export function environmentBundleProviderSkills(
+  provider: ServerProvider,
+  cwd: string,
+): ReadonlyArray<ServerProviderSkill> {
   return (
     provider.workspaceSnapshots?.find((snapshot) => snapshot.cwd === cwd)?.skills ?? provider.skills
+  );
+}
+
+export function environmentBundleProviderSkillId(
+  provider: ServerProvider,
+  skill: ServerProviderSkill,
+): string {
+  return `${provider.instanceId}:${skillOrigin(skill)}:${skill.name}`;
+}
+
+export function areClaudeSkillDisableOperationsEffective(input: {
+  readonly providers: ReadonlyArray<ServerProvider>;
+  readonly cwd: string;
+  readonly operations: ReadonlyArray<EnvironmentBundleApplyOperation>;
+}): boolean {
+  return input.operations.every((operation) =>
+    operation.targetIds.every((targetId) =>
+      input.providers.some(
+        (provider) =>
+          provider.driver === "claudeAgent" &&
+          environmentBundleProviderSkills(provider, input.cwd).some(
+            (skill) =>
+              environmentBundleProviderSkillId(provider, skill) === targetId && !skill.enabled,
+          ),
+      ),
+    ),
   );
 }
 
@@ -95,11 +124,11 @@ export function buildEnvironmentBundleApplyPlan(input: {
   for (const { after } of requestedDisables.values()) {
     const matches = input.providers.flatMap((provider) => {
       if (provider.driver !== "claudeAgent") return [];
-      const skill = providerSkills(provider, input.cwd).find(
+      const skill = environmentBundleProviderSkills(provider, input.cwd).find(
         (candidate) =>
           candidate.enabled &&
           candidate.name === after.name &&
-          `${provider.instanceId}:${skillOrigin(candidate)}:${candidate.name}` === after.skillId,
+          environmentBundleProviderSkillId(provider, candidate) === after.skillId,
       );
       return skill ? [{ provider, skill }] : [];
     });
@@ -113,11 +142,11 @@ export function buildEnvironmentBundleApplyPlan(input: {
     const affected = input.providers.flatMap((provider) =>
       provider.driver !== "claudeAgent"
         ? []
-        : providerSkills(provider, input.cwd)
+        : environmentBundleProviderSkills(provider, input.cwd)
             .filter((skill) => skill.enabled && skill.name === after.name)
             .map((skill) => ({
               instanceId: provider.instanceId,
-              targetId: `${provider.instanceId}:${skillOrigin(skill)}:${skill.name}`,
+              targetId: environmentBundleProviderSkillId(provider, skill),
             })),
     );
     const missingTargets = affected.filter(

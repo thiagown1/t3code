@@ -158,3 +158,41 @@ export const EnvironmentBundleApplyPlan = Schema.Struct({
   targetStateHash: ContentHash,
 });
 export type EnvironmentBundleApplyPlan = typeof EnvironmentBundleApplyPlan.Type;
+
+export const EnvironmentBundleApplyPlanInput = Schema.Struct({
+  current: EnvironmentBundle,
+  incoming: EnvironmentBundle,
+});
+export type EnvironmentBundleApplyPlanInput = typeof EnvironmentBundleApplyPlanInput.Type;
+
+export const EnvironmentBundleApplyInput = Schema.Struct({
+  current: EnvironmentBundle,
+  incoming: EnvironmentBundle,
+  expectedPlan: EnvironmentBundleApplyPlan,
+});
+export type EnvironmentBundleApplyInput = typeof EnvironmentBundleApplyInput.Type;
+
+export const EnvironmentBundleApplyResult = Schema.Struct({
+  bundleId: StableId,
+  appliedOperations: Schema.Array(EnvironmentBundleApplyOperation),
+  refreshedProviderInstanceIds: Schema.Array(StableId),
+});
+export type EnvironmentBundleApplyResult = typeof EnvironmentBundleApplyResult.Type;
+
+export const EnvironmentBundleApplyErrorReason = Schema.Literals([
+  "snapshot-failed",
+  "plan-changed",
+  "blocked",
+  "persistence-failed",
+  "health-check-failed",
+  "rollback-failed",
+]);
+export type EnvironmentBundleApplyErrorReason = typeof EnvironmentBundleApplyErrorReason.Type;
+
+export class EnvironmentBundleApplyError extends Schema.TaggedError<EnvironmentBundleApplyError>()(
+  "EnvironmentBundleApplyError",
+  {
+    reason: EnvironmentBundleApplyErrorReason,
+    message: TrimmedNonEmptyString,
+  },
+) {}

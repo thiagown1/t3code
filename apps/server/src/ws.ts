@@ -162,6 +162,10 @@ import {
   openCodeMcpInventorySourcesFromSettings,
 } from "./environment/EnvironmentBundleInventory.ts";
 import { resolveEnvironmentBundleCredentialReferences } from "./environment/EnvironmentBundleCredentials.ts";
+import {
+  applyEnvironmentBundle,
+  planEnvironmentBundleApply,
+} from "./environment/EnvironmentBundleApply.ts";
 import { exportThreadBundleFromProjection } from "./orchestration/ThreadBundleExport.ts";
 import {
   buildThreadBundleImportCommand,
@@ -2506,6 +2510,33 @@ const makeWsRpcLayer = (
           observeRpcEffect(
             WS_METHODS.serverResolveEnvironmentBundleCredentials,
             Effect.succeed(resolveEnvironmentBundleCredentialReferences(credentialRefs)),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.serverPlanEnvironmentBundleApply]: ({ current, incoming }) =>
+          observeRpcEffect(
+            WS_METHODS.serverPlanEnvironmentBundleApply,
+            Effect.gen(function* () {
+              const providers = yield* providerRegistry.getProviders;
+              return yield* planEnvironmentBundleApply({
+                current,
+                incoming,
+                providers,
+                cwd: config.cwd,
+              });
+            }),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.serverApplyEnvironmentBundle]: ({ current, incoming, expectedPlan }) =>
+          observeRpcEffect(
+            WS_METHODS.serverApplyEnvironmentBundle,
+            applyEnvironmentBundle({
+              current,
+              incoming,
+              expectedPlan,
+              cwd: config.cwd,
+              getProviders: providerRegistry.getProviders,
+              refreshWorkspaceSnapshot: providerRegistry.refreshWorkspaceSnapshot,
+            }),
             { "rpc.aggregate": "server" },
           ),
         [WS_METHODS.serverExportThreadBundle]: ({ threadIds }) =>
