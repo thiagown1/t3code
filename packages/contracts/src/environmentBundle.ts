@@ -7,6 +7,18 @@ const StableId = TrimmedNonEmptyString.check(Schema.isMaxLength(256));
 const LogicalPath = TrimmedNonEmptyString.check(Schema.isMaxLength(2_048));
 const ContentHash = TrimmedNonEmptyString.check(Schema.isPattern(/^[a-f0-9]{64}$/i));
 
+export const ENVIRONMENT_BUNDLE_KNOWN_ROOT_INSTRUCTION_PATHS = [
+  "AGENTS.md",
+  "CLAUDE.md",
+  "GEMINI.md",
+  ".cursorrules",
+  ".github/copilot-instructions.md",
+] as const;
+export const ENVIRONMENT_BUNDLE_KNOWN_ROOT_INSTRUCTION_SCOPE = {
+  id: "known-root-v1",
+  hash: "637fc2066cbccda761bec5b6ce4bc69ed23f8186b941b75cc5f4b3f5b3ae4c4f",
+} as const;
+
 export const EnvironmentBundleMcpServer = Schema.Struct({
   serverId: StableId,
   origin: TrimmedNonEmptyString,
@@ -66,6 +78,13 @@ export const EnvironmentBundleProjectInstruction = Schema.Struct({
 });
 export type EnvironmentBundleProjectInstruction = typeof EnvironmentBundleProjectInstruction.Type;
 
+export const EnvironmentBundleProjectInstructionsScope = Schema.Struct({
+  id: Schema.Literal("known-root-v1"),
+  hash: ContentHash,
+});
+export type EnvironmentBundleProjectInstructionsScope =
+  typeof EnvironmentBundleProjectInstructionsScope.Type;
+
 /**
  * A portable description of an environment's intended integrations.
  * It contains references and hashes, never executable configuration or secrets.
@@ -80,6 +99,7 @@ export const EnvironmentBundle = Schema.Struct({
   pluginsAndApps: Schema.Array(EnvironmentBundlePluginApp),
   providers: Schema.Array(EnvironmentBundleProvider),
   projectInstructions: Schema.Array(EnvironmentBundleProjectInstruction),
+  projectInstructionsScope: Schema.optionalKey(EnvironmentBundleProjectInstructionsScope),
   initialSkillContextBudgetTokens: Schema.optionalKey(PositiveInt),
 });
 export type EnvironmentBundle = typeof EnvironmentBundle.Type;
@@ -121,6 +141,20 @@ export const EnvironmentBundleInventoryCoverage = Schema.Literals([
 ]);
 export type EnvironmentBundleInventoryCoverage = typeof EnvironmentBundleInventoryCoverage.Type;
 
+export const EnvironmentBundleProjectInstructionScopeReason = Schema.Struct({
+  logicalPath: Schema.Literals(ENVIRONMENT_BUNDLE_KNOWN_ROOT_INSTRUCTION_PATHS),
+  code: Schema.Literals([
+    "outside-root",
+    "not-regular-file",
+    "oversized",
+    "size-changed",
+    "changed-during-scan",
+    "io-error",
+  ]),
+});
+export type EnvironmentBundleProjectInstructionScopeReason =
+  typeof EnvironmentBundleProjectInstructionScopeReason.Type;
+
 /**
  * Secret-free inventory produced by the environment server. Coverage is
  * explicit because provider-native MCP and instruction sources are not all
@@ -131,6 +165,13 @@ export const EnvironmentBundleServerInventory = Schema.Struct({
   mcpCoverage: EnvironmentBundleInventoryCoverage,
   projectInstructions: Schema.Array(EnvironmentBundleProjectInstruction),
   projectInstructionsCoverage: EnvironmentBundleInventoryCoverage,
+  projectInstructionsScope: Schema.optionalKey(EnvironmentBundleProjectInstructionsScope),
+  // Optional for compatibility with ServerConfig payloads from older servers.
+  // Consumers must not infer attestation from their absence.
+  projectInstructionsScopeCoverage: Schema.optionalKey(EnvironmentBundleInventoryCoverage),
+  projectInstructionsScopeReasons: Schema.optionalKey(
+    Schema.Array(EnvironmentBundleProjectInstructionScopeReason),
+  ),
 });
 export type EnvironmentBundleServerInventory = typeof EnvironmentBundleServerInventory.Type;
 

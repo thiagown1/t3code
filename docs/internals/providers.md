@@ -56,10 +56,23 @@ paths from the live provider snapshot rather than the imported bundle and blocks
 the bundle omits a provided skill, mislabels a non-plugin skill, or would silently affect another
 instance. Plugin/app installation and enablement remain unsupported.
 
-The server hashes known root instruction files without returning their contents or absolute paths,
-and marks that coverage as partial until provider adapters report the exact files loaded by a
-session. Instructions and context-budget changes remain blockers because they have no safe write
-adapter. MCP inventory stays explicit about coverage. The Codex adapter scans only MCP table names, `enabled`, `enabled_tools`,
+The server keeps provider-effective instruction coverage separate from its authoritative
+`known-root-v1` allowlist attestation. Provider coverage remains partial until adapters report the
+exact files loaded by a session. The allowlist covers, in order, root `AGENTS.md`, `CLAUDE.md`,
+`GEMINI.md`, `.cursorrules`, and `.github/copilot-instructions.md`; it is complete only when every
+entry is either authoritatively absent or resolves to a regular file within the real project root
+and contains at most 256,000 bytes. Internal symlinks are allowed. The scanner opens each present
+file once, reads at most 256,001 bytes from that handle, and rechecks the canonical path plus the
+descriptor identity and metadata available on the host. Detected path swaps, identity or size
+changes, escapes, directories, oversized files, permission failures, and other I/O failures make
+that scope partial with only a logical path and stable reason code exposed. These portable checks
+fail closed when they observe a race, but cannot provide an atomic no-symlink-open guarantee on
+every supported filesystem. The bundle carries the allowlist
+scope id and definition hash, plus SHA-256 hashes of present file bytes, but never contents or
+absolute paths. Apply compares the attested inventories symmetrically and fails closed for legacy
+v1 bundles without an attestation, incompatible scopes, missing or extra files, changed hashes,
+disabled entries, and paths outside the allowlist. Instructions and context-budget changes remain
+blockers because they have no safe write adapter. MCP inventory stays explicit about coverage. The Codex adapter scans only MCP table names, `enabled`, `enabled_tools`,
 and `disabled_tools` from the configured user home and root project config. Commands, arguments,
 URLs, environment values, tokens, absolute paths, and unrecognized fields are discarded before the
 inventory or its hash is built. Single-line allow/block lists are supported; unhandled

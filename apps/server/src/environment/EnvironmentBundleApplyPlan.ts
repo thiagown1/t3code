@@ -1,6 +1,9 @@
-import { isDeepStrictEqual } from "node:util";
+import * as NodeUtil from "node:util";
 
-import { ProviderInstanceId } from "@t3tools/contracts";
+import {
+  ENVIRONMENT_BUNDLE_KNOWN_ROOT_INSTRUCTION_PATHS,
+  ProviderInstanceId,
+} from "@t3tools/contracts";
 import type {
   EnvironmentBundle,
   EnvironmentBundleApplyOperation,
@@ -120,7 +123,7 @@ function equalExceptEnabled(
 ): boolean {
   const { enabled: _beforeEnabled, ...beforeMetadata } = before;
   const { enabled: _afterEnabled, ...afterMetadata } = after;
-  return isDeepStrictEqual(beforeMetadata, afterMetadata);
+  return NodeUtil.isDeepStrictEqual(beforeMetadata, afterMetadata);
 }
 
 function projectMcpIdentity(input: {
@@ -168,19 +171,38 @@ function verifyProjectInstructions(input: {
   readonly incoming: EnvironmentBundle;
   readonly serverInventory: EnvironmentBundleServerInventory;
 }): ReadonlyArray<string> {
-  if (input.incoming.projectInstructions.length === 0) return [];
-  if (input.serverInventory.projectInstructionsCoverage !== "complete") {
-    return ["project-instruction inventory coverage is not complete"];
+  const incomingScope = input.incoming.projectInstructionsScope;
+  if (!incomingScope) {
+    return ["project-instruction bundle has no authoritative scope attestation"];
+  }
+  if (input.serverInventory.projectInstructionsScopeCoverage !== "complete") {
+    return ["project-instruction known-root scope coverage is not complete"];
+  }
+  const actualScope = input.serverInventory.projectInstructionsScope;
+  if (
+    !actualScope ||
+    actualScope.id !== incomingScope.id ||
+    actualScope.hash !== incomingScope.hash
+  ) {
+    return ["project-instruction scope is incompatible with the current workspace"];
   }
 
+  const knownPaths = new Set<string>(ENVIRONMENT_BUNDLE_KNOWN_ROOT_INSTRUCTION_PATHS);
   const actualByPath = new Map(
     input.serverInventory.projectInstructions.map((instruction) => [
       instruction.logicalPath,
       instruction,
     ]),
   );
+  const incomingByPath = new Map(
+    input.incoming.projectInstructions.map((instruction) => [instruction.logicalPath, instruction]),
+  );
   const blockers: string[] = [];
   for (const instruction of input.incoming.projectInstructions) {
+    if (!knownPaths.has(instruction.logicalPath)) {
+      blockers.push(`project-instruction:${instruction.logicalPath} is outside known-root-v1`);
+      continue;
+    }
     if (!instruction.enabled) {
       blockers.push(`project-instruction:${instruction.logicalPath} cannot be disabled`);
       continue;
@@ -194,6 +216,13 @@ function verifyProjectInstructions(input: {
       blockers.push(
         `project-instruction:${instruction.logicalPath} hash differs from current workspace`,
       );
+    }
+  }
+  for (const instruction of input.serverInventory.projectInstructions) {
+    if (!knownPaths.has(instruction.logicalPath)) {
+      blockers.push(`project-instruction:${instruction.logicalPath} is outside known-root-v1`);
+    } else if (!incomingByPath.has(instruction.logicalPath)) {
+      blockers.push(`project-instruction:${instruction.logicalPath} is extra in current workspace`);
     }
   }
   return blockers;
@@ -469,7 +498,12 @@ export function buildEnvironmentBundleApplyPlan(input: {
       server: change.after,
       providers: input.providers,
     });
-    if (!actual || !actual.enabled || !isDeepStrictEqual(actual, change.before) || !identity) {
+    if (
+      !actual ||
+      !actual.enabled ||
+      !NodeUtil.isDeepStrictEqual(actual, change.before) ||
+      !identity
+    ) {
       blockers.push(
         `mcp:${change.after.serverId} is not an enabled supported project MCP in the current workspace`,
       );

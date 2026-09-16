@@ -6,6 +6,8 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import { symlinksSupported } from "@t3tools/shared/testing/symlinks";
+import { EnvironmentBundleServerInventory as EnvironmentBundleServerInventorySchema } from "@t3tools/contracts";
 
 import {
   claudeMcpInventorySourcesFromSettings,
@@ -16,12 +18,38 @@ import {
   parseSanitizedJsonMcpConfig,
   parseSanitizedCodexMcpConfig,
   parseSanitizedOpenCodeMcpConfig,
+  ROOT_PROJECT_INSTRUCTION_PATHS,
+  ROOT_PROJECT_INSTRUCTION_SCOPE,
 } from "./EnvironmentBundleInventory.ts";
 
 const sha256 = (value: string) => NodeCrypto.createHash("sha256").update(value).digest("hex");
 const encodeUnknownJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
 describe("EnvironmentBundleInventory", () => {
+  it("pins the known-root-v1 definition and path order", () => {
+    const definition = JSON.stringify({
+      id: "known-root-v1",
+      paths: ROOT_PROJECT_INSTRUCTION_PATHS,
+    });
+    expect(ROOT_PROJECT_INSTRUCTION_SCOPE).toEqual({
+      id: "known-root-v1",
+      hash: sha256(definition),
+    });
+  });
+
+  it("decodes inventories from older ServerConfig payloads without inferring attestation", () => {
+    const inventory = Schema.decodeUnknownSync(EnvironmentBundleServerInventorySchema)({
+      mcpServers: [],
+      mcpCoverage: "unavailable",
+      projectInstructions: [],
+      projectInstructionsCoverage: "partial",
+    });
+
+    expect(inventory.projectInstructionsScope).toBeUndefined();
+    expect(inventory.projectInstructionsScopeCoverage).toBeUndefined();
+    expect(inventory.projectInstructionsScopeReasons).toBeUndefined();
+  });
+
   it.effect("hashes supported project instructions without exposing their contents", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -48,24 +76,128 @@ describe("EnvironmentBundleInventory", () => {
           },
         ],
         projectInstructionsCoverage: "partial",
+        projectInstructionsScope: ROOT_PROJECT_INSTRUCTION_SCOPE,
+        projectInstructionsScopeCoverage: "complete",
+        projectInstructionsScopeReasons: [],
       });
       expect("content" in inventory.projectInstructions[0]!).toBe(false);
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
-  it.effect("ignores oversized and nested files outside the declared partial inventory", () =>
+  it.effect("accepts the exact byte limit and reports +1 without exposing a path", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const cwd = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-environment-bundle-" });
-      yield* fileSystem.makeDirectory(path.join(cwd, "nested"), { recursive: true });
+      yield* fileSystem.writeFileString(path.join(cwd, "AGENTS.md"), "x".repeat(256_000));
       yield* fileSystem.writeFileString(path.join(cwd, "CLAUDE.md"), "x".repeat(256_001));
-      yield* fileSystem.writeFileString(path.join(cwd, "nested", "AGENTS.md"), "nested");
+      yield* fileSystem.makeDirectory(path.join(cwd, "GEMINI.md"));
 
       const inventory = yield* loadEnvironmentBundleServerInventory({ cwd });
 
-      expect(inventory.projectInstructions).toEqual([]);
+      expect(inventory.projectInstructions).toEqual([
+        { logicalPath: "AGENTS.md", contentHash: sha256("x".repeat(256_000)), enabled: true },
+      ]);
       expect(inventory.projectInstructionsCoverage).toBe("partial");
+      expect(inventory.projectInstructionsScope).toBeUndefined();
+      expect(inventory.projectInstructionsScopeCoverage).toBe("partial");
+      expect(inventory.projectInstructionsScopeReasons).toEqual([
+        { logicalPath: "CLAUDE.md", code: "oversized" },
+        { logicalPath: "GEMINI.md", code: "not-regular-file" },
+      ]);
+      expect(encodeUnknownJson(inventory)).not.toContain(cwd);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("opens once, bounds the descriptor read, and rejects a path swap", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const cwd = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-environment-bundle-" });
+      const instructionPath = path.join(cwd, "AGENTS.md");
+      const replacementPath = path.join(cwd, "replacement.md");
+      yield* fileSystem.writeFileString(instructionPath, "original\n");
+      yield* fileSystem.writeFileString(replacementPath, "replacement\n");
+      const canonicalInstructionPath = yield* fileSystem.realPath(instructionPath);
+      const canonicalReplacementPath = yield* fileSystem.realPath(replacementPath);
+      let instructionRealPathCalls = 0;
+      let instructionOpens = 0;
+      const readRequests: Array<number> = [];
+      const racingFileSystem = FileSystem.FileSystem.of({
+        ...fileSystem,
+        realPath: (candidate) => {
+          if (candidate !== instructionPath) return fileSystem.realPath(candidate);
+          instructionRealPathCalls += 1;
+          return Effect.succeed(
+            instructionRealPathCalls === 1 ? canonicalInstructionPath : canonicalReplacementPath,
+          );
+        },
+        open: (candidate, options) =>
+          fileSystem.open(candidate, options).pipe(
+            Effect.map((file) => {
+              if (candidate !== instructionPath) return file;
+              instructionOpens += 1;
+              return {
+                ...file,
+                stat: file.stat,
+                readAlloc: (size: FileSystem.SizeInput) => {
+                  readRequests.push(Number(size));
+                  return file.readAlloc(size);
+                },
+              };
+            }),
+          ),
+      });
+
+      const inventory = yield* loadEnvironmentBundleServerInventory({ cwd }).pipe(
+        Effect.provideService(FileSystem.FileSystem, racingFileSystem),
+      );
+
+      expect(instructionOpens).toBe(1);
+      expect(readRequests).toEqual([]);
+      expect(inventory.projectInstructions).toEqual([]);
+      expect(inventory.projectInstructionsScopeCoverage).toBe("partial");
+      expect(inventory.projectInstructionsScopeReasons).toContainEqual({
+        logicalPath: "AGENTS.md",
+        code: "changed-during-scan",
+      });
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("never requests more than 256001 bytes from an opened instruction", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const cwd = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-environment-bundle-" });
+      const instructionPath = path.join(cwd, "AGENTS.md");
+      yield* fileSystem.writeFileString(instructionPath, "policy\n");
+      const readRequests: Array<number> = [];
+      const observedFileSystem = FileSystem.FileSystem.of({
+        ...fileSystem,
+        open: (candidate, options) =>
+          fileSystem.open(candidate, options).pipe(
+            Effect.map((file) =>
+              candidate === instructionPath
+                ? {
+                    ...file,
+                    stat: file.stat,
+                    readAlloc: (size: FileSystem.SizeInput) => {
+                      readRequests.push(Number(size));
+                      return file.readAlloc(size);
+                    },
+                  }
+                : file,
+            ),
+          ),
+      });
+
+      const inventory = yield* loadEnvironmentBundleServerInventory({ cwd }).pipe(
+        Effect.provideService(FileSystem.FileSystem, observedFileSystem),
+      );
+
+      expect(inventory.projectInstructions).toHaveLength(1);
+      expect(readRequests.length).toBeGreaterThan(0);
+      expect(Math.max(...readRequests)).toBe(256_001);
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
@@ -84,7 +216,77 @@ describe("EnvironmentBundleInventory", () => {
       expect(inventory.projectInstructions).toEqual([
         { logicalPath: "AGENTS.md", contentHash: sha256("Root policy\n"), enabled: true },
       ]);
+      expect(inventory.projectInstructionsScopeCoverage).toBe("complete");
     }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("treats absent allowlist entries as authoritative coverage", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const cwd = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-environment-bundle-" });
+
+      const inventory = yield* loadEnvironmentBundleServerInventory({ cwd });
+
+      expect(inventory.projectInstructions).toEqual([]);
+      expect(inventory.projectInstructionsCoverage).toBe("partial");
+      expect(inventory.projectInstructionsScopeCoverage).toBe("complete");
+      expect(inventory.projectInstructionsScope).toEqual(ROOT_PROJECT_INSTRUCTION_SCOPE);
+      expect(inventory.projectInstructionsScopeReasons).toEqual([]);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("does not attest a project root that could not be resolved", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const parent = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-environment-bundle-",
+      });
+
+      const inventory = yield* loadEnvironmentBundleServerInventory({
+        cwd: path.join(parent, "missing"),
+      });
+
+      expect(inventory.projectInstructionsScopeCoverage).toBe("partial");
+      expect(inventory.projectInstructionsScope).toBeUndefined();
+      expect(inventory.projectInstructionsScopeReasons).toHaveLength(5);
+      expect(inventory.projectInstructionsScopeReasons).toEqual(
+        expect.arrayContaining([
+          { logicalPath: "AGENTS.md", code: "io-error" },
+          { logicalPath: ".github/copilot-instructions.md", code: "io-error" },
+        ]),
+      );
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect.skipIf(!symlinksSupported)(
+    "accepts internal file symlinks and rejects escapes with a sanitized reason",
+    () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "t3-environment-bundle-",
+        });
+        const outside = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "t3-environment-bundle-outside-",
+        });
+        yield* fileSystem.writeFileString(path.join(root, "policy.md"), "internal\n");
+        yield* fileSystem.writeFileString(path.join(outside, "policy.md"), "outside\n");
+        yield* fileSystem.symlink(path.join(root, "policy.md"), path.join(root, "AGENTS.md"));
+        yield* fileSystem.symlink(path.join(outside, "policy.md"), path.join(root, "CLAUDE.md"));
+
+        const inventory = yield* loadEnvironmentBundleServerInventory({ cwd: root });
+
+        expect(inventory.projectInstructions).toEqual([
+          { logicalPath: "AGENTS.md", contentHash: sha256("internal\n"), enabled: true },
+        ]);
+        expect(inventory.projectInstructionsScopeCoverage).toBe("partial");
+        expect(inventory.projectInstructionsScopeReasons).toEqual([
+          { logicalPath: "CLAUDE.md", code: "outside-root" },
+        ]);
+        expect(encodeUnknownJson(inventory)).not.toContain(outside);
+      }).pipe(Effect.provide(NodeServices.layer)),
   );
 
   it("extracts only safe MCP fields from Codex TOML", () => {

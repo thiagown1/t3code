@@ -53,6 +53,9 @@ describe("Environment Bundle settings", () => {
           { logicalPath: "AGENTS.md", contentHash: "a".repeat(64), enabled: true },
         ],
         projectInstructionsCoverage: "partial",
+        projectInstructionsScopeCoverage: "complete",
+        projectInstructionsScope: { id: "known-root-v1", hash: "b".repeat(64) },
+        projectInstructionsScopeReasons: [],
       },
       providers: [
         {
@@ -111,10 +114,32 @@ describe("Environment Bundle settings", () => {
     expect(bundle.projectInstructions).toEqual([
       { logicalPath: "AGENTS.md", contentHash: "a".repeat(64), enabled: true },
     ]);
+    expect(bundle.projectInstructionsScope).toEqual({
+      id: "known-root-v1",
+      hash: "b".repeat(64),
+    });
     expect(bundle.mcpServers).toEqual([
       expect.objectContaining({ serverId: "codex:codex:logs", enabled: false }),
     ]);
     expect(JSON.stringify(bundle)).not.toContain("C:\\\\Users");
+  });
+
+  it("does not export a known-root attestation from an older server inventory", () => {
+    const bundle = buildEnvironmentBundleInventory({
+      environmentId: "desk",
+      environmentLabel: "Desk",
+      cwd: "C:\\work\\repo",
+      capabilityProfile: null,
+      providers: [],
+      serverInventory: {
+        mcpServers: [],
+        mcpCoverage: "unavailable",
+        projectInstructions: [],
+        projectInstructionsCoverage: "partial",
+      },
+    });
+
+    expect(bundle.projectInstructionsScope).toBeUndefined();
   });
 
   it("deduplicates a provider skill and keeps an enabled observation", () => {
@@ -205,6 +230,9 @@ describe("Environment Bundle settings", () => {
         mcpCoverage: "partial",
         projectInstructions: [],
         projectInstructionsCoverage: "partial",
+        projectInstructionsScopeCoverage: "complete",
+        projectInstructionsScope: { id: "known-root-v1", hash: "b".repeat(64) },
+        projectInstructionsScopeReasons: [],
       },
       providers: [],
     });
@@ -488,6 +516,9 @@ describe("Environment Bundle settings", () => {
         mcpCoverage: "partial",
         projectInstructions: [],
         projectInstructionsCoverage: "partial",
+        projectInstructionsScopeCoverage: "complete",
+        projectInstructionsScope: { id: "known-root-v1", hash: "b".repeat(64) },
+        projectInstructionsScopeReasons: [],
       },
       providers: [
         {
@@ -566,6 +597,9 @@ describe("Environment Bundle settings", () => {
         mcpCoverage: "partial",
         projectInstructions: [],
         projectInstructionsCoverage: "partial",
+        projectInstructionsScopeCoverage: "complete",
+        projectInstructionsScope: { id: "known-root-v1", hash: "b".repeat(64) },
+        projectInstructionsScopeReasons: [],
       },
       providers: [
         {
@@ -636,6 +670,9 @@ describe("Environment Bundle settings", () => {
         mcpCoverage: "partial",
         projectInstructions: [],
         projectInstructionsCoverage: "partial",
+        projectInstructionsScopeCoverage: "complete",
+        projectInstructionsScope: { id: "known-root-v1", hash: "b".repeat(64) },
+        projectInstructionsScopeReasons: [],
       },
       providers: [
         {
@@ -687,6 +724,9 @@ describe("Environment Bundle settings", () => {
         mcpCoverage: "partial",
         projectInstructions: [],
         projectInstructionsCoverage: "partial",
+        projectInstructionsScopeCoverage: "complete",
+        projectInstructionsScope: { id: "known-root-v1", hash: "b".repeat(64) },
+        projectInstructionsScopeReasons: [],
       },
       providers: [
         {
@@ -750,6 +790,9 @@ describe("Environment Bundle settings", () => {
         mcpCoverage: "partial",
         projectInstructions: [],
         projectInstructionsCoverage: "partial",
+        projectInstructionsScopeCoverage: "complete",
+        projectInstructionsScope: { id: "known-root-v1", hash: "b".repeat(64) },
+        projectInstructionsScopeReasons: [],
       },
       providers: [],
     });

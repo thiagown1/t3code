@@ -131,6 +131,9 @@ export function normalizeEnvironmentBundle(bundle: EnvironmentBundleType): Envir
         enabled: instruction.enabled,
       }))
       .sort((left, right) => compareText(left.logicalPath, right.logicalPath)),
+    ...(bundle.projectInstructionsScope
+      ? { projectInstructionsScope: { ...bundle.projectInstructionsScope } }
+      : {}),
     ...(bundle.initialSkillContextBudgetTokens === undefined
       ? {}
       : { initialSkillContextBudgetTokens: bundle.initialSkillContextBudgetTokens }),

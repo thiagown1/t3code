@@ -10,6 +10,7 @@ import {
 import { buildEnvironmentBundleApplyPlan } from "./EnvironmentBundleApplyPlan.ts";
 
 const hash = "a".repeat(64);
+const instructionScope = { id: "known-root-v1" as const, hash: "b".repeat(64) };
 
 function bundle(
   skills: EnvironmentBundle["skills"],
@@ -17,6 +18,7 @@ function bundle(
   mcpServers: EnvironmentBundle["mcpServers"] = [],
   pluginsAndApps: EnvironmentBundle["pluginsAndApps"] = [],
   projectInstructions: EnvironmentBundle["projectInstructions"] = [],
+  projectInstructionsScope: EnvironmentBundle["projectInstructionsScope"] | null = instructionScope,
 ): EnvironmentBundle {
   return {
     schemaVersion: 1,
@@ -33,18 +35,24 @@ function bundle(
     pluginsAndApps,
     providers: providers ?? [{ instanceId: "claudeAgent", driver: "claudeAgent", enabled: true }],
     projectInstructions,
+    ...(projectInstructionsScope ? { projectInstructionsScope } : {}),
   };
 }
 
 const serverInventory = (
   current: EnvironmentBundle,
   projectInstructions: EnvironmentBundle["projectInstructions"] = [],
-  projectInstructionsCoverage: "partial" | "complete" = "partial",
+  projectInstructionsScopeCoverage: "partial" | "complete" = "complete",
 ) => ({
   mcpServers: current.mcpServers,
   mcpCoverage: "partial" as const,
   projectInstructions,
-  projectInstructionsCoverage,
+  projectInstructionsCoverage: "partial" as const,
+  ...(projectInstructionsScopeCoverage === "complete"
+    ? { projectInstructionsScope: instructionScope }
+    : {}),
+  projectInstructionsScopeCoverage,
+  projectInstructionsScopeReasons: [],
 });
 
 function provider(input?: {
@@ -110,7 +118,7 @@ describe("buildEnvironmentBundleApplyPlan", () => {
   } as const;
 
   it("accepts an already-present instruction only with complete coverage and matching hash", () => {
-    const current = bundle([], undefined, [], [], [agentsInstruction]);
+    const current = bundle([], undefined, [], [], [agentsInstruction], instructionScope);
     expect(
       buildEnvironmentBundleApplyPlan({
         current,
@@ -130,7 +138,7 @@ describe("buildEnvironmentBundleApplyPlan", () => {
   });
 
   it("blocks instruction verification when inventory coverage is partial", () => {
-    const current = bundle([], undefined, [], [], [agentsInstruction]);
+    const current = bundle([], undefined, [], [], [agentsInstruction], instructionScope);
     const plan = buildEnvironmentBundleApplyPlan({
       current,
       incoming: current,
@@ -140,11 +148,13 @@ describe("buildEnvironmentBundleApplyPlan", () => {
       targetStateHash: hash,
     });
     expect(plan.canApply).toBe(false);
-    expect(plan.blockers).toContain("project-instruction inventory coverage is not complete");
+    expect(plan.blockers).toContain(
+      "project-instruction known-root scope coverage is not complete",
+    );
   });
 
   it("blocks missing and divergent instruction hashes without proposing a write", () => {
-    const current = bundle([], undefined, [], [], [agentsInstruction]);
+    const current = bundle([], undefined, [], [], [agentsInstruction], instructionScope);
     const missing = buildEnvironmentBundleApplyPlan({
       current,
       incoming: current,
@@ -177,10 +187,10 @@ describe("buildEnvironmentBundleApplyPlan", () => {
 
   it("blocks disabled instruction declarations", () => {
     const disabled = { ...agentsInstruction, enabled: false };
-    const current = bundle([], undefined, [], [], [agentsInstruction]);
+    const current = bundle([], undefined, [], [], [agentsInstruction], instructionScope);
     const plan = buildEnvironmentBundleApplyPlan({
       current,
-      incoming: bundle([], undefined, [], [], [disabled]),
+      incoming: bundle([], undefined, [], [], [disabled], instructionScope),
       providers: [provider()],
       serverInventory: serverInventory(current, [agentsInstruction], "complete"),
       cwd: "C:\\repo",
@@ -188,6 +198,71 @@ describe("buildEnvironmentBundleApplyPlan", () => {
     });
     expect(plan.canApply).toBe(false);
     expect(plan.blockers).toContain("project-instruction:AGENTS.md cannot be disabled");
+  });
+
+  it("does not promote a legacy v1 instruction inventory without an attestation", () => {
+    const legacy = bundle([], undefined, [], [], [agentsInstruction], null);
+    const plan = buildEnvironmentBundleApplyPlan({
+      current: legacy,
+      incoming: legacy,
+      providers: [provider()],
+      serverInventory: serverInventory(legacy, [agentsInstruction], "complete"),
+      cwd: "C:\\repo",
+      targetStateHash: hash,
+    });
+
+    expect(plan.blockers).toContain(
+      "project-instruction bundle has no authoritative scope attestation",
+    );
+  });
+
+  it("compares attested instructions symmetrically and rejects unknown paths", () => {
+    const current = bundle([], undefined, [], [], [agentsInstruction], instructionScope);
+    const extra = { ...agentsInstruction, logicalPath: "CLAUDE.md" };
+    const extraPlan = buildEnvironmentBundleApplyPlan({
+      current,
+      incoming: current,
+      providers: [provider()],
+      serverInventory: serverInventory(current, [agentsInstruction, extra], "complete"),
+      cwd: "C:\\repo",
+      targetStateHash: hash,
+    });
+    expect(extraPlan.blockers).toContain(
+      "project-instruction:CLAUDE.md is extra in current workspace",
+    );
+
+    const unknown = { ...agentsInstruction, logicalPath: "docs/AGENTS.md" };
+    const unknownBundle = bundle([], undefined, [], [], [unknown], instructionScope);
+    const unknownPlan = buildEnvironmentBundleApplyPlan({
+      current: unknownBundle,
+      incoming: unknownBundle,
+      providers: [provider()],
+      serverInventory: serverInventory(unknownBundle, [unknown], "complete"),
+      cwd: "C:\\repo",
+      targetStateHash: hash,
+    });
+    expect(unknownPlan.blockers).toContain(
+      "project-instruction:docs/AGENTS.md is outside known-root-v1",
+    );
+  });
+
+  it("rejects an incompatible known-root scope", () => {
+    const current = bundle([], undefined, [], [], [agentsInstruction], instructionScope);
+    const inventory = {
+      ...serverInventory(current, [agentsInstruction], "complete"),
+      projectInstructionsScope: { ...instructionScope, hash: "c".repeat(64) },
+    };
+    const plan = buildEnvironmentBundleApplyPlan({
+      current,
+      incoming: current,
+      providers: [provider()],
+      serverInventory: inventory,
+      cwd: "C:\\repo",
+      targetStateHash: hash,
+    });
+    expect(plan.blockers).toContain(
+      "project-instruction scope is incompatible with the current workspace",
+    );
   });
 
   it("plans a metadata-preserving Claude skill disable", () => {

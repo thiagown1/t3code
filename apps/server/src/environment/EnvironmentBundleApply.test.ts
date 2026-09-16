@@ -16,7 +16,10 @@ import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
 
 import { applyEnvironmentBundle, planEnvironmentBundleApply } from "./EnvironmentBundleApply.ts";
-import { loadEnvironmentBundleServerInventory } from "./EnvironmentBundleInventory.ts";
+import {
+  loadEnvironmentBundleServerInventory,
+  ROOT_PROJECT_INSTRUCTION_SCOPE,
+} from "./EnvironmentBundleInventory.ts";
 
 const skill = {
   skillId: "claudeAgent:project:deploy",
@@ -42,6 +45,7 @@ function bundle(enabled: boolean): EnvironmentBundle {
     pluginsAndApps: [],
     providers: [{ instanceId: "claudeAgent", driver: "claudeAgent", enabled: true }],
     projectInstructions: [],
+    projectInstructionsScope: ROOT_PROJECT_INSTRUCTION_SCOPE,
   };
 }
 
@@ -95,6 +99,9 @@ const emptyServerInventory = {
   mcpCoverage: "partial" as const,
   projectInstructions: [],
   projectInstructionsCoverage: "partial" as const,
+  projectInstructionsScope: ROOT_PROJECT_INSTRUCTION_SCOPE,
+  projectInstructionsScopeCoverage: "complete" as const,
+  projectInstructionsScopeReasons: [],
 };
 
 function providerBundle(enabled: boolean): EnvironmentBundle {

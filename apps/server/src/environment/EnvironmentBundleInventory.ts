@@ -3,14 +3,20 @@ import * as NodeOS from "node:os";
 
 import type {
   EnvironmentBundleMcpServer,
+  EnvironmentBundleProjectInstructionScopeReason,
   EnvironmentBundleProjectInstruction,
   EnvironmentBundleServerInventory,
   ServerSettings,
+} from "@t3tools/contracts";
+import {
+  ENVIRONMENT_BUNDLE_KNOWN_ROOT_INSTRUCTION_PATHS,
+  ENVIRONMENT_BUNDLE_KNOWN_ROOT_INSTRUCTION_SCOPE,
 } from "@t3tools/contracts";
 import { tokenizeCliArgs } from "@t3tools/shared/cliArgs";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 // The package's default UMD entry uses runtime-relative `require("./impl/*")`
 // calls. When inlined into the single server bundle those paths become relative
@@ -25,6 +31,9 @@ import {
 } from "./ClaudeSkillOverrideTarget.ts";
 
 const MAX_PROJECT_INSTRUCTION_BYTES = FileSystem.Size(256_000);
+const MAX_PROJECT_INSTRUCTION_READ_BYTES = FileSystem.Size(
+  Number(MAX_PROJECT_INSTRUCTION_BYTES) + 1,
+);
 const MAX_MCP_CONFIG_BYTES = FileSystem.Size(1_000_000);
 
 class InvalidJsonMcpConfigError extends Data.TaggedError("InvalidJsonMcpConfigError")<{
@@ -183,33 +192,85 @@ export function openCodeMcpInventorySourcesFromSettings(
  * the exact files it loaded for a session.
  */
 export const ROOT_PROJECT_INSTRUCTION_PATHS = [
-  "AGENTS.md",
-  "CLAUDE.md",
-  "GEMINI.md",
-  ".cursorrules",
-  ".github/copilot-instructions.md",
+  ...ENVIRONMENT_BUNDLE_KNOWN_ROOT_INSTRUCTION_PATHS,
 ] as const;
+export const ROOT_PROJECT_INSTRUCTION_SCOPE = ENVIRONMENT_BUNDLE_KNOWN_ROOT_INSTRUCTION_SCOPE;
 
 function isWithinRoot(path: Path.Path, root: string, candidate: string): boolean {
   const relative = path.relative(root, candidate);
   return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
 }
 
+function sameCanonicalPath(path: Path.Path, left: string, right: string): boolean {
+  return path.relative(left, right) === "" && path.relative(right, left) === "";
+}
+
+function sameAvailableDate(left: Option.Option<Date>, right: Option.Option<Date>): boolean {
+  return (
+    !Option.isSome(left) || !Option.isSome(right) || left.value.getTime() === right.value.getTime()
+  );
+}
+
+function sameFileIdentity(left: FileSystem.File.Info, right: FileSystem.File.Info): boolean {
+  if (left.dev !== right.dev) return false;
+  if (Option.isSome(left.ino) || Option.isSome(right.ino)) {
+    return (
+      Option.isSome(left.ino) && Option.isSome(right.ino) && left.ino.value === right.ino.value
+    );
+  }
+  return true;
+}
+
+function sameFileSnapshot(left: FileSystem.File.Info, right: FileSystem.File.Info): boolean {
+  return (
+    left.type === right.type &&
+    left.size === right.size &&
+    sameFileIdentity(left, right) &&
+    sameAvailableDate(left.mtime, right.mtime)
+  );
+}
+
+const readBoundedProjectInstruction = Effect.fn("readBoundedEnvironmentBundleProjectInstruction")(
+  function* (file: FileSystem.File) {
+    const chunks: Array<Uint8Array> = [];
+    let bytesRead = 0;
+    const limit = Number(MAX_PROJECT_INSTRUCTION_READ_BYTES);
+    while (bytesRead < limit) {
+      const next = yield* file.readAlloc(limit - bytesRead);
+      if (Option.isNone(next)) break;
+      if (next.value.byteLength === 0) return { reason: "io-error" } as const;
+      chunks.push(next.value);
+      bytesRead += next.value.byteLength;
+    }
+    if (bytesRead > Number(MAX_PROJECT_INSTRUCTION_BYTES)) {
+      return { reason: "size-changed" } as const;
+    }
+    const contents = new Uint8Array(bytesRead);
+    let offset = 0;
+    for (const chunk of chunks) {
+      contents.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return { contents } as const;
+  },
+);
+
 const resolveProjectRoot = Effect.fn("resolveEnvironmentBundleProjectRoot")(function* (
   cwd: string,
 ) {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const initial = yield* fileSystem
-    .realPath(cwd)
-    .pipe(Effect.orElseSucceed(() => path.resolve(cwd)));
-  let candidate = initial;
+  const initial = yield* fileSystem.realPath(cwd).pipe(
+    Effect.map((root) => ({ root, authoritative: true }) as const),
+    Effect.orElseSucceed(() => ({ root: path.resolve(cwd), authoritative: false }) as const),
+  );
+  let candidate = initial.root;
 
   while (true) {
     const gitMarkerExists = yield* fileSystem
       .exists(path.join(candidate, ".git"))
       .pipe(Effect.orElseSucceed(() => false));
-    if (gitMarkerExists) return candidate;
+    if (gitMarkerExists) return { root: candidate, authoritative: initial.authoritative };
     const parent = path.dirname(candidate);
     if (parent === candidate) return initial;
     candidate = parent;
@@ -681,16 +742,88 @@ const readProjectInstruction = Effect.fn("readEnvironmentBundleProjectInstructio
 ) {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const candidate = yield* fileSystem.realPath(path.join(root, logicalPath));
-  if (!isWithinRoot(path, root, candidate)) return null;
-  const info = yield* fileSystem.stat(candidate);
-  if (info.type !== "File" || info.size > MAX_PROJECT_INSTRUCTION_BYTES) return null;
-  const contents = yield* fileSystem.readFile(candidate);
+  const resolved = yield* fileSystem.realPath(path.join(root, logicalPath)).pipe(
+    Effect.map((candidate) => ({ candidate }) as const),
+    Effect.catchTags({
+      PlatformError: (error) =>
+        error.reason._tag === "NotFound"
+          ? Effect.succeed({ absent: true } as const)
+          : Effect.succeed({ reason: "io-error" } as const),
+    }),
+  );
+  if ("absent" in resolved) return { status: "absent" } as const;
+  if ("reason" in resolved) {
+    return { status: "partial", reason: { logicalPath, code: resolved.reason } } as const;
+  }
+  const candidate = resolved.candidate;
+  if (!isWithinRoot(path, root, candidate)) {
+    return {
+      status: "partial",
+      reason: { logicalPath, code: "outside-root" },
+    } as const;
+  }
+  const requestedPath = path.join(root, logicalPath);
+  const inspected = yield* Effect.scoped(
+    fileSystem.open(requestedPath, { flag: "r" }).pipe(
+      Effect.flatMap((file) =>
+        Effect.gen(function* () {
+          const before = yield* file.stat;
+          if (before.type !== "File") return { reason: "not-regular-file" } as const;
+          if (before.size > MAX_PROJECT_INSTRUCTION_BYTES) return { reason: "oversized" } as const;
+
+          const openedPath = yield* fileSystem.realPath(requestedPath);
+          if (!isWithinRoot(path, root, openedPath)) return { reason: "outside-root" } as const;
+          if (!sameCanonicalPath(path, candidate, openedPath)) {
+            return { reason: "changed-during-scan" } as const;
+          }
+          const openedPathInfo = yield* fileSystem.stat(openedPath);
+          if (!sameFileSnapshot(before, openedPathInfo)) {
+            return { reason: "changed-during-scan" } as const;
+          }
+
+          const read = yield* readBoundedProjectInstruction(file);
+          if ("reason" in read) return read;
+
+          const after = yield* file.stat;
+          const finalPath = yield* fileSystem.realPath(requestedPath);
+          if (
+            !sameCanonicalPath(path, openedPath, finalPath) ||
+            !isWithinRoot(path, root, finalPath) ||
+            !sameFileSnapshot(before, after) ||
+            FileSystem.Size(read.contents.byteLength) !== after.size
+          ) {
+            return { reason: "changed-during-scan" } as const;
+          }
+          const finalPathInfo = yield* fileSystem.stat(finalPath);
+          if (!sameFileSnapshot(after, finalPathInfo)) {
+            return { reason: "changed-during-scan" } as const;
+          }
+          return read;
+        }),
+      ),
+    ),
+  ).pipe(
+    Effect.catchTags({
+      PlatformError: (error) =>
+        Effect.succeed({
+          reason: error.reason._tag === "NotFound" ? "changed-during-scan" : "io-error",
+        } as const),
+    }),
+  );
+  if ("reason" in inspected) {
+    return {
+      status: "partial",
+      reason: { logicalPath, code: inspected.reason },
+    } as const;
+  }
   return {
-    logicalPath,
-    contentHash: NodeCrypto.createHash("sha256").update(contents).digest("hex"),
-    enabled: true,
-  } satisfies EnvironmentBundleProjectInstruction;
+    status: "found",
+    instruction: {
+      logicalPath,
+      contentHash: NodeCrypto.createHash("sha256").update(inspected.contents).digest("hex"),
+      enabled: true,
+    } satisfies EnvironmentBundleProjectInstruction,
+  } as const;
 });
 
 export const loadEnvironmentBundleServerInventory = Effect.fn(
@@ -702,14 +835,28 @@ export const loadEnvironmentBundleServerInventory = Effect.fn(
   readonly cursorMcpSources?: ReadonlyArray<CursorMcpInventorySource>;
   readonly openCodeMcpSources?: ReadonlyArray<OpenCodeMcpInventorySource>;
 }): Effect.fn.Return<EnvironmentBundleServerInventory, never, FileSystem.FileSystem | Path.Path> {
-  const root = yield* resolveProjectRoot(input.cwd);
-  const projectInstructions = yield* Effect.forEach(
-    ROOT_PROJECT_INSTRUCTION_PATHS,
-    (logicalPath) =>
-      readProjectInstruction(root, logicalPath).pipe(Effect.orElseSucceed(() => null)),
-    { concurrency: "unbounded" },
+  const resolvedRoot = yield* resolveProjectRoot(input.cwd);
+  const root = resolvedRoot.root;
+  const projectInstructions = resolvedRoot.authoritative
+    ? yield* Effect.forEach(
+        ROOT_PROJECT_INSTRUCTION_PATHS,
+        (logicalPath) => readProjectInstruction(root, logicalPath),
+        { concurrency: "unbounded" },
+      )
+    : ROOT_PROJECT_INSTRUCTION_PATHS.map((logicalPath) => ({
+        status: "partial" as const,
+        reason: { logicalPath, code: "io-error" as const },
+      }));
+  const availableProjectInstructions = projectInstructions.flatMap((entry) =>
+    entry.status === "found" ? [entry.instruction] : [],
   );
-  const availableProjectInstructions = projectInstructions.filter((entry) => entry !== null);
+  const projectInstructionsScopeReasons = projectInstructions.flatMap((entry) =>
+    entry.status === "partial"
+      ? [entry.reason satisfies EnvironmentBundleProjectInstructionScopeReason]
+      : [],
+  );
+  const projectInstructionsScopeCoverage =
+    projectInstructionsScopeReasons.length === 0 ? "complete" : "partial";
   const mcpServers = [
     ...(yield* loadCodexMcpInventory(root, input.codexMcpSources ?? [])),
     ...(yield* loadClaudeMcpInventory(root, input.claudeMcpSources ?? [])),
@@ -729,6 +876,13 @@ export const loadEnvironmentBundleServerInventory = Effect.fn(
         ? "partial"
         : "unavailable",
     projectInstructions: availableProjectInstructions,
+    // Provider-effective instruction discovery is still incomplete. This is
+    // deliberately independent from the authoritative known-root allowlist.
     projectInstructionsCoverage: "partial",
+    ...(projectInstructionsScopeCoverage === "complete"
+      ? { projectInstructionsScope: ROOT_PROJECT_INSTRUCTION_SCOPE }
+      : {}),
+    projectInstructionsScopeCoverage,
+    projectInstructionsScopeReasons,
   };
 });

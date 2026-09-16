@@ -60,6 +60,7 @@ describe("environment bundles", () => {
       ],
       providers: [{ instanceId: "codex", driver: "codex", enabled: true }],
       projectInstructions: [{ logicalPath: "AGENTS.md", contentHash: HASH_A, enabled: true }],
+      projectInstructionsScope: { id: "known-root-v1", hash: HASH_B },
       initialSkillContextBudgetTokens: 8_000,
     });
 
@@ -69,12 +70,21 @@ describe("environment bundles", () => {
     expect(exported).toContain("LOGS_API_TOKEN");
     expect(exported).not.toMatch(/privateKey|accessToken|password|cookie/i);
     expect(parseEnvironmentBundleJson(exported).mcpServers[0]?.allowedTools).toEqual(["query"]);
+    expect(parseEnvironmentBundleJson(exported).projectInstructionsScope).toEqual({
+      id: "known-root-v1",
+      hash: HASH_B,
+    });
 
     const unknownSecret = JSON.parse(exported) as Record<string, unknown>;
     (unknownSecret.mcpServers as Array<Record<string, unknown>>)[0]!.accessToken = "secret";
     expect(
       serializeEnvironmentBundle(parseEnvironmentBundleJson(JSON.stringify(unknownSecret))),
     ).not.toContain("secret");
+  });
+
+  it("keeps legacy schema v1 bundles unattested", () => {
+    const legacy = parseEnvironmentBundleJson(JSON.stringify(bundle()));
+    expect(legacy.projectInstructionsScope).toBeUndefined();
   });
 
   it("rejects absolute and escaping paths", () => {

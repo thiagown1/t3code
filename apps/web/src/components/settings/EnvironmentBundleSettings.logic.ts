@@ -290,6 +290,10 @@ export function buildEnvironmentBundleInventory(input: {
       ...(provider.version ? { version: provider.version } : {}),
     })),
     projectInstructions: input.serverInventory?.projectInstructions ?? [],
+    ...(input.serverInventory?.projectInstructionsScopeCoverage === "complete" &&
+    input.serverInventory.projectInstructionsScope
+      ? { projectInstructionsScope: input.serverInventory.projectInstructionsScope }
+      : {}),
   };
 }
 
