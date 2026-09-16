@@ -103,7 +103,7 @@ PR supervision belongs to the existing thread/PR link, not to an independent
 scheduler database. Registration, resume budget and deduplication keys replay
 with link events. One internal command consumes a resume and emits the user
 message and turn-start request together; duplicate receipts cannot spend twice.
-The existing PR sync sweep runs at most two adapters per pass. It waits for
+A separate drainable supervision worker runs at most two adapters per pass, including archived owners; slow adapters never block host refreshes. It waits for
 active turns, queued work, approvals and user questions before resuming.
 
 The first adapter is the reviewed Turbo Station `next/scripts/ci/pr-supervisor.cjs`.
@@ -113,7 +113,7 @@ writer. Enrollment is off until the repository operator enables
 `FIRSTMATE_PR_SUPERVISION_ENABLED`; installing T3 alone does not activate it.
 
 No clock-based lock stealing is allowed. Restarted T3 reuses the persisted
-owner, bound to its environment identity and database path. A copied database
+owner and acquisition SHA, bound to its environment identity and database path. Every new enrollment creates a fresh owner UUID; it is not a reusable thread ID. Inspection without a saved acquisition SHA only recovers a lost response for that one registration. A copied database
 cannot acquire, resume or release that owner from a different home. If T3 is unavailable, Coder cannot assume its writer died. Stop/archive,
 closed PRs or exhausted supervision release ownership only after the thread is
 idle. Deletion and unlinking are refused until release has been persisted.

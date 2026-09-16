@@ -10,6 +10,7 @@ import {
   TrimmedNonEmptyString,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
+import * as FileSystem from "effect/FileSystem";
 import * as Tool from "effect/unstable/ai/Tool";
 import * as Toolkit from "effect/unstable/ai/Toolkit";
 
@@ -247,6 +248,7 @@ const SupervisePullRequestTool = Tool.make("supervise_pull_request", {
   dependencies: [
     ...dependencies,
     ChildProcessSpawner.ChildProcessSpawner,
+    FileSystem.FileSystem,
     ServerConfig,
     ServerEnvironmentIdentity,
   ],

@@ -119,22 +119,26 @@ export const supervisePrLink = Effect.fn("supervisePrLink")(function* (
     }
     const released = yield* runAdapter("release", lockSha);
     if (!released || typeof released.released !== "boolean") return;
+    if (!released.released) {
+      const inspected = yield* runAdapter("inspect");
+      if (!inspected || inspected.lockSha !== null) return;
+    }
     yield* dispatch("released", stopReason);
     return;
   }
   if (
-    thread.snoozedUntil != null ||
+    (thread.snoozedUntil != null && Date.parse(thread.snoozedUntil) > Date.parse(now)) ||
     thread.interactionMode !== "default" ||
     thread.session?.status === "error"
   )
     return;
-  const enrolled = yield* runAdapter("enroll");
-  if (!enrolled) return;
-  if (!enrolled.enrolled || !enrolled.lockSha) {
-    yield* dispatch("blocked", enrolled.reason ?? "Writer coordination unavailable.");
-    return;
-  }
   if (state.state === "pending") {
+    const enrolled = yield* runAdapter("enroll");
+    if (!enrolled) return;
+    if (!enrolled.enrolled || !enrolled.lockSha) {
+      yield* dispatch("blocked", enrolled.reason ?? "Writer coordination unavailable.");
+      return;
+    }
     yield* dispatch(
       "enrolled",
       "Exclusive writer registered.",
@@ -144,8 +148,8 @@ export const supervisePrLink = Effect.fn("supervisePrLink")(function* (
     );
     return;
   }
-  if (state.lockSha !== enrolled.lockSha) {
-    yield* dispatch("blocked", "Writer acquisition changed; refusing to resume.");
+  if (!state.lockSha) {
+    yield* dispatch("blocked", "Writer acquisition proof missing; refusing to resume.");
     return;
   }
   const receipt = yield* runAdapter("observe");

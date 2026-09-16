@@ -145,6 +145,59 @@ const supervisedLink = () =>
   });
 
 it.layer(NodeServices.layer)("PR owner supervision", (it) => {
+  it.effect("a new enrollment cannot reuse the stopped registration UUID", () =>
+    Effect.gen(function* () {
+      const link = supervisedLink();
+      const model = makeReadModel([
+        { ...link, supervision: { ...link.supervision!, state: "stopped" } },
+      ]);
+      expect(
+        (yield* decideOrchestrationCommand({
+          readModel: model,
+          command: superviseCommand("start"),
+        }).pipe(Effect.result))._tag,
+      ).toBe("Failure");
+      const events = yield* decideOrchestrationCommand({
+        readModel: model,
+        command: superviseCommand("start", {
+          owner: "firstmate:00000000-0000-4000-8000-000000000002",
+        }),
+      });
+      expect(
+        expectSingleEvent(events, "thread.pull-request-linked").payload.link.supervision?.owner,
+      ).not.toBe(supervisorOwner);
+    }),
+  );
+
+  it.effect("terminal PR snapshots block a late wake after host synchronization", () =>
+    Effect.gen(function* () {
+      for (const state of ["closed", "merged"] as const) {
+        const link = supervisedLink();
+        const terminal = { ...link, snapshot: { ...snapshot, state } };
+        const result = yield* decideOrchestrationCommand({
+          readModel: makeReadModel([terminal]),
+          command: superviseCommand("wake", { resumeKey: "late", message: "Repair" }),
+        }).pipe(Effect.result);
+        expect(result._tag).toBe("Failure");
+      }
+    }),
+  );
+  it.effect("expired snoozes permit a wake while future snoozes keep it deferred", () =>
+    Effect.gen(function* () {
+      const model = makeReadModel([supervisedLink()]);
+      for (const [snoozedUntil, expected] of [
+        ["1969-01-01T00:00:00.000Z", "Success"],
+        ["2999-01-01T00:00:00.000Z", "Failure"],
+      ] as const) {
+        const result = yield* decideOrchestrationCommand({
+          readModel: { ...model, threads: model.threads.map((t) => ({ ...t, snoozedUntil })) },
+          command: superviseCommand("wake", { resumeKey: "after-snooze", message: "Repair" }),
+        }).pipe(Effect.result);
+        expect(result._tag).toBe(expected);
+      }
+    }),
+  );
+
   it.effect("enrollment persists its exact writer generation and rejects missing proof", () =>
     Effect.gen(function* () {
       const link = supervisedLink();
@@ -166,6 +219,18 @@ it.layer(NodeServices.layer)("PR owner supervision", (it) => {
         state: "watching",
         lockSha: "a".repeat(40),
       });
+      expect(
+        yield* decideOrchestrationCommand({
+          readModel: replayed,
+          command: superviseCommand("enrolled", { lockSha: "a".repeat(40) }),
+        }),
+      ).toEqual([]);
+      expect(
+        (yield* decideOrchestrationCommand({
+          readModel: replayed,
+          command: superviseCommand("enrolled", { lockSha: "b".repeat(40) }),
+        }).pipe(Effect.result))._tag,
+      ).toBe("Failure");
     }),
   );
 

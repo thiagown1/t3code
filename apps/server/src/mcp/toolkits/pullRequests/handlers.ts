@@ -18,6 +18,7 @@ import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as FileSystem from "effect/FileSystem";
 
 import { runPrSupervisionAdapter } from "../../../orchestration/PrSupervisionAdapter.ts";
 import { supervisionEnvironmentKey } from "../../../orchestration/PrSupervisionEnvironment.ts";
@@ -232,6 +233,18 @@ const make = Effect.gen(function* () {
             state: "stopped",
             reason: link.supervision?.lastReason ?? null,
           };
+        }
+        if (input.action === "start") {
+          const fs = yield* FileSystem.FileSystem;
+          const available = yield* fs
+            .exists(
+              `${thread.worktreePath ?? project.workspaceRoot}/next/scripts/ci/pr-supervisor.cjs`,
+            )
+            .pipe(Effect.mapError((cause) => new PullRequestLinkFailedError({ cause })));
+          if (!available)
+            return yield* new PullRequestLinkFailedError({
+              cause: "This repository has no reviewed PR supervision adapter.",
+            });
         }
         const owner =
           input.action === "stop"

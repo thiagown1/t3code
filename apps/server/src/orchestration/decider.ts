@@ -1108,6 +1108,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           return yield* reject("Thread is archived or in plan mode.");
         if (previous && previous.state !== "stopped")
           return yield* reject("PR already supervised in this thread.");
+        if (previous?.owner === command.owner)
+          return yield* reject("A new enrollment must use a fresh owner UUID.");
         const active = readModel.threads.flatMap((t) =>
           t.pullRequests.filter((l) => l.supervision && l.supervision.state !== "stopped"),
         );
@@ -1136,6 +1138,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           return yield* reject("Supervision owner is no longer current.");
         supervision = { ...previous };
         if (command.action === "enrolled") {
+          if (
+            previous.state === "watching" &&
+            previous.lockSha === command.lockSha &&
+            command.lockSha
+          )
+            return [];
           if (previous.state !== "pending")
             return yield* reject("Enrollment is no longer pending.");
           if (!command.lockSha || !/^[a-f0-9]{40}$/.test(command.lockSha))
@@ -1158,7 +1166,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             return yield* reject("Supervision signal is duplicate, expired or out of budget.");
           if (
             thread.archivedAt !== null ||
-            thread.snoozedUntil != null ||
+            (thread.snoozedUntil != null &&
+              Date.parse(thread.snoozedUntil) > Date.parse(occurredAt)) ||
+            link.snapshot?.state === "closed" ||
+            link.snapshot?.state === "merged" ||
             thread.interactionMode !== "default" ||
             thread.session?.status === "starting" ||
             thread.session?.status === "running" ||

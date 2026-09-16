@@ -317,6 +317,20 @@ export const make = Effect.gen(function* () {
           : Effect.void,
       { concurrency: 8, discard: true },
     );
+  });
+
+  // Adapter calls have independent timeouts and must not occupy the host-sync
+  // worker or postpone explicit requestSync refreshes.
+  const supervisionSweep = Effect.fn("PullRequestSyncReactor.supervisionSweep")(function* () {
+    const [active, archived] = yield* Effect.all([
+      snapshots.getShellSnapshot(),
+      snapshots.getArchivedShellSnapshot(),
+    ]);
+    const snapshot = {
+      projects: active.projects,
+      threads: [...active.threads, ...archived.threads],
+    };
+    const nowIso = DateTime.formatIso(yield* DateTime.now);
     // Bound repository adapters separately from the existing cheap host sync.
     const supervised = snapshot.threads.flatMap((thread) =>
       thread.pullRequests
@@ -350,9 +364,19 @@ export const make = Effect.gen(function* () {
     sweep().pipe(Effect.catchCause(logSkipped("pull request sync sweep failed", {}))),
   );
 
+  const supervisionWorker = yield* makeDrainableWorker(() =>
+    supervisionSweep().pipe(Effect.catchCause(logSkipped("PR supervision sweep failed", {}))),
+  );
+
   const start: PullRequestSyncReactor["Service"]["start"] = Effect.fn(
     "PullRequestSyncReactor.start",
   )(function* () {
+    yield* forkParked(
+      Effect.gen(function* () {
+        yield* supervisionWorker.enqueue(undefined);
+        yield* supervisionWorker.drain;
+      }).pipe(Effect.repeat(Schedule.spaced("1 minute")), Effect.asVoid),
+    );
     yield* forkParked(
       Effect.gen(function* () {
         yield* worker.enqueue(undefined);
