@@ -1836,6 +1836,23 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     });
   });
 
+  it("uses the isolated FirstMate app identity for macOS passkey signing", () => {
+    const configuration = resolveMacPasskeySigningConfiguration(
+      {
+        T3CODE_APPLE_TEAM_ID: "abc1234567",
+        T3CODE_MACOS_PROVISIONING_PROFILE: "/tmp/t3code.provisionprofile",
+        T3CODE_CLERK_PASSKEY_RP_DOMAINS: "example.clerk.accounts.dev",
+      },
+      "firstmate",
+    );
+
+    assert.equal(configuration.appId, "com.t3tools.t3code.firstmate");
+    assert.include(
+      renderMacPasskeyEntitlements(configuration),
+      "<string>ABC1234567.com.t3tools.t3code.firstmate</string>",
+    );
+  });
+
   it("normalizes explicit macOS passkey RP domains and renders required entitlements", () => {
     const configuration = resolveMacPasskeySigningConfiguration({
       T3CODE_APPLE_TEAM_ID: "ABC1234567",

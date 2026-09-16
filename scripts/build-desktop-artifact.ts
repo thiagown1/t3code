@@ -1229,6 +1229,7 @@ function normalizePasskeyRpDomain(value: string): string {
 
 export function resolveMacPasskeySigningConfiguration(
   env: Readonly<Record<string, string | undefined>>,
+  flavor: DesktopBuildFlavor = "official",
 ): MacPasskeySigningConfiguration {
   const teamId = env.T3CODE_APPLE_TEAM_ID?.trim().toUpperCase() ?? "";
   if (!APPLE_TEAM_ID_PATTERN.test(teamId)) {
@@ -1264,7 +1265,7 @@ export function resolveMacPasskeySigningConfiguration(
   }
 
   return {
-    appId: DESKTOP_APP_ID,
+    appId: resolveDesktopAppId(flavor),
     teamId,
     rpDomains: uniqueRpDomains,
     provisioningProfilePath,
@@ -2637,16 +2638,20 @@ export function resolveDesktopProductName(
     : (desktopPackageJson.productName ?? "T3 Code");
 }
 
+function resolveDesktopAppId(flavor: DesktopBuildFlavor): string {
+  return flavor === "firstmate" ? "com.t3tools.t3code.firstmate" : "com.t3tools.t3code";
+}
+
 export function resolveDesktopBuildIdentity(version: string, flavor: DesktopBuildFlavor) {
   return flavor === "firstmate"
     ? {
-        appId: "com.t3tools.t3code.firstmate",
+        appId: resolveDesktopAppId(flavor),
         artifactName: "T3-Code-FirstMate-${version}-${arch}.${ext}",
         packageName: "t3code-firstmate",
         productName: resolveDesktopProductName(version, flavor),
       }
     : {
-        appId: "com.t3tools.t3code",
+        appId: resolveDesktopAppId(flavor),
         artifactName: "T3-Code-${version}-${arch}.${ext}",
         packageName: "t3code",
         productName: resolveDesktopProductName(version, flavor),
@@ -3633,7 +3638,8 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   const configuredMacPasskeySigning =
     options.platform === "mac" && options.signed
       ? yield* Effect.try({
-          try: () => resolveMacPasskeySigningConfiguration(loadRepoEnv({ repoRoot })),
+          try: () =>
+            resolveMacPasskeySigningConfiguration(loadRepoEnv({ repoRoot }), options.flavor),
           catch: MacPasskeySigningConfigurationResolutionError.fromCause,
         })
       : undefined;
