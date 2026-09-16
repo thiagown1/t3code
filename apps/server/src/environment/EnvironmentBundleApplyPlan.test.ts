@@ -16,6 +16,7 @@ function bundle(
   providers?: EnvironmentBundle["providers"],
   mcpServers: EnvironmentBundle["mcpServers"] = [],
   pluginsAndApps: EnvironmentBundle["pluginsAndApps"] = [],
+  projectInstructions: EnvironmentBundle["projectInstructions"] = [],
 ): EnvironmentBundle {
   return {
     schemaVersion: 1,
@@ -31,15 +32,19 @@ function bundle(
     skills,
     pluginsAndApps,
     providers: providers ?? [{ instanceId: "claudeAgent", driver: "claudeAgent", enabled: true }],
-    projectInstructions: [],
+    projectInstructions,
   };
 }
 
-const serverInventory = (current: EnvironmentBundle) => ({
+const serverInventory = (
+  current: EnvironmentBundle,
+  projectInstructions: EnvironmentBundle["projectInstructions"] = [],
+  projectInstructionsCoverage: "partial" | "complete" = "partial",
+) => ({
   mcpServers: current.mcpServers,
   mcpCoverage: "partial" as const,
-  projectInstructions: [],
-  projectInstructionsCoverage: "partial" as const,
+  projectInstructions,
+  projectInstructionsCoverage,
 });
 
 function provider(input?: {
@@ -98,6 +103,93 @@ function pluginSkill(skillId: string, name: string, providedByPluginId: string) 
 }
 
 describe("buildEnvironmentBundleApplyPlan", () => {
+  const agentsInstruction = {
+    logicalPath: "AGENTS.md",
+    contentHash: hash,
+    enabled: true,
+  } as const;
+
+  it("accepts an already-present instruction only with complete coverage and matching hash", () => {
+    const current = bundle([], undefined, [], [], [agentsInstruction]);
+    expect(
+      buildEnvironmentBundleApplyPlan({
+        current,
+        incoming: current,
+        providers: [provider()],
+        serverInventory: serverInventory(current, [agentsInstruction], "complete"),
+        cwd: "C:\\repo",
+        targetStateHash: hash,
+      }),
+    ).toEqual(
+      expect.objectContaining({
+        canApply: false,
+        blockers: ["The bundle does not contain any supported changes to apply"],
+        operations: [],
+      }),
+    );
+  });
+
+  it("blocks instruction verification when inventory coverage is partial", () => {
+    const current = bundle([], undefined, [], [], [agentsInstruction]);
+    const plan = buildEnvironmentBundleApplyPlan({
+      current,
+      incoming: current,
+      providers: [provider()],
+      serverInventory: serverInventory(current, [agentsInstruction], "partial"),
+      cwd: "C:\\repo",
+      targetStateHash: hash,
+    });
+    expect(plan.canApply).toBe(false);
+    expect(plan.blockers).toContain("project-instruction inventory coverage is not complete");
+  });
+
+  it("blocks missing and divergent instruction hashes without proposing a write", () => {
+    const current = bundle([], undefined, [], [], [agentsInstruction]);
+    const missing = buildEnvironmentBundleApplyPlan({
+      current,
+      incoming: current,
+      providers: [provider()],
+      serverInventory: serverInventory(current, [], "complete"),
+      cwd: "C:\\repo",
+      targetStateHash: hash,
+    });
+    expect(missing.blockers).toContain(
+      "project-instruction:AGENTS.md is missing from current workspace",
+    );
+
+    const divergent = buildEnvironmentBundleApplyPlan({
+      current,
+      incoming: current,
+      providers: [provider()],
+      serverInventory: serverInventory(
+        current,
+        [{ ...agentsInstruction, contentHash: "b".repeat(64) }],
+        "complete",
+      ),
+      cwd: "C:\\repo",
+      targetStateHash: hash,
+    });
+    expect(divergent.blockers).toContain(
+      "project-instruction:AGENTS.md hash differs from current workspace",
+    );
+    expect(divergent.operations).toEqual([]);
+  });
+
+  it("blocks disabled instruction declarations", () => {
+    const disabled = { ...agentsInstruction, enabled: false };
+    const current = bundle([], undefined, [], [], [agentsInstruction]);
+    const plan = buildEnvironmentBundleApplyPlan({
+      current,
+      incoming: bundle([], undefined, [], [], [disabled]),
+      providers: [provider()],
+      serverInventory: serverInventory(current, [agentsInstruction], "complete"),
+      cwd: "C:\\repo",
+      targetStateHash: hash,
+    });
+    expect(plan.canApply).toBe(false);
+    expect(plan.blockers).toContain("project-instruction:AGENTS.md cannot be disabled");
+  });
+
   it("plans a metadata-preserving Claude skill disable", () => {
     const current = bundle([enabledSkill]);
     const incoming = bundle([{ ...enabledSkill, enabled: false }]);

@@ -164,6 +164,41 @@ function unsupportedStepMessage(component: string, id: string): string {
   return `${component}:${id} requires an application adapter`;
 }
 
+function verifyProjectInstructions(input: {
+  readonly incoming: EnvironmentBundle;
+  readonly serverInventory: EnvironmentBundleServerInventory;
+}): ReadonlyArray<string> {
+  if (input.incoming.projectInstructions.length === 0) return [];
+  if (input.serverInventory.projectInstructionsCoverage !== "complete") {
+    return ["project-instruction inventory coverage is not complete"];
+  }
+
+  const actualByPath = new Map(
+    input.serverInventory.projectInstructions.map((instruction) => [
+      instruction.logicalPath,
+      instruction,
+    ]),
+  );
+  const blockers: string[] = [];
+  for (const instruction of input.incoming.projectInstructions) {
+    if (!instruction.enabled) {
+      blockers.push(`project-instruction:${instruction.logicalPath} cannot be disabled`);
+      continue;
+    }
+    const actual = actualByPath.get(instruction.logicalPath);
+    if (!actual) {
+      blockers.push(
+        `project-instruction:${instruction.logicalPath} is missing from current workspace`,
+      );
+    } else if (actual.contentHash !== instruction.contentHash || !actual.enabled) {
+      blockers.push(
+        `project-instruction:${instruction.logicalPath} hash differs from current workspace`,
+      );
+    }
+  }
+  return blockers;
+}
+
 export function buildEnvironmentBundleApplyPlan(input: {
   readonly current: EnvironmentBundle;
   readonly incoming: EnvironmentBundle;
@@ -185,6 +220,7 @@ export function buildEnvironmentBundleApplyPlan(input: {
         step.component !== "provider",
     )
     .map((step) => unsupportedStepMessage(step.component, step.id));
+  blockers.push(...verifyProjectInstructions(input));
   const requestedDisables = new Map<
     string,
     {
