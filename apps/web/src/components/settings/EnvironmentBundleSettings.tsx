@@ -1,5 +1,6 @@
 import type {
   EnvironmentBundle,
+  EnvironmentBundleApplyPlan,
   EnvironmentBundleCredentialResolutions,
   EnvironmentBundleInventoryCoverage,
   EnvironmentId,
@@ -33,6 +34,7 @@ import {
   buildEnvironmentBundleInventory,
   collectEnvironmentBundleCredentialReferences,
   environmentBundleCapabilityId,
+  environmentBundleApplyMode,
   environmentBundleDownloadName,
   type EnvironmentBundleEnablementTarget,
   getEnvironmentBundleApplyReadiness,
@@ -205,6 +207,9 @@ function EnvironmentBundleInventoryDialog({
 }
 
 function EnvironmentBundleReview({
+  authoritativePlan,
+  authoritativePlanError,
+  authoritativePlanPending,
   credentialResolutions,
   credentialResolutionError,
   credentialResolutionPending,
@@ -214,6 +219,9 @@ function EnvironmentBundleReview({
   providerInstances,
   providers,
 }: {
+  authoritativePlan: EnvironmentBundleApplyPlan | null;
+  authoritativePlanError: string | null;
+  authoritativePlanPending: boolean;
   credentialResolutions: EnvironmentBundleCredentialResolutions | null;
   credentialResolutionError: string | null;
   credentialResolutionPending: boolean;
@@ -229,6 +237,7 @@ function EnvironmentBundleReview({
     providers,
     ...(credentialResolutions ? { credentialResolutions } : {}),
   });
+  const applyMode = environmentBundleApplyMode(applyReadiness, authoritativePlan);
   const credentialSummary = credentialResolutions
     ? summarizeEnvironmentBundleCredentialResolutions(credentialResolutions)
     : null;
@@ -397,12 +406,27 @@ function EnvironmentBundleReview({
           ) : null}
         </ul>
       )}
-      {applyReadiness.canApply ? (
+      {authoritativePlanPending ? (
+        <div className="rounded-lg border border-border/60 bg-muted/20 p-3 text-xs text-muted-foreground">
+          Validating the destination and current provider snapshots…
+        </div>
+      ) : authoritativePlanError ? (
+        <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-xs text-destructive-foreground">
+          {authoritativePlanError}
+        </div>
+      ) : applyMode === "authoritative" && authoritativePlan ? (
+        <div className="rounded-lg border border-success/30 bg-success/5 p-3 text-xs text-muted-foreground">
+          This plan can atomically disable {authoritativePlan.operations.length} Claude skill
+          {authoritativePlan.operations.length === 1 ? "" : "s"}. The server will recheck the
+          destination hash, refresh every affected provider, and roll back unless the disabled state
+          is observed.
+        </div>
+      ) : applyMode === "settings" ? (
         <div className="rounded-lg border border-success/30 bg-success/5 p-3 text-xs text-muted-foreground">
           This bundle can atomically apply its supported settings. T3 can update the capability
           profile, disable existing providers, and disable existing Codex MCP servers while
-          preserving their local configuration. It cannot enable providers or MCPs, or change skill,
-          plugin/app, or instruction configuration yet.
+          preserving their local configuration. It cannot enable providers or MCPs, or change
+          plugin/app or instruction configuration yet.
         </div>
       ) : (
         <div className="space-y-2 rounded-lg border border-warning/30 bg-warning/5 p-3 text-xs text-muted-foreground">
@@ -414,6 +438,12 @@ function EnvironmentBundleReview({
             {applyReadiness.blockers.length > 8 ? (
               <li>{applyReadiness.blockers.length - 8} more blockers</li>
             ) : null}
+            {authoritativePlan?.blockers
+              .filter((blocker) => !applyReadiness.blockers.includes(blocker))
+              .slice(0, Math.max(0, 8 - applyReadiness.blockers.length))
+              .map((blocker) => (
+                <li key={`server:${blocker}`}>{blocker}</li>
+              ))}
           </ul>
         </div>
       )}
@@ -446,9 +476,20 @@ function EnvironmentBundleImportDialog({
   const [credentialResolutionError, setCredentialResolutionError] = useState<string | null>(null);
   const [credentialResolutionPending, setCredentialResolutionPending] = useState(false);
   const credentialResolutionRequest = useRef(0);
+  const [authoritativePlan, setAuthoritativePlan] = useState<EnvironmentBundleApplyPlan | null>(
+    null,
+  );
+  const [authoritativePlanError, setAuthoritativePlanError] = useState<string | null>(null);
+  const [authoritativePlanPending, setAuthoritativePlanPending] = useState(false);
+  const [applyPending, setApplyPending] = useState(false);
+  const applyPlanRequest = useRef(0);
   const resolveCredentials = useAtomCommand(serverEnvironment.resolveEnvironmentBundleCredentials, {
     reportFailure: false,
   });
+  const planEnvironmentBundleApply = useAtomCommand(serverEnvironment.planEnvironmentBundleApply, {
+    reportFailure: false,
+  });
+  const applyEnvironmentBundle = useAtomCommand(serverEnvironment.applyEnvironmentBundle);
   const parsed = useMemo(() => {
     try {
       return { bundle: parseEnvironmentBundleJson(json), error: null };
@@ -460,8 +501,35 @@ function EnvironmentBundleImportDialog({
     }
   }, [json]);
   const applyReadiness = reviewBundle
-    ? getEnvironmentBundleApplyReadiness(current, reviewBundle, { providerInstances, providers })
+    ? getEnvironmentBundleApplyReadiness(current, reviewBundle, {
+        providerInstances,
+        providers,
+        ...(credentialResolutions ? { credentialResolutions } : {}),
+      })
     : null;
+  const applyMode = applyReadiness
+    ? environmentBundleApplyMode(applyReadiness, authoritativePlan)
+    : "blocked";
+  const requestAuthoritativePlan = (incoming: EnvironmentBundle) => {
+    const requestId = ++applyPlanRequest.current;
+    setAuthoritativePlan(null);
+    setAuthoritativePlanError(null);
+    setAuthoritativePlanPending(true);
+    void planEnvironmentBundleApply({
+      environmentId,
+      input: { current, incoming },
+    }).then((result) => {
+      if (requestId !== applyPlanRequest.current) return;
+      setAuthoritativePlanPending(false);
+      if (result._tag === "Success") {
+        setAuthoritativePlan(result.value);
+        return;
+      }
+      setAuthoritativePlanError(
+        "Could not validate the Environment Bundle destination. No changes were applied.",
+      );
+    });
+  };
 
   return (
     <Dialog open onOpenChange={onOpenChange}>
@@ -517,12 +585,18 @@ function EnvironmentBundleImportDialog({
             </>
           ) : reviewBundle ? (
             <EnvironmentBundleReview
+              authoritativePlan={authoritativePlan}
+              authoritativePlanError={authoritativePlanError}
+              authoritativePlanPending={authoritativePlanPending}
               credentialResolutions={credentialResolutions}
               credentialResolutionError={credentialResolutionError}
               credentialResolutionPending={credentialResolutionPending}
               current={current}
               incoming={reviewBundle}
-              onIncomingChange={setReviewBundle}
+              onIncomingChange={(incoming) => {
+                setReviewBundle(incoming);
+                requestAuthoritativePlan(incoming);
+              }}
               providerInstances={providerInstances}
               providers={providers}
             />
@@ -547,20 +621,46 @@ function EnvironmentBundleImportDialog({
                 <DownloadIcon /> Export prepared bundle
               </Button>
               <Button
-                disabled={!reviewBundle || applyReadiness?.canApply !== true}
+                disabled={
+                  !reviewBundle ||
+                  applyPending ||
+                  authoritativePlanPending ||
+                  applyMode === "blocked"
+                }
                 onClick={() => {
-                  if (!reviewBundle || applyReadiness?.canApply !== true) return;
-                  onApplySettings(
-                    buildEnvironmentBundleSettingsPatch(current, reviewBundle, {
-                      providerInstances,
-                      providers,
-                      ...(credentialResolutions ? { credentialResolutions } : {}),
-                    }),
-                  );
-                  onOpenChange(false);
+                  if (!reviewBundle || applyPending) return;
+                  if (applyMode === "authoritative" && authoritativePlan) {
+                    setApplyPending(true);
+                    setAuthoritativePlanError(null);
+                    void applyEnvironmentBundle({
+                      environmentId,
+                      input: { current, incoming: reviewBundle, expectedPlan: authoritativePlan },
+                    }).then((result) => {
+                      setApplyPending(false);
+                      if (result._tag === "Success") {
+                        onOpenChange(false);
+                        return;
+                      }
+                      setAuthoritativePlanError(
+                        "The Environment Bundle was not applied. Generate a fresh dry run and review the destination again.",
+                      );
+                      requestAuthoritativePlan(reviewBundle);
+                    });
+                    return;
+                  }
+                  if (applyMode === "settings") {
+                    onApplySettings(
+                      buildEnvironmentBundleSettingsPatch(current, reviewBundle, {
+                        providerInstances,
+                        providers,
+                        ...(credentialResolutions ? { credentialResolutions } : {}),
+                      }),
+                    );
+                    onOpenChange(false);
+                  }
                 }}
               >
-                Apply supported settings
+                {applyPending ? "Applying and verifying…" : "Apply supported settings"}
               </Button>
             </>
           ) : (
@@ -573,6 +673,7 @@ function EnvironmentBundleImportDialog({
                 setError(null);
                 setReviewBundle(parsed.bundle);
                 setStep("review");
+                requestAuthoritativePlan(parsed.bundle);
                 const credentialRefs = collectEnvironmentBundleCredentialReferences(parsed.bundle);
                 const requestId = ++credentialResolutionRequest.current;
                 setCredentialResolutionError(null);

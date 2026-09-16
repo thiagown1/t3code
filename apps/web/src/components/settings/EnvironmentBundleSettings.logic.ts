@@ -1,6 +1,7 @@
 import {
   defaultInstanceIdForDriver,
   type EnvironmentBundle,
+  type EnvironmentBundleApplyPlan,
   type EnvironmentBundleCredentialResolutions,
   type EnvironmentBundleServerInventory,
   type PortableCapabilityProfile,
@@ -367,6 +368,17 @@ export interface EnvironmentBundleApplyReadiness {
     readonly instanceId: string;
     readonly serverName: string;
   }>;
+}
+
+export type EnvironmentBundleApplyMode = "settings" | "authoritative" | "blocked";
+
+export function environmentBundleApplyMode(
+  settingsReadiness: Pick<EnvironmentBundleApplyReadiness, "canApply">,
+  authoritativePlan: Pick<EnvironmentBundleApplyPlan, "canApply"> | null,
+): EnvironmentBundleApplyMode {
+  if (settingsReadiness.canApply) return "settings";
+  if (authoritativePlan?.canApply === true) return "authoritative";
+  return "blocked";
 }
 
 interface EnvironmentBundleApplyContext {

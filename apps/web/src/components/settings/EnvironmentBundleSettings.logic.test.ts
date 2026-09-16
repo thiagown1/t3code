@@ -5,6 +5,7 @@ import {
   buildEnvironmentBundleSettingsPatch,
   buildEnvironmentBundleInventory,
   collectEnvironmentBundleCredentialReferences,
+  environmentBundleApplyMode,
   environmentBundleDownloadName,
   getEnvironmentBundleApplyReadiness,
   setEnvironmentBundleEntryEnabled,
@@ -20,6 +21,14 @@ const profile: PortableCapabilityProfile = {
 };
 
 describe("Environment Bundle settings", () => {
+  it("selects exactly one atomic Environment Bundle application path", () => {
+    expect(environmentBundleApplyMode({ canApply: true }, { canApply: false })).toBe("settings");
+    expect(environmentBundleApplyMode({ canApply: false }, { canApply: true })).toBe(
+      "authoritative",
+    );
+    expect(environmentBundleApplyMode({ canApply: false }, null)).toBe("blocked");
+  });
+
   it("builds providers and workspace skills without exporting absolute paths", () => {
     const bundle = buildEnvironmentBundleInventory({
       environmentId: "desk-28",
