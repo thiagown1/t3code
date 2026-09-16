@@ -187,17 +187,27 @@ export function setEnvironmentBundleEntryEnabled(
           label: "skill",
         }),
       };
-    case "plugin-app":
+    case "plugin-app": {
+      const pluginsAndApps = updateEnvironmentBundleEntry({
+        values: bundle.pluginsAndApps,
+        id: target.id,
+        keyOf: (entry) => `${entry.kind}:${entry.integrationId}`,
+        update: (entry) => ({ ...entry, enabled }),
+        label: "plugin/app",
+      });
+      const integration = pluginsAndApps.find(
+        (entry) => `${entry.kind}:${entry.integrationId}` === target.id,
+      )!;
       return {
         ...bundle,
-        pluginsAndApps: updateEnvironmentBundleEntry({
-          values: bundle.pluginsAndApps,
-          id: target.id,
-          keyOf: (entry) => `${entry.kind}:${entry.integrationId}`,
-          update: (entry) => ({ ...entry, enabled }),
-          label: "plugin/app",
-        }),
+        pluginsAndApps,
+        skills: bundle.skills.map((skill) =>
+          skill.origin === "plugin" && skill.providedByPluginId === integration.integrationId
+            ? { ...skill, enabled }
+            : skill,
+        ),
       };
+    }
     case "provider":
       return {
         ...bundle,

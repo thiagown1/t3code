@@ -165,6 +165,52 @@ function codexSkillProvider(cwd: string, enabled: boolean): ServerProvider {
   } as unknown as ServerProvider;
 }
 
+function codexPluginBundle(enabled: boolean): EnvironmentBundle {
+  return {
+    ...bundle(true),
+    skills: [
+      {
+        skillId: "codex:plugin:documents:documents",
+        name: "documents:documents",
+        origin: "plugin",
+        enabled,
+        providedByPluginId: "runtime:documents:1",
+      },
+    ],
+    pluginsAndApps: [
+      {
+        integrationId: "runtime:documents:1",
+        kind: "app",
+        enabled,
+      },
+    ],
+    providers: [{ instanceId: "codex", driver: "codex", enabled: true }],
+  };
+}
+
+function codexPluginProvider(cwd: string, enabled: boolean): ServerProvider {
+  return {
+    ...provider(true),
+    instanceId: "codex",
+    driver: "codex",
+    workspaceSnapshots: [
+      {
+        cwd,
+        checkedAt: "2026-09-15T00:00:00.000Z",
+        slashCommands: [],
+        skills: [
+          {
+            name: "documents:documents",
+            path: `${cwd}\\.codex\\plugins\\cache\\runtime\\documents\\1\\skills\\documents\\SKILL.md`,
+            scope: "user",
+            enabled,
+          },
+        ],
+      },
+    ],
+  } as unknown as ServerProvider;
+}
+
 describe("EnvironmentBundleApply", () => {
   it.effect("enables a legacy provider and keeps it enabled only after a ready health check", () =>
     Effect.gen(function* () {
@@ -586,6 +632,44 @@ describe("EnvironmentBundleApply", () => {
       expect(result.refreshedProviderInstanceIds).toEqual(["codex"]);
       const persisted = yield* fileSystem.readFileString(configPath);
       expect(persisted).toContain("# preserve project config");
+      expect(persisted).toContain("[[skills.config]]");
+      expect(persisted).toContain("enabled = false");
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("applies an app disable as project-scoped Codex skill policy", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const cwd = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-environment-app-" });
+      yield* fileSystem.makeDirectory(path.join(cwd, ".git"));
+      const before = [codexPluginProvider(cwd, true)];
+      const expectedPlan = yield* planEnvironmentBundleApply({
+        current: codexPluginBundle(true),
+        incoming: codexPluginBundle(false),
+        providers: before,
+        serverInventory: emptyServerInventory,
+        cwd,
+      });
+
+      const result = yield* applyEnvironmentBundle({
+        current: codexPluginBundle(true),
+        incoming: codexPluginBundle(false),
+        expectedPlan,
+        cwd,
+        getProviders: Effect.succeed(before),
+        getServerInventory: Effect.succeed(emptyServerInventory),
+        refreshWorkspaceSnapshot: () => Effect.succeed([codexPluginProvider(cwd, false)]),
+      });
+
+      expect(result.appliedOperations).toEqual([
+        expect.objectContaining({
+          component: "plugin-app",
+          adapter: "codex-project-plugin-skills-override",
+          integrationId: "runtime:documents:1",
+        }),
+      ]);
+      const persisted = yield* fileSystem.readFileString(path.join(cwd, ".codex", "config.toml"));
       expect(persisted).toContain("[[skills.config]]");
       expect(persisted).toContain("enabled = false");
     }).pipe(Effect.provide(NodeServices.layer)),

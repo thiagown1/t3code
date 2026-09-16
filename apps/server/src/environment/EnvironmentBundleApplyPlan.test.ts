@@ -15,6 +15,7 @@ function bundle(
   skills: EnvironmentBundle["skills"],
   providers?: EnvironmentBundle["providers"],
   mcpServers: EnvironmentBundle["mcpServers"] = [],
+  pluginsAndApps: EnvironmentBundle["pluginsAndApps"] = [],
 ): EnvironmentBundle {
   return {
     schemaVersion: 1,
@@ -28,7 +29,7 @@ function bundle(
     },
     mcpServers,
     skills,
-    pluginsAndApps: [],
+    pluginsAndApps,
     providers: providers ?? [{ instanceId: "claudeAgent", driver: "claudeAgent", enabled: true }],
     projectInstructions: [],
   };
@@ -85,6 +86,16 @@ const enabledSkill = {
   enabled: true,
   logicalPath: ".claude/skills/deploy/SKILL.md",
 };
+
+function pluginSkill(skillId: string, name: string, providedByPluginId: string) {
+  return {
+    skillId,
+    name,
+    origin: "plugin" as const,
+    enabled: true,
+    providedByPluginId,
+  };
+}
 
 describe("buildEnvironmentBundleApplyPlan", () => {
   it("plans a metadata-preserving Claude skill disable", () => {
@@ -217,6 +228,176 @@ describe("buildEnvironmentBundleApplyPlan", () => {
 
     expect(plan.canApply).toBe(false);
     expect(plan.blockers).toContain("skill:deploy would also disable work:project:deploy");
+  });
+
+  it("plans one Codex project policy override for every skill provided by an app", () => {
+    const first = pluginSkill(
+      "codex:plugin:documents:documents",
+      "documents:documents",
+      "runtime:documents:1",
+    );
+    const second = pluginSkill(
+      "codex:plugin:documents:templates",
+      "documents:templates",
+      "runtime:documents:1",
+    );
+    const app = {
+      integrationId: "runtime:documents:1",
+      kind: "app" as const,
+      enabled: true,
+    };
+    const current = bundle([first, second], undefined, [], [app]);
+    const incoming = bundle(
+      [
+        { ...first, enabled: false },
+        { ...second, enabled: false },
+      ],
+      undefined,
+      [],
+      [{ ...app, enabled: false }],
+    );
+    const plan = buildEnvironmentBundleApplyPlan({
+      current,
+      incoming,
+      providers: [
+        provider({
+          instanceId: "codex",
+          driver: "codex",
+          skillName: "documents:documents",
+          skillPath:
+            "C:\\Users\\T\\.codex\\plugins\\cache\\runtime\\documents\\1\\skills\\documents\\SKILL.md",
+        }),
+        provider({
+          instanceId: "codex",
+          driver: "codex",
+          skillName: "documents:templates",
+          skillPath:
+            "C:\\Users\\T\\.codex\\plugins\\cache\\runtime\\documents\\1\\skills\\templates\\SKILL.md",
+        }),
+      ],
+      serverInventory: serverInventory(current),
+      cwd: "C:\\repo",
+      targetStateHash: hash,
+    });
+
+    expect(plan).toEqual(
+      expect.objectContaining({
+        canApply: true,
+        blockers: [],
+        operations: [
+          {
+            component: "plugin-app",
+            operation: "disable",
+            adapter: "codex-project-plugin-skills-override",
+            integrationId: "runtime:documents:1",
+            kind: "app",
+            targetIds: ["codex:plugin:documents:documents", "codex:plugin:documents:templates"],
+            providerInstanceIds: ["codex"],
+            requiresProviderReload: true,
+          },
+        ],
+      }),
+    );
+  });
+
+  it("blocks a disabled app while one of its provided skills remains enabled", () => {
+    const skill = pluginSkill("codex:plugin:github", "github", "curated:github");
+    const app = { integrationId: "curated:github", kind: "app" as const, enabled: true };
+    const current = bundle([skill], undefined, [], [app]);
+    const plan = buildEnvironmentBundleApplyPlan({
+      current,
+      incoming: bundle([skill], undefined, [], [{ ...app, enabled: false }]),
+      providers: [
+        provider({
+          instanceId: "codex",
+          driver: "codex",
+          skillName: "github",
+          skillPath:
+            "C:\\Users\\T\\.codex\\plugins\\cache\\curated\\github\\skills\\github\\SKILL.md",
+        }),
+      ],
+      serverInventory: serverInventory(current),
+      cwd: "C:\\repo",
+      targetStateHash: hash,
+    });
+
+    expect(plan.canApply).toBe(false);
+    expect(plan.blockers).toContain(
+      "plugin-app:app:curated:github must disable every provided skill in the same bundle",
+    );
+  });
+
+  it("blocks forged plugin ownership on a non-plugin skill", () => {
+    const skill = {
+      skillId: "codex:local:github",
+      name: "github",
+      origin: "local" as const,
+      enabled: true,
+      providedByPluginId: "curated:github",
+    };
+    const app = { integrationId: "curated:github", kind: "app" as const, enabled: true };
+    const current = bundle([skill], undefined, [], [app]);
+    const plan = buildEnvironmentBundleApplyPlan({
+      current,
+      incoming: bundle([{ ...skill, enabled: false }], undefined, [], [{ ...app, enabled: false }]),
+      providers: [
+        provider({
+          instanceId: "codex",
+          driver: "codex",
+          skillName: "github",
+          skillPath:
+            "C:\\Users\\T\\.codex\\plugins\\cache\\curated\\github\\skills\\github\\SKILL.md",
+        }),
+      ],
+      serverInventory: serverInventory(current),
+      cwd: "C:\\repo",
+      targetStateHash: hash,
+    });
+
+    expect(plan.canApply).toBe(false);
+    expect(plan.blockers).toContain(
+      "plugin-app:app:curated:github must disable every provided skill in the same bundle",
+    );
+  });
+
+  it("blocks an app policy when the live provider has an undeclared provided skill", () => {
+    const skill = pluginSkill("codex:plugin:github", "github", "curated:github");
+    const app = { integrationId: "curated:github", kind: "app" as const, enabled: true };
+    const current = bundle([skill], undefined, [], [app]);
+    const actual = provider({
+      instanceId: "codex",
+      driver: "codex",
+      skillName: "github",
+      skillPath: "C:\\Users\\T\\.codex\\plugins\\cache\\curated\\github\\skills\\github\\SKILL.md",
+    });
+    const liveProvider = {
+      ...actual,
+      workspaceSnapshots: actual.workspaceSnapshots?.map((snapshot) => ({
+        ...snapshot,
+        skills: [
+          ...snapshot.skills,
+          {
+            name: "github-extra",
+            path: "C:\\Users\\T\\.codex\\plugins\\cache\\curated\\github\\skills\\extra\\SKILL.md",
+            scope: "user",
+            enabled: true,
+          },
+        ],
+      })),
+    } as ServerProvider;
+    const plan = buildEnvironmentBundleApplyPlan({
+      current,
+      incoming: bundle([{ ...skill, enabled: false }], undefined, [], [{ ...app, enabled: false }]),
+      providers: [liveProvider],
+      serverInventory: serverInventory(current),
+      cwd: "C:\\repo",
+      targetStateHash: hash,
+    });
+
+    expect(plan.canApply).toBe(false);
+    expect(plan.blockers).toContain(
+      "plugin-app:app:curated:github is not an enabled supported Codex app in the current workspace",
+    );
   });
 
   it("blocks unrelated mutations so application cannot become partial", () => {

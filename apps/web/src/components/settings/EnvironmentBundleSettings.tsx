@@ -274,7 +274,7 @@ function EnvironmentBundleReview({
         id: `${integration.kind}:${integration.integrationId}`,
       },
       label: integration.integrationId,
-      detail: integration.kind,
+      detail: `${integration.kind} · project policy for provided skills; does not uninstall`,
       enabled: integration.enabled,
     })),
     ...incoming.providers.map((provider) => ({
@@ -424,10 +424,9 @@ function EnvironmentBundleReview({
         </div>
       ) : applyMode === "settings" ? (
         <div className="rounded-lg border border-success/30 bg-success/5 p-3 text-xs text-muted-foreground">
-          This bundle can atomically apply its supported settings. T3 can update the capability
-          profile, disable existing providers, and disable existing Codex MCP servers while
-          preserving their local configuration. It cannot enable providers or MCPs, or change
-          plugin/app or instruction configuration yet.
+          This settings-only path can atomically update the capability profile and supported legacy
+          settings. Provider, MCP, skill, and plugin/app project policy changes use the
+          authoritative server plan above; plugin/app policy never uninstalls the local plugin.
         </div>
       ) : (
         <div className="space-y-2 rounded-lg border border-warning/30 bg-warning/5 p-3 text-xs text-muted-foreground">

@@ -66,7 +66,10 @@ function codexSkillPaths(input: {
 }): ReadonlyArray<string> {
   const targetIds = new Set(
     input.operations.flatMap((operation) =>
-      operation.adapter === "codex-project-skill-override" ? operation.targetIds : [],
+      operation.adapter === "codex-project-skill-override" ||
+      operation.adapter === "codex-project-plugin-skills-override"
+        ? operation.targetIds
+        : [],
     ),
   );
   const paths = input.providers.flatMap((provider) =>
@@ -125,7 +128,9 @@ export const planEnvironmentBundleApply = Effect.fn("planEnvironmentBundleApply"
       (operation) => operation.adapter === "opencode-project-mcp-override",
     );
     const usesCodexSkillTarget = draft.operations.every(
-      (operation) => operation.adapter === "codex-project-skill-override",
+      (operation) =>
+        operation.adapter === "codex-project-skill-override" ||
+        operation.adapter === "codex-project-plugin-skills-override",
     );
     const target = usesCodexSkillTarget
       ? yield* loadCodexSkillOverrideTargetState(input.cwd).pipe(
@@ -317,7 +322,9 @@ export const applyEnvironmentBundle = Effect.fn("applyEnvironmentBundle")(functi
     (operation) => operation.adapter === "opencode-project-mcp-override",
   );
   const usesCodexSkillTarget = currentPlan.operations.every(
-    (operation) => operation.adapter === "codex-project-skill-override",
+    (operation) =>
+      operation.adapter === "codex-project-skill-override" ||
+      operation.adapter === "codex-project-plugin-skills-override",
   );
   let rollbackEffect: Effect.Effect<
     void,

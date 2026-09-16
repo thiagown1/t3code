@@ -231,6 +231,46 @@ describe("Environment Bundle settings", () => {
     });
   });
 
+  it("keeps a plugin/app switch consistent with every skill it provides", () => {
+    const pluginSkill = {
+      skillId: "codex:plugin:github",
+      name: "github",
+      origin: "plugin" as const,
+      enabled: true,
+      providedByPluginId: "openai-curated:github",
+    };
+    const unrelatedSkill = {
+      skillId: "codex:local:audit",
+      name: "audit",
+      origin: "local" as const,
+      enabled: true,
+      providedByPluginId: "openai-curated:github",
+    };
+    const incoming = {
+      ...buildEnvironmentBundleInventory({
+        environmentId: "desk",
+        environmentLabel: "Desk",
+        cwd: null,
+        capabilityProfile: profile,
+        providers: [],
+      }),
+      skills: [pluginSkill, unrelatedSkill],
+      pluginsAndApps: [
+        { integrationId: "openai-curated:github", kind: "app" as const, enabled: true },
+      ],
+    };
+
+    const prepared = setEnvironmentBundleEntryEnabled(
+      incoming,
+      { component: "plugin-app", id: "app:openai-curated:github" },
+      false,
+    );
+
+    expect(incoming.skills[0]?.enabled).toBe(true);
+    expect(prepared.pluginsAndApps[0]?.enabled).toBe(false);
+    expect(prepared.skills).toEqual([{ ...pluginSkill, enabled: false }, unrelatedSkill]);
+  });
+
   it("rejects an enablement target that is not in the imported bundle", () => {
     const incoming = buildEnvironmentBundleInventory({
       environmentId: "desk",

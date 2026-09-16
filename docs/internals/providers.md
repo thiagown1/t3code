@@ -42,14 +42,24 @@ when available, the workspace-scoped skill snapshot for that checkout. It conver
 paths to relative logical paths and infers plugin/app identities without serializing user or
 installation paths. Import always starts with a canonical dry run that lists each add, update, and
 remove operation and marks provider reloads and required health checks. The reviewed bundle can
-apply its capability profile only when no other environment component would change; MCPs, skills,
-plugins/apps, instructions, and context budgets remain atomic blockers until their safe destination
-adapters exist. An existing provider instance may be disabled in the same atomic settings patch;
-its opaque local configuration is preserved. Provider creation, removal, metadata changes, and
-enablement remain blocked until a health-checked adapter with rollback exists. The server hashes known
-root instruction files without returning their contents or absolute paths, and marks that coverage
-as partial until provider adapters report the exact files loaded by a session. MCP inventory stays
-explicit about coverage. The Codex adapter scans only MCP table names, `enabled`, `enabled_tools`,
+apply a supported change only through one atomic destination family. Existing Codex and Claude
+skills and project MCPs for Claude and OpenCode can be disabled with destination-bound hashes,
+provider refresh, post-write verification, and drift-aware rollback. Existing provider instances
+can be disabled or re-enabled without copying their opaque local configuration; re-enablement is
+confirmed only after the provider is installed, available, authenticated, and ready. Provider
+creation, removal, and metadata changes remain blocked.
+
+A Codex plugin/app disable is a project policy over every currently enabled skill supplied by that
+installed integration. It writes only exact-path `enabled = false` overrides to the project's
+`.codex/config.toml`; it never removes the plugin, its cache, or its credentials. The server derives
+paths from the live provider snapshot rather than the imported bundle and blocks the whole plan if
+the bundle omits a provided skill, mislabels a non-plugin skill, or would silently affect another
+instance. Plugin/app installation and enablement remain unsupported.
+
+The server hashes known root instruction files without returning their contents or absolute paths,
+and marks that coverage as partial until provider adapters report the exact files loaded by a
+session. Instructions and context-budget changes remain blockers because they have no safe write
+adapter. MCP inventory stays explicit about coverage. The Codex adapter scans only MCP table names, `enabled`, `enabled_tools`,
 and `disabled_tools` from the configured user home and root project config. Commands, arguments,
 URLs, environment values, tokens, absolute paths, and unrecognized fields are discarded before the
 inventory or its hash is built. Single-line allow/block lists are supported; unhandled

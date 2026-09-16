@@ -22,6 +22,19 @@ function normalizedPath(value: string): string {
   return /^[a-z]:\//iu.test(normalized) ? normalized.toLowerCase() : normalized;
 }
 
+function pluginAppIdFromSkillPath(value: string): string | undefined {
+  const path = value.replaceAll("\\", "/").replace(/\/$/u, "");
+  const lowerPath = path.toLowerCase();
+  const marker = "/plugins/cache/";
+  const start = lowerPath.indexOf(marker);
+  if (start < 0) return undefined;
+  const rest = path.slice(start + marker.length);
+  const skillMarkerStart = rest.toLowerCase().indexOf("/skills/");
+  if (skillMarkerStart <= 0) return undefined;
+  const id = rest.slice(0, skillMarkerStart).split("/").filter(Boolean).join(":");
+  return id || undefined;
+}
+
 function skillOrigin(skill: Pick<ServerProviderSkill, "path" | "scope">): SkillOrigin {
   const path = normalizedPath(skill.path);
   if (path.includes("/.codex/plugins/") || path.includes("/.agents/plugins/")) return "plugin";
@@ -88,7 +101,10 @@ export function areEnvironmentBundleApplyOperationsEffective(input: {
       input.providers.some(
         (provider) =>
           provider.driver ===
-            (operation.adapter === "codex-project-skill-override" ? "codex" : "claudeAgent") &&
+            (operation.adapter === "codex-project-skill-override" ||
+            operation.adapter === "codex-project-plugin-skills-override"
+              ? "codex"
+              : "claudeAgent") &&
           environmentBundleProviderSkills(provider, input.cwd).some(
             (skill) =>
               environmentBundleProviderSkillId(provider, skill) === targetId && !skill.enabled,
@@ -164,6 +180,7 @@ export function buildEnvironmentBundleApplyPlan(input: {
       (step) =>
         step.component !== "bundle" &&
         step.component !== "skill" &&
+        step.component !== "plugin-app" &&
         step.component !== "mcp-server" &&
         step.component !== "provider",
     )
@@ -193,7 +210,140 @@ export function buildEnvironmentBundleApplyPlan(input: {
     blockers.push(unsupportedStepMessage("skill", skill.skillId));
 
   const operationByName = new Map<string, EnvironmentBundleApplyOperation>();
+  const pluginManagedSkillIds = new Set<string>();
+  const requestedPluginDisables = new Map(
+    diff.pluginsAndApps.changed.map((change) => [
+      `${change.after.kind}:${change.after.integrationId}`,
+      change,
+    ]),
+  );
+  for (const [pluginKey, change] of requestedPluginDisables) {
+    if (
+      !change.before.enabled ||
+      change.after.enabled ||
+      !equalExceptEnabled(change.before, change.after)
+    ) {
+      blockers.push(`plugin-app:${pluginKey} supports only metadata-preserving disable`);
+      requestedPluginDisables.delete(pluginKey);
+    }
+  }
+  for (const plugin of diff.pluginsAndApps.added)
+    blockers.push(unsupportedStepMessage("plugin-app", `${plugin.kind}:${plugin.integrationId}`));
+  for (const plugin of diff.pluginsAndApps.removed)
+    blockers.push(unsupportedStepMessage("plugin-app", `${plugin.kind}:${plugin.integrationId}`));
+
+  for (const plugin of input.incoming.pluginsAndApps) {
+    const providedSkills = input.incoming.skills.filter(
+      (skill) => skill.providedByPluginId === plugin.integrationId,
+    );
+    if (
+      providedSkills.length === 0 ||
+      providedSkills.some((skill) => skill.enabled) !== plugin.enabled
+    ) {
+      blockers.push(
+        `plugin-app:${plugin.kind}:${plugin.integrationId} must ${plugin.enabled ? "keep at least one" : "disable every"} provided skill in the same bundle`,
+      );
+    }
+  }
+
+  for (const [pluginKey, { after }] of requestedPluginDisables) {
+    const declaredSkills = input.current.skills.filter(
+      (skill) => skill.providedByPluginId === after.integrationId,
+    );
+    const incomingSkills = new Map(input.incoming.skills.map((skill) => [skill.skillId, skill]));
+    if (
+      declaredSkills.length === 0 ||
+      declaredSkills.some((skill) => {
+        const incoming = incomingSkills.get(skill.skillId);
+        return (
+          skill.origin !== "plugin" ||
+          !incoming ||
+          incoming.enabled ||
+          !equalExceptEnabled(skill, incoming)
+        );
+      })
+    ) {
+      blockers.push(`plugin-app:${pluginKey} must disable every provided skill in the same bundle`);
+      continue;
+    }
+
+    const actualSkills = input.providers.flatMap((provider) =>
+      provider.driver !== "codex"
+        ? []
+        : environmentBundleProviderSkills(provider, input.cwd).flatMap((skill) =>
+            pluginAppIdFromSkillPath(skill.path) === after.integrationId
+              ? [
+                  {
+                    provider,
+                    skill,
+                    targetId: environmentBundleProviderSkillId(provider, skill),
+                  },
+                ]
+              : [],
+          ),
+    );
+    const declaredById = new Map(declaredSkills.map((skill) => [skill.skillId, skill]));
+    if (
+      actualSkills.length !== declaredSkills.length ||
+      actualSkills.some((actual) => {
+        const declared = declaredById.get(actual.targetId);
+        return (
+          !declared ||
+          declared.name !== actual.skill.name ||
+          declared.enabled !== actual.skill.enabled
+        );
+      })
+    ) {
+      blockers.push(
+        `plugin-app:${pluginKey} is not an enabled supported Codex app in the current workspace`,
+      );
+      continue;
+    }
+    const matches = actualSkills.filter((actual) => actual.skill.enabled);
+    if (matches.length === 0) {
+      blockers.push(
+        `plugin-app:${pluginKey} is not an enabled supported Codex app in the current workspace`,
+      );
+      continue;
+    }
+
+    const declaredTargetIds = new Set(matches.map((match) => match.targetId));
+    const matchedPaths = new Set(matches.map((match) => normalizedPath(match.skill.path)));
+    const affected = input.providers.flatMap((provider) =>
+      provider.driver !== "codex"
+        ? []
+        : environmentBundleProviderSkills(provider, input.cwd)
+            .filter((skill) => skill.enabled && matchedPaths.has(normalizedPath(skill.path)))
+            .map((skill) => ({
+              instanceId: provider.instanceId,
+              targetId: environmentBundleProviderSkillId(provider, skill),
+            })),
+    );
+    const missingTargets = affected.filter(
+      (candidate) => !declaredTargetIds.has(candidate.targetId),
+    );
+    if (missingTargets.length > 0) {
+      blockers.push(
+        `plugin-app:${pluginKey} would also disable ${missingTargets.map((candidate) => candidate.targetId).join(", ")}`,
+      );
+      continue;
+    }
+
+    for (const targetId of declaredTargetIds) pluginManagedSkillIds.add(targetId);
+    operationByName.set(`plugin-app:${pluginKey}`, {
+      component: "plugin-app",
+      operation: "disable",
+      adapter: "codex-project-plugin-skills-override",
+      integrationId: after.integrationId,
+      kind: after.kind,
+      targetIds: [...declaredTargetIds].sort(),
+      providerInstanceIds: [...new Set(affected.map((candidate) => candidate.instanceId))].sort(),
+      requiresProviderReload: true,
+    });
+  }
+
   for (const { after } of requestedDisables.values()) {
+    if (pluginManagedSkillIds.has(after.skillId)) continue;
     const matches = input.providers.flatMap((provider) => {
       if (provider.driver !== "claudeAgent" && provider.driver !== "codex") return [];
       const skill = environmentBundleProviderSkills(provider, input.cwd).find(
@@ -389,6 +539,8 @@ export function buildEnvironmentBundleApplyPlan(input: {
     blockers.push(unsupportedStepMessage("provider", provider.instanceId));
 
   const operationKey = (operation: EnvironmentBundleApplyOperation): string => {
+    if (operation.component === "plugin-app")
+      return `plugin-app:${operation.kind}:${operation.integrationId}`;
     if (operation.component === "skill")
       return `skill:${operation.adapter}:${operation.targetIds.join(",")}`;
     if (operation.component === "mcp") return `mcp:${operation.serverName}`;
@@ -400,7 +552,11 @@ export function buildEnvironmentBundleApplyPlan(input: {
   const targetKinds = new Set(
     operations.map((operation) => {
       if (operation.adapter === "opencode-project-mcp-override") return "opencode";
-      if (operation.adapter === "codex-project-skill-override") return "codex";
+      if (
+        operation.adapter === "codex-project-skill-override" ||
+        operation.adapter === "codex-project-plugin-skills-override"
+      )
+        return "codex";
       if (operation.adapter === "provider-settings-enable") return "provider-settings";
       return "claude";
     }),
