@@ -1124,6 +1124,19 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("rounded-2xl bg-message p-3");
   });
 
+  it("offers Mermaid rendering in completed user and assistant messages", () => {
+    const diagram = "```mermaid\nflowchart LR\n  prompt --> response\n```";
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[buildUserTimelineEntry(diagram), buildAssistantTimelineEntry(diagram)]}
+      />,
+    );
+
+    expect(markup.match(/aria-label="Render diagram"/g)).toHaveLength(2);
+    expect(markup).not.toContain('data-mermaid-state="pending"');
+  });
+
   it("preserves arbitrary XML-like tags and comparisons in rendered user messages", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
