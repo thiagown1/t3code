@@ -7,6 +7,7 @@ import type {
   EnvironmentBundleServerInventory,
   ServerSettings,
 } from "@t3tools/contracts";
+import { tokenizeCliArgs } from "@t3tools/shared/cliArgs";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -30,6 +31,7 @@ export interface CodexMcpInventorySource {
   readonly instanceId: string;
   readonly enabled: boolean;
   readonly homePath?: string;
+  readonly launchArgs?: string;
 }
 
 export interface ClaudeMcpInventorySource {
@@ -68,11 +70,15 @@ export function codexMcpInventorySourcesFromSettings(
     .map(([instanceId, instance]) => {
       const configEnabled = recordValue(instance.config, "enabled");
       const homePath = recordValue(instance.config, "homePath");
+      const launchArgs = recordValue(instance.config, "launchArgs");
       return {
         instanceId,
         enabled: instance.enabled !== false && configEnabled !== false,
         ...(typeof homePath === "string" && homePath.trim().length > 0
           ? { homePath: homePath.trim() }
+          : {}),
+        ...(typeof launchArgs === "string" && launchArgs.trim().length > 0
+          ? { launchArgs: launchArgs.trim() }
           : {}),
       } satisfies CodexMcpInventorySource;
     });
@@ -83,9 +89,31 @@ export function codexMcpInventorySourcesFromSettings(
       instanceId: "codex",
       enabled: legacy.enabled,
       ...(legacy.homePath.trim().length > 0 ? { homePath: legacy.homePath } : {}),
+      ...(legacy.launchArgs.trim().length > 0 ? { launchArgs: legacy.launchArgs } : {}),
     });
   }
   return sources;
+}
+
+function codexMcpEnablementOverrides(launchArgs: string | undefined): ReadonlyMap<string, boolean> {
+  const tokens = tokenizeCliArgs(launchArgs);
+  const overrides = new Map<string, boolean>();
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index]!;
+    let value: string | undefined;
+    if (token === "-c" || token === "--config") {
+      value = tokens[index + 1];
+      if (value !== undefined) index += 1;
+    } else if (token.startsWith("-c=")) {
+      value = token.slice(3);
+    } else if (token.startsWith("--config=")) {
+      value = token.slice(9);
+    }
+    if (value === undefined) continue;
+    const match = /^mcp_servers\.([A-Za-z0-9_.-]{1,256})\.enabled=(true|false)$/u.exec(value);
+    if (match) overrides.set(match[1]!, match[2] === "true");
+  }
+  return overrides;
 }
 
 export function claudeMcpInventorySourcesFromSettings(
@@ -522,13 +550,14 @@ const loadCodexMcpInventory = Effect.fn("loadEnvironmentBundleCodexMcpInventory"
           Effect.orElseSucceed(() => new Map()),
         );
         const effectiveConfig = mergeMcpConfigs(userConfig, projectConfig);
+        const enablementOverrides = codexMcpEnablementOverrides(source.launchArgs);
         return [...effectiveConfig.entries()].map(([name, config]) => {
           const blockedTools = [...(config.blockedTools ?? [])];
           const blockedToolSet = new Set(blockedTools);
           const server = {
             serverId: boundedMcpId(`codex:${source.instanceId}`, name),
             origin: `codex:${source.instanceId}:effective-config`,
-            enabled: source.enabled && config.enabled !== false,
+            enabled: source.enabled && (enablementOverrides.get(name) ?? config.enabled !== false),
             configurationRef: boundedMcpId(`codex:${source.instanceId}:mcp`, name),
             credentialRefs: [...(config.credentialRefs ?? [])],
             // A contradictory native config must remain fail-closed in the

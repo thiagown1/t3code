@@ -212,6 +212,7 @@ function EnvironmentBundleReview({
   incoming,
   onIncomingChange,
   providerInstances,
+  providers,
 }: {
   credentialResolutions: EnvironmentBundleCredentialResolutions | null;
   credentialResolutionError: string | null;
@@ -220,10 +221,12 @@ function EnvironmentBundleReview({
   incoming: EnvironmentBundle;
   onIncomingChange: (incoming: EnvironmentBundle) => void;
   providerInstances: ServerSettings["providerInstances"];
+  providers: ServerSettings["providers"];
 }) {
   const summary = summarizeEnvironmentBundleDiff(current, incoming);
   const applyReadiness = getEnvironmentBundleApplyReadiness(current, incoming, {
     providerInstances,
+    providers,
     ...(credentialResolutions ? { credentialResolutions } : {}),
   });
   const credentialSummary = credentialResolutions
@@ -397,9 +400,9 @@ function EnvironmentBundleReview({
       {applyReadiness.canApply ? (
         <div className="rounded-lg border border-success/30 bg-success/5 p-3 text-xs text-muted-foreground">
           This bundle can atomically apply its supported settings. T3 can update the capability
-          profile and disable existing providers while preserving their local configuration. It
-          cannot enable providers or change MCP, skill, plugin/app, or instruction configuration
-          yet.
+          profile, disable existing providers, and disable existing Codex MCP servers while
+          preserving their local configuration. It cannot enable providers or MCPs, or change skill,
+          plugin/app, or instruction configuration yet.
         </div>
       ) : (
         <div className="space-y-2 rounded-lg border border-warning/30 bg-warning/5 p-3 text-xs text-muted-foreground">
@@ -424,12 +427,14 @@ function EnvironmentBundleImportDialog({
   onOpenChange,
   onApplySettings,
   providerInstances,
+  providers,
 }: {
   current: EnvironmentBundle;
   environmentId: EnvironmentId;
   onOpenChange: (open: boolean) => void;
   onApplySettings: (patch: ServerSettingsPatch) => void;
   providerInstances: ServerSettings["providerInstances"];
+  providers: ServerSettings["providers"];
 }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [json, setJson] = useState(() => serializeEnvironmentBundle(current));
@@ -455,7 +460,7 @@ function EnvironmentBundleImportDialog({
     }
   }, [json]);
   const applyReadiness = reviewBundle
-    ? getEnvironmentBundleApplyReadiness(current, reviewBundle, { providerInstances })
+    ? getEnvironmentBundleApplyReadiness(current, reviewBundle, { providerInstances, providers })
     : null;
 
   return (
@@ -519,6 +524,7 @@ function EnvironmentBundleImportDialog({
               incoming={reviewBundle}
               onIncomingChange={setReviewBundle}
               providerInstances={providerInstances}
+              providers={providers}
             />
           ) : null}
         </DialogPanel>
@@ -547,6 +553,7 @@ function EnvironmentBundleImportDialog({
                   onApplySettings(
                     buildEnvironmentBundleSettingsPatch(current, reviewBundle, {
                       providerInstances,
+                      providers,
                       ...(credentialResolutions ? { credentialResolutions } : {}),
                     }),
                   );
@@ -604,6 +611,7 @@ function EnvironmentBundleImportDialog({
 export function EnvironmentBundleSettings() {
   const capabilityProfile = useScopedSettings((settings) => settings.capabilityProfile);
   const providerInstances = useScopedSettings((settings) => settings.providerInstances);
+  const providers = useScopedSettings((settings) => settings.providers);
   const mixed = useScopedSettingsMixed(["capabilityProfile"]);
   const updateSettings = useUpdateScopedSettings();
   const { environment, target, targets } = useSettingsScope();
@@ -680,6 +688,7 @@ export function EnvironmentBundleSettings() {
           onOpenChange={setImportOpen}
           onApplySettings={updateSettings}
           providerInstances={providerInstances}
+          providers={providers}
         />
       ) : null}
       {inventoryOpen && bundle ? (

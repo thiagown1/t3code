@@ -9,6 +9,7 @@ import * as Schema from "effect/Schema";
 
 import {
   claudeMcpInventorySourcesFromSettings,
+  codexMcpInventorySourcesFromSettings,
   cursorMcpInventorySourcesFromSettings,
   loadEnvironmentBundleServerInventory,
   openCodeMcpInventorySourcesFromSettings,
@@ -181,6 +182,67 @@ command = "do-not-export"
       }
     }).pipe(Effect.provide(NodeServices.layer)),
   );
+
+  it.effect("applies Codex launch-argument enablement overrides to the effective inventory", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-environment-bundle-" });
+      const homePath = path.join(root, "codex-home");
+      yield* fileSystem.makeDirectory(path.join(root, ".git"), { recursive: true });
+      yield* fileSystem.makeDirectory(homePath, { recursive: true });
+      yield* fileSystem.writeFileString(
+        path.join(homePath, "config.toml"),
+        '[mcp_servers.firebase]\ncommand = "secret-command"\nenabled = true\n',
+      );
+
+      const inventory = yield* loadEnvironmentBundleServerInventory({
+        cwd: root,
+        codexMcpSources: [
+          {
+            instanceId: "codex-work",
+            enabled: true,
+            homePath,
+            launchArgs:
+              "-c mcp_servers.firebase.enabled=true --config=mcp_servers.firebase.enabled=false",
+          },
+        ],
+      });
+
+      expect(inventory.mcpServers).toEqual([
+        expect.objectContaining({
+          serverId: "codex:codex-work:firebase",
+          enabled: false,
+        }),
+      ]);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it("carries Codex instance launch arguments into the sanitized inventory source", () => {
+    const settings = {
+      providerInstances: {
+        codex: {
+          driver: "codex",
+          enabled: true,
+          config: {
+            homePath: " C:/private/codex ",
+            launchArgs: " -c mcp_servers.logs.enabled=false ",
+            apiKey: "never-export",
+          },
+        },
+      },
+      providers: { codex: { enabled: true, homePath: "", launchArgs: "" } },
+    } as never;
+
+    expect(codexMcpInventorySourcesFromSettings(settings)).toEqual([
+      {
+        instanceId: "codex",
+        enabled: true,
+        homePath: "C:/private/codex",
+        launchArgs: "-c mcp_servers.logs.enabled=false",
+      },
+    ]);
+  });
 
   it("discovers Claude instances without exposing provider configuration", () => {
     const settings = {

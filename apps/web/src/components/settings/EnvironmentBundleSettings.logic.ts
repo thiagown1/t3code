@@ -1,9 +1,11 @@
 import {
+  defaultInstanceIdForDriver,
   type EnvironmentBundle,
   type EnvironmentBundleCredentialResolutions,
   type EnvironmentBundleServerInventory,
   type PortableCapabilityProfile,
   type PortableCredentialReference,
+  ProviderDriverKind,
   type ProviderInstanceConfig,
   type ServerProviderSkill,
   type ServerProviderWorkspaceSnapshot,
@@ -11,6 +13,7 @@ import {
   type ServerSettingsPatch,
 } from "@t3tools/contracts";
 import { resolveProviderSkillSourceKind } from "@t3tools/client-runtime/providerSkills";
+import { tokenizeCliArgs } from "@t3tools/shared/cliArgs";
 import {
   buildEnvironmentBundleApplicationPlan,
   diffEnvironmentBundles,
@@ -24,6 +27,8 @@ interface InventoryProvider {
   readonly skills: ReadonlyArray<ServerProviderSkill>;
   readonly workspaceSnapshots?: ReadonlyArray<ServerProviderWorkspaceSnapshot>;
 }
+
+const CODEX_DEFAULT_INSTANCE_ID = defaultInstanceIdForDriver(ProviderDriverKind.make("codex"));
 
 export type EnvironmentBundleEnablementComponent =
   | "capability"
@@ -345,10 +350,16 @@ export interface EnvironmentBundleApplyReadiness {
   readonly capabilityProfileChanged: boolean;
   readonly blockers: ReadonlyArray<string>;
   readonly providerInstancesToDisable: ReadonlyArray<string>;
+  readonly codexMcpServersToDisable: ReadonlyArray<{
+    readonly serverId: string;
+    readonly instanceId: string;
+    readonly serverName: string;
+  }>;
 }
 
 interface EnvironmentBundleApplyContext {
   readonly providerInstances: ServerSettings["providerInstances"];
+  readonly providers?: ServerSettings["providers"];
   readonly credentialResolutions?: EnvironmentBundleCredentialResolutions;
 }
 
@@ -363,6 +374,83 @@ function environmentBundleApplicationStepLabel(
     return `${component}:${skill?.name ?? id}`;
   }
   return `${component}:${id}`;
+}
+
+function recordsEqualExceptEnablementAndHash(
+  before: EnvironmentBundle["mcpServers"][number],
+  after: EnvironmentBundle["mcpServers"][number],
+): boolean {
+  // The sanitized hash includes `enabled`, so a portable disable naturally has
+  // a different hash. Disabling remains safe when every inspectable identity,
+  // credential reference, and tool policy matches; opaque executable details
+  // are preserved locally and never copied from the bundle.
+  const {
+    enabled: _beforeEnabled,
+    configurationHash: _beforeConfigurationHash,
+    ...beforeMetadata
+  } = before;
+  const {
+    enabled: _afterEnabled,
+    configurationHash: _afterConfigurationHash,
+    ...afterMetadata
+  } = after;
+  return JSON.stringify(beforeMetadata) === JSON.stringify(afterMetadata);
+}
+
+function codexMcpDisableTarget(
+  before: EnvironmentBundle["mcpServers"][number],
+  after: EnvironmentBundle["mcpServers"][number],
+  providerInstances: Readonly<Record<string, ProviderInstanceConfig>> | undefined,
+  legacyProviders: ServerSettings["providers"] | undefined,
+) {
+  if (!before.enabled || after.enabled || !recordsEqualExceptEnablementAndHash(before, after)) {
+    return null;
+  }
+  for (const [instanceId, instance] of Object.entries(providerInstances ?? {})) {
+    const prefix = `codex:${instanceId}:`;
+    if (instance.driver !== "codex" || !after.serverId.startsWith(prefix)) continue;
+    const serverName = after.serverId.slice(prefix.length);
+    if (
+      !/^[A-Za-z0-9_.-]{1,256}$/u.test(serverName) ||
+      /^sha256-[a-f0-9]{32}$/u.test(serverName) ||
+      after.origin !== `codex:${instanceId}:effective-config` ||
+      after.configurationRef !== `codex:${instanceId}:mcp:${serverName}`
+    ) {
+      return null;
+    }
+    return { serverId: after.serverId, instanceId, serverName } as const;
+  }
+
+  const defaultInstanceId = CODEX_DEFAULT_INSTANCE_ID;
+  if (legacyProviders?.codex && !Object.hasOwn(providerInstances ?? {}, defaultInstanceId)) {
+    const prefix = `codex:${defaultInstanceId}:`;
+    const serverName = after.serverId.startsWith(prefix) ? after.serverId.slice(prefix.length) : "";
+    if (
+      /^[A-Za-z0-9_.-]{1,256}$/u.test(serverName) &&
+      !/^sha256-[a-f0-9]{32}$/u.test(serverName) &&
+      after.origin === `codex:${defaultInstanceId}:effective-config` &&
+      after.configurationRef === `codex:${defaultInstanceId}:mcp:${serverName}`
+    ) {
+      return {
+        serverId: after.serverId,
+        instanceId: defaultInstanceId,
+        serverName,
+      } as const;
+    }
+  }
+  return null;
+}
+
+function quoteCliToken(value: string): string {
+  if (value.length > 0 && !/[\s'"\\]/u.test(value)) return value;
+  if (!value.includes("'")) return `'${value}'`;
+  return `"${value.replace(/["\\$`]/gu, "\\$&")}"`;
+}
+
+function appendCodexMcpDisableOverride(launchArgs: unknown, serverName: string): string {
+  const tokens = [...tokenizeCliArgs(typeof launchArgs === "string" ? launchArgs : undefined)];
+  tokens.push("-c", `mcp_servers.${serverName}.enabled=false`);
+  return tokens.map(quoteCliToken).join(" ");
 }
 
 /**
@@ -398,18 +486,30 @@ export function getEnvironmentBundleApplyReadiness(
     })
     .map(({ after }) => after.instanceId);
   const providerDisableSet = new Set(providerInstancesToDisable);
+  const codexMcpServersToDisable = diff.mcpServers.changed.flatMap(({ before, after }) => {
+    const target = codexMcpDisableTarget(before, after, localProviderInstances, context?.providers);
+    return target === null ? [] : [target];
+  });
+  const codexMcpDisableSet = new Set(codexMcpServersToDisable.map(({ serverId }) => serverId));
   const blockers = steps
     .filter(
       (step) =>
         step.component !== "bundle" &&
         step.component !== "capability" &&
-        !(step.component === "provider" && providerDisableSet.has(step.id)),
+        !(step.component === "provider" && providerDisableSet.has(step.id)) &&
+        !(step.component === "mcp-server" && codexMcpDisableSet.has(step.id)),
     )
     .map((step) => {
       if (step.component === "provider") {
         const changed = diff.providers.changed.find(({ after }) => after.instanceId === step.id);
         if (changed?.before.enabled === false && changed.after.enabled === true) {
           return `provider:${step.id} cannot be enabled before a provider health-check adapter is available`;
+        }
+      }
+      if (step.component === "mcp-server") {
+        const changed = diff.mcpServers.changed.find(({ after }) => after.serverId === step.id);
+        if (changed?.before.enabled === false && changed.after.enabled === true) {
+          return `mcp-server:${step.id} cannot be enabled before an MCP health-check adapter is available`;
         }
       }
       return `${environmentBundleApplicationStepLabel(current, incoming, step.component, step.id)} requires an application adapter`;
@@ -445,7 +545,10 @@ export function getEnvironmentBundleApplyReadiness(
     }
   }
 
-  const hasSupportedChanges = capabilityProfileChanged || providerInstancesToDisable.length > 0;
+  const hasSupportedChanges =
+    capabilityProfileChanged ||
+    providerInstancesToDisable.length > 0 ||
+    codexMcpServersToDisable.length > 0;
   if (!hasSupportedChanges && blockers.length === 0) {
     blockers.push("The bundle does not contain any supported changes to apply");
   }
@@ -454,6 +557,7 @@ export function getEnvironmentBundleApplyReadiness(
     capabilityProfileChanged,
     blockers,
     providerInstancesToDisable,
+    codexMcpServersToDisable,
   };
 }
 
@@ -470,22 +574,64 @@ export function buildEnvironmentBundleSettingsPatch(
     Record<string, ProviderInstanceConfig>
   >;
   const nextProviderInstances: Record<string, ProviderInstanceConfig> = { ...providerInstances };
+  let providerInstancesChanged = false;
+  let legacyCodexLaunchArgs = context.providers?.codex.launchArgs;
+  let legacyCodexChanged = false;
   for (const instanceId of readiness.providerInstancesToDisable) {
     const instance = providerInstances[instanceId];
     if (!instance) {
       throw new Error(`Environment Bundle provider settings not found: ${instanceId}`);
     }
     nextProviderInstances[instanceId] = { ...instance, enabled: false };
+    providerInstancesChanged = true;
+  }
+  for (const target of readiness.codexMcpServersToDisable) {
+    const instance = nextProviderInstances[target.instanceId];
+    if (!instance && target.instanceId === CODEX_DEFAULT_INSTANCE_ID) {
+      if (!context.providers?.codex) {
+        throw new Error(`Environment Bundle Codex settings not found: ${target.instanceId}`);
+      }
+      legacyCodexLaunchArgs = appendCodexMcpDisableOverride(
+        legacyCodexLaunchArgs,
+        target.serverName,
+      );
+      legacyCodexChanged = true;
+      continue;
+    }
+    if (!instance || instance.driver !== "codex") {
+      throw new Error(`Environment Bundle Codex settings not found: ${target.instanceId}`);
+    }
+    const config =
+      instance.config !== null &&
+      typeof instance.config === "object" &&
+      !Array.isArray(instance.config)
+        ? (instance.config as Readonly<Record<string, unknown>>)
+        : {};
+    nextProviderInstances[target.instanceId] = {
+      ...instance,
+      config: {
+        ...config,
+        launchArgs: appendCodexMcpDisableOverride(config.launchArgs, target.serverName),
+      },
+    };
+    providerInstancesChanged = true;
   }
 
   return {
     ...(readiness.capabilityProfileChanged
       ? { capabilityProfile: incoming.capabilityProfile }
       : {}),
-    ...(readiness.providerInstancesToDisable.length > 0
+    ...(providerInstancesChanged
       ? {
           providerInstances:
             nextProviderInstances as unknown as ServerSettings["providerInstances"],
+        }
+      : {}),
+    ...(legacyCodexChanged
+      ? {
+          providers: {
+            codex: { launchArgs: legacyCodexLaunchArgs! },
+          },
         }
       : {}),
   };

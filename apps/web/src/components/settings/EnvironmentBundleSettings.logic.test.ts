@@ -261,18 +261,21 @@ describe("Environment Bundle settings", () => {
       capabilityProfileChanged: true,
       blockers: [],
       providerInstancesToDisable: [],
+      codexMcpServersToDisable: [],
     });
     expect(getEnvironmentBundleApplyReadiness(current, withUnsupportedSkill)).toEqual({
       canApply: false,
       capabilityProfileChanged: true,
       blockers: ["skill:a requires an application adapter"],
       providerInstancesToDisable: [],
+      codexMcpServersToDisable: [],
     });
     expect(getEnvironmentBundleApplyReadiness(current, current)).toEqual({
       canApply: false,
       capabilityProfileChanged: false,
       blockers: ["The bundle does not contain any supported changes to apply"],
       providerInstancesToDisable: [],
+      codexMcpServersToDisable: [],
     });
   });
 
@@ -311,6 +314,7 @@ describe("Environment Bundle settings", () => {
       capabilityProfileChanged: false,
       blockers: [],
       providerInstancesToDisable: ["codex_work"],
+      codexMcpServersToDisable: [],
     });
     expect(buildEnvironmentBundleSettingsPatch(current, incoming, { providerInstances })).toEqual({
       providerInstances: {
@@ -354,6 +358,266 @@ describe("Environment Bundle settings", () => {
         "provider:codex_work cannot be enabled before a provider health-check adapter is available",
       ],
       providerInstancesToDisable: [],
+      codexMcpServersToDisable: [],
+    });
+  });
+
+  it("prepares a Codex MCP disable as an instance-local launch override", () => {
+    const providerInstance = {
+      driver: "codex",
+      displayName: "Work Codex",
+      enabled: true,
+      config: {
+        homePath: "C:/secret-local-path",
+        launchArgs: "--strict-config -c model_reasoning_effort=high",
+        apiKey: "never-export",
+      },
+    };
+    const providerInstances = {
+      codex_work: providerInstance,
+    } as unknown as ServerSettings["providerInstances"];
+    const current = buildEnvironmentBundleInventory({
+      environmentId: "desk",
+      environmentLabel: "Desk",
+      cwd: null,
+      capabilityProfile: profile,
+      serverInventory: {
+        mcpServers: [
+          {
+            serverId: "codex:codex_work:firebase",
+            origin: "codex:codex_work:effective-config",
+            enabled: true,
+            configurationRef: "codex:codex_work:mcp:firebase",
+            configurationHash: "a".repeat(64),
+            credentialRefs: [],
+            allowedTools: ["query"],
+            blockedTools: ["delete"],
+          },
+        ],
+        mcpCoverage: "partial",
+        projectInstructions: [],
+        projectInstructionsCoverage: "partial",
+      },
+      providers: [
+        {
+          instanceId: "codex_work",
+          driver: "codex",
+          enabled: true,
+          version: "1.2.3",
+          skills: [],
+        },
+      ],
+    });
+    const incoming = {
+      ...current,
+      mcpServers: [
+        { ...current.mcpServers[0]!, enabled: false, configurationHash: "b".repeat(64) },
+      ],
+    };
+
+    expect(getEnvironmentBundleApplyReadiness(current, incoming, { providerInstances })).toEqual({
+      canApply: true,
+      capabilityProfileChanged: false,
+      blockers: [],
+      providerInstancesToDisable: [],
+      codexMcpServersToDisable: [
+        {
+          serverId: "codex:codex_work:firebase",
+          instanceId: "codex_work",
+          serverName: "firebase",
+        },
+      ],
+    });
+    expect(buildEnvironmentBundleSettingsPatch(current, incoming, { providerInstances })).toEqual({
+      providerInstances: {
+        codex_work: {
+          ...providerInstance,
+          config: {
+            ...providerInstance.config,
+            launchArgs:
+              "--strict-config -c model_reasoning_effort=high -c mcp_servers.firebase.enabled=false",
+          },
+        },
+      },
+    });
+    expect(providerInstance.config.launchArgs).toBe(
+      "--strict-config -c model_reasoning_effort=high",
+    );
+  });
+
+  it("prepares a default Codex MCP disable through legacy provider settings", () => {
+    const providers = {
+      codex: {
+        enabled: true,
+        homePath: "C:/secret-local-path",
+        launchArgs: "--strict-config -c model_reasoning_effort=high",
+      },
+    } as unknown as ServerSettings["providers"];
+    const providerInstances = {} as ServerSettings["providerInstances"];
+    const current = buildEnvironmentBundleInventory({
+      environmentId: "desk",
+      environmentLabel: "Desk",
+      cwd: null,
+      capabilityProfile: profile,
+      serverInventory: {
+        mcpServers: [
+          {
+            serverId: "codex:codex:firebase",
+            origin: "codex:codex:effective-config",
+            enabled: true,
+            configurationRef: "codex:codex:mcp:firebase",
+            configurationHash: "a".repeat(64),
+            credentialRefs: [],
+            allowedTools: ["query"],
+            blockedTools: ["delete"],
+          },
+        ],
+        mcpCoverage: "partial",
+        projectInstructions: [],
+        projectInstructionsCoverage: "partial",
+      },
+      providers: [
+        {
+          instanceId: "codex",
+          driver: "codex",
+          enabled: true,
+          version: "1.2.3",
+          skills: [],
+        },
+      ],
+    });
+    const incoming = {
+      ...current,
+      mcpServers: [
+        { ...current.mcpServers[0]!, enabled: false, configurationHash: "b".repeat(64) },
+      ],
+    };
+    const context = { providerInstances, providers };
+
+    expect(getEnvironmentBundleApplyReadiness(current, incoming, context)).toEqual({
+      canApply: true,
+      capabilityProfileChanged: false,
+      blockers: [],
+      providerInstancesToDisable: [],
+      codexMcpServersToDisable: [
+        {
+          serverId: "codex:codex:firebase",
+          instanceId: "codex",
+          serverName: "firebase",
+        },
+      ],
+    });
+    expect(buildEnvironmentBundleSettingsPatch(current, incoming, context)).toEqual({
+      providers: {
+        codex: {
+          launchArgs:
+            "--strict-config -c model_reasoning_effort=high -c mcp_servers.firebase.enabled=false",
+        },
+      },
+    });
+  });
+
+  it("keeps Codex MCP re-enablement blocked until health checking exists", () => {
+    const providerInstances = {
+      codex_work: {
+        driver: "codex",
+        enabled: true,
+        config: { launchArgs: "-c mcp_servers.firebase.enabled=false" },
+      },
+    } as unknown as ServerSettings["providerInstances"];
+    const current = buildEnvironmentBundleInventory({
+      environmentId: "desk",
+      environmentLabel: "Desk",
+      cwd: null,
+      capabilityProfile: profile,
+      serverInventory: {
+        mcpServers: [
+          {
+            serverId: "codex:codex_work:firebase",
+            origin: "codex:codex_work:effective-config",
+            enabled: false,
+            configurationRef: "codex:codex_work:mcp:firebase",
+            credentialRefs: [],
+            allowedTools: [],
+            blockedTools: [],
+          },
+        ],
+        mcpCoverage: "partial",
+        projectInstructions: [],
+        projectInstructionsCoverage: "partial",
+      },
+      providers: [
+        {
+          instanceId: "codex_work",
+          driver: "codex",
+          enabled: true,
+          version: null,
+          skills: [],
+        },
+      ],
+    });
+    const incoming = {
+      ...current,
+      mcpServers: [{ ...current.mcpServers[0]!, enabled: true }],
+    };
+
+    expect(getEnvironmentBundleApplyReadiness(current, incoming, { providerInstances })).toEqual({
+      canApply: false,
+      capabilityProfileChanged: false,
+      blockers: [
+        "mcp-server:codex:codex_work:firebase cannot be enabled before an MCP health-check adapter is available",
+      ],
+      providerInstancesToDisable: [],
+      codexMcpServersToDisable: [],
+    });
+  });
+
+  it("keeps non-Codex MCP disablement blocked until its provider adapter exists", () => {
+    const providerInstances = {
+      claude_work: { driver: "claudeAgent", enabled: true, config: {} },
+    } as unknown as ServerSettings["providerInstances"];
+    const current = buildEnvironmentBundleInventory({
+      environmentId: "desk",
+      environmentLabel: "Desk",
+      cwd: null,
+      capabilityProfile: profile,
+      serverInventory: {
+        mcpServers: [
+          {
+            serverId: "claude:claude_work:firebase",
+            origin: "claude:claude_work:project-config",
+            enabled: true,
+            configurationRef: "claude:claude_work:mcp:firebase",
+            credentialRefs: [],
+            allowedTools: [],
+            blockedTools: [],
+          },
+        ],
+        mcpCoverage: "partial",
+        projectInstructions: [],
+        projectInstructionsCoverage: "partial",
+      },
+      providers: [
+        {
+          instanceId: "claude_work",
+          driver: "claudeAgent",
+          enabled: true,
+          version: null,
+          skills: [],
+        },
+      ],
+    });
+    const incoming = {
+      ...current,
+      mcpServers: [{ ...current.mcpServers[0]!, enabled: false }],
+    };
+
+    expect(getEnvironmentBundleApplyReadiness(current, incoming, { providerInstances })).toEqual({
+      canApply: false,
+      capabilityProfileChanged: false,
+      blockers: ["mcp-server:claude:claude_work:firebase requires an application adapter"],
+      providerInstancesToDisable: [],
+      codexMcpServersToDisable: [],
     });
   });
 
@@ -453,6 +717,7 @@ describe("Environment Bundle settings", () => {
       capabilityProfileChanged: true,
       blockers: ["credential:environment-variable:FIREBASE_TOKEN has not been checked"],
       providerInstancesToDisable: [],
+      codexMcpServersToDisable: [],
     });
     expect(
       getEnvironmentBundleApplyReadiness(current, incoming, {
