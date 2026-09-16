@@ -161,10 +161,22 @@ const EnvironmentBundleOpenCodeMcpDisableOperation = Schema.Struct({
   providerInstanceIds: Schema.Array(StableId).check(Schema.isMinLength(1)),
   requiresProviderReload: Schema.Literal(true),
 });
+const EnvironmentBundleProviderEnableOperation = Schema.Struct({
+  component: Schema.Literal("provider"),
+  operation: Schema.Literal("enable"),
+  adapter: Schema.Literal("provider-settings-enable"),
+  instanceId: StableId,
+  driver: StableId,
+  settingsTarget: Schema.Literals(["legacy", "instance"]),
+  providerInstanceIds: Schema.Array(StableId).check(Schema.isMinLength(1)),
+  requiresProviderReload: Schema.Literal(true),
+  healthCheckRequired: Schema.Literal(true),
+});
 export const EnvironmentBundleApplyOperation = Schema.Union([
   EnvironmentBundleClaudeSkillDisableOperation,
   EnvironmentBundleClaudeMcpDisableOperation,
   EnvironmentBundleOpenCodeMcpDisableOperation,
+  EnvironmentBundleProviderEnableOperation,
 ]);
 export type EnvironmentBundleApplyOperation = typeof EnvironmentBundleApplyOperation.Type;
 

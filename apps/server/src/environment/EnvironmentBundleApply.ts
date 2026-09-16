@@ -1,10 +1,14 @@
 import {
   EnvironmentBundleApplyError,
   type EnvironmentBundle,
+  type EnvironmentBundleApplyOperation,
   type EnvironmentBundleApplyPlan,
   type EnvironmentBundleApplyResult,
   type EnvironmentBundleServerInventory,
   ProviderInstanceId,
+  type ServerSettingsError,
+  type ServerSettings,
+  type ServerSettingsPatch,
   type ServerProvider,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -18,9 +22,14 @@ import {
   writeClaudeSkillDisableOverrides,
 } from "./ClaudeSkillOverrideTarget.ts";
 import {
-  areEnvironmentBundleDisableOperationsEffective,
+  areEnvironmentBundleApplyOperationsEffective,
   buildEnvironmentBundleApplyPlan,
 } from "./EnvironmentBundleApplyPlan.ts";
+import {
+  canRollbackProviderEnables,
+  providerEnablePatch,
+  providerEnableTargetStateHash,
+} from "./EnvironmentBundleProviderEnableTarget.ts";
 import {
   loadOpenCodeMcpOverrideTargetState,
   rollbackOpenCodeMcpDisableOverrides,
@@ -28,6 +37,20 @@ import {
 } from "./OpenCodeMcpOverrideTarget.ts";
 
 const EMPTY_TARGET_STATE_HASH = "0".repeat(64);
+
+type ProviderEnableOperation = Extract<
+  EnvironmentBundleApplyOperation,
+  { readonly adapter: "provider-settings-enable" }
+>;
+
+function providerEnableOperations(
+  operations: ReadonlyArray<EnvironmentBundleApplyOperation>,
+): ReadonlyArray<ProviderEnableOperation> {
+  return operations.filter(
+    (operation): operation is ProviderEnableOperation =>
+      operation.adapter === "provider-settings-enable",
+  );
+}
 
 function applyError(
   reason: EnvironmentBundleApplyError["reason"],
@@ -49,6 +72,7 @@ export const planEnvironmentBundleApply = Effect.fn("planEnvironmentBundleApply"
     readonly incoming: EnvironmentBundle;
     readonly providers: ReadonlyArray<ServerProvider>;
     readonly serverInventory: EnvironmentBundleServerInventory;
+    readonly settings?: ServerSettings;
     readonly cwd: string;
   }) {
     const draft = buildEnvironmentBundleApplyPlan({
@@ -56,6 +80,20 @@ export const planEnvironmentBundleApply = Effect.fn("planEnvironmentBundleApply"
       targetStateHash: EMPTY_TARGET_STATE_HASH,
     });
     if (draft.blockers.length > 0 || draft.operations.length === 0) return draft;
+    const providerOperations = providerEnableOperations(draft.operations);
+    if (providerOperations.length === draft.operations.length) {
+      if (!input.settings) {
+        return {
+          ...draft,
+          canApply: false,
+          blockers: ["Provider settings could not be inspected for the Environment Bundle dry run"],
+        };
+      }
+      return buildEnvironmentBundleApplyPlan({
+        ...input,
+        targetStateHash: providerEnableTargetStateHash(input.settings, providerOperations),
+      });
+    }
     const usesOpenCodeTarget = draft.operations.every(
       (operation) => operation.adapter === "opencode-project-mcp-override",
     );
@@ -86,6 +124,10 @@ export const applyEnvironmentBundle = Effect.fn("applyEnvironmentBundle")(functi
   readonly expectedPlan: EnvironmentBundleApplyPlan;
   readonly cwd: string;
   readonly getProviders: Effect.Effect<ReadonlyArray<ServerProvider>>;
+  readonly getSettings?: Effect.Effect<ServerSettings, ServerSettingsError>;
+  readonly updateSettings?: (
+    patch: ServerSettingsPatch,
+  ) => Effect.Effect<ServerSettings, ServerSettingsError>;
   readonly getServerInventory: Effect.Effect<
     EnvironmentBundleServerInventory,
     never,
@@ -96,6 +138,9 @@ export const applyEnvironmentBundle = Effect.fn("applyEnvironmentBundle")(functi
     readonly cwd: string;
     readonly force?: boolean;
   }) => Effect.Effect<ReadonlyArray<ServerProvider>>;
+  readonly refreshProviderInstance?: (
+    instanceId: ProviderInstanceId,
+  ) => Effect.Effect<ReadonlyArray<ServerProvider>>;
 }): Effect.fn.Return<
   EnvironmentBundleApplyResult,
   EnvironmentBundleApplyError,
@@ -114,11 +159,22 @@ export const applyEnvironmentBundle = Effect.fn("applyEnvironmentBundle")(functi
       applyError("snapshot-failed", "Environment Bundle inventory could not be refreshed"),
     ),
   );
+  const settings = input.getSettings
+    ? yield* input.getSettings.pipe(
+        Effect.mapError(() =>
+          applyError(
+            "snapshot-failed",
+            "Provider settings could not be read for Environment Bundle apply",
+          ),
+        ),
+      )
+    : undefined;
   const currentPlan = yield* planEnvironmentBundleApply({
     current: input.current,
     incoming: input.incoming,
     providers,
     serverInventory,
+    ...(settings ? { settings } : {}),
     cwd: input.cwd,
   });
   if (!environmentBundleApplyPlansMatch(input.expectedPlan, currentPlan)) {
@@ -131,6 +187,90 @@ export const applyEnvironmentBundle = Effect.fn("applyEnvironmentBundle")(functi
     return yield* applyError(
       "blocked",
       currentPlan.blockers[0] ?? "Environment Bundle apply is blocked",
+    );
+  }
+
+  const providerOperations = providerEnableOperations(currentPlan.operations);
+  if (providerOperations.length === currentPlan.operations.length) {
+    if (
+      !settings ||
+      !input.getSettings ||
+      !input.updateSettings ||
+      !input.refreshProviderInstance
+    ) {
+      return yield* applyError(
+        "blocked",
+        "Provider enable requires settings persistence and provider health-check adapters",
+      );
+    }
+    const writtenSettings = yield* input
+      .updateSettings(providerEnablePatch(providerOperations, true))
+      .pipe(
+        Effect.mapError(() =>
+          applyError("persistence-failed", "Provider settings could not be enabled"),
+        ),
+      );
+    const providerInstanceIds = providerOperations.map((operation) =>
+      ProviderInstanceId.make(operation.instanceId),
+    );
+    const refreshResult = yield* Effect.exit(
+      Effect.forEach(providerInstanceIds, input.refreshProviderInstance, { concurrency: 1 }),
+    );
+    const refreshedProviders = Exit.isSuccess(refreshResult)
+      ? (refreshResult.value.at(-1) ?? providers)
+      : providers;
+    if (
+      Exit.isSuccess(refreshResult) &&
+      areEnvironmentBundleApplyOperationsEffective({
+        providers: refreshedProviders,
+        serverInventory,
+        cwd: input.cwd,
+        operations: currentPlan.operations,
+      })
+    ) {
+      return {
+        bundleId: input.incoming.bundleId,
+        appliedOperations: currentPlan.operations,
+        refreshedProviderInstanceIds: providerInstanceIds,
+      };
+    }
+
+    const rollbackSettings = yield* input.getSettings.pipe(
+      Effect.mapError(() =>
+        applyError(
+          "rollback-failed",
+          "Provider health check failed and current settings could not be inspected for rollback",
+        ),
+      ),
+    );
+    if (
+      !canRollbackProviderEnables({
+        current: rollbackSettings,
+        written: writtenSettings,
+        operations: providerOperations,
+      })
+    ) {
+      return yield* applyError(
+        "rollback-failed",
+        "Provider health check failed and provider settings changed before rollback",
+      );
+    }
+    yield* input
+      .updateSettings(providerEnablePatch(providerOperations, false))
+      .pipe(
+        Effect.mapError(() =>
+          applyError(
+            "rollback-failed",
+            "Provider health check failed and the previous disabled state could not be restored",
+          ),
+        ),
+      );
+    yield* Effect.forEach(providerInstanceIds, input.refreshProviderInstance, {
+      concurrency: 1,
+    }).pipe(Effect.ignore);
+    return yield* applyError(
+      "health-check-failed",
+      "Provider did not become ready after enablement; settings were rolled back",
     );
   }
 
@@ -207,7 +347,7 @@ export const applyEnvironmentBundle = Effect.fn("applyEnvironmentBundle")(functi
   );
   const effective =
     Exit.isSuccess(refreshResult) &&
-    areEnvironmentBundleDisableOperationsEffective({
+    areEnvironmentBundleApplyOperationsEffective({
       providers: refreshedProviders,
       serverInventory: refreshedInventory,
       cwd: input.cwd,

@@ -2530,6 +2530,7 @@ const makeWsRpcLayer = (
                 incoming,
                 providers,
                 serverInventory,
+                settings: rawSettings,
                 cwd: config.cwd,
               });
             }),
@@ -2544,6 +2545,8 @@ const makeWsRpcLayer = (
               expectedPlan,
               cwd: config.cwd,
               getProviders: providerRegistry.getProviders,
+              getSettings: serverSettings.getSettings,
+              updateSettings: serverSettings.updateSettings,
               getServerInventory: serverSettings.getSettings.pipe(
                 Effect.orDie,
                 Effect.flatMap((rawSettings) =>
@@ -2557,6 +2560,7 @@ const makeWsRpcLayer = (
                 ),
               ),
               refreshWorkspaceSnapshot: providerRegistry.refreshWorkspaceSnapshot,
+              refreshProviderInstance: providerRegistry.refreshInstance,
             }),
             { "rpc.aggregate": "server" },
           ),

@@ -1,6 +1,15 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
-import type { EnvironmentBundle, ServerProvider } from "@t3tools/contracts";
+import {
+  DEFAULT_SERVER_SETTINGS,
+  type EnvironmentBundle,
+  ProviderDriverKind,
+  ProviderInstanceId,
+  type ServerProvider,
+  type ServerSettings,
+  type ServerSettingsPatch,
+} from "@t3tools/contracts";
+import { applyServerSettingsPatch } from "@t3tools/shared/serverSettings";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -88,7 +97,212 @@ const emptyServerInventory = {
   projectInstructionsCoverage: "partial" as const,
 };
 
+function providerBundle(enabled: boolean): EnvironmentBundle {
+  return {
+    ...bundle(true),
+    skills: [],
+    providers: [{ instanceId: "codex", driver: "codex", enabled, version: "1.0.0" }],
+  };
+}
+
+function codexProvider(enabled: boolean, status: ServerProvider["status"]): ServerProvider {
+  return {
+    ...provider(true),
+    instanceId: "codex",
+    driver: "codex",
+    enabled,
+    status,
+    workspaceSnapshots: [],
+  } as unknown as ServerProvider;
+}
+
+function disabledCodexSettings(): ServerSettings {
+  return {
+    ...DEFAULT_SERVER_SETTINGS,
+    providers: {
+      ...DEFAULT_SERVER_SETTINGS.providers,
+      codex: { ...DEFAULT_SERVER_SETTINGS.providers.codex, enabled: false },
+    },
+  };
+}
+
 describe("EnvironmentBundleApply", () => {
+  it.effect("enables a legacy provider and keeps it enabled only after a ready health check", () =>
+    Effect.gen(function* () {
+      const settingsRef = yield* Ref.make(disabledCodexSettings());
+      const before = [codexProvider(false, "disabled")];
+      const updateSettings = (patch: ServerSettingsPatch) =>
+        Ref.modify(settingsRef, (current) => {
+          const next = applyServerSettingsPatch(current, patch);
+          return [next, next] as const;
+        });
+      const expectedPlan = yield* planEnvironmentBundleApply({
+        current: providerBundle(false),
+        incoming: providerBundle(true),
+        providers: before,
+        serverInventory: emptyServerInventory,
+        settings: yield* Ref.get(settingsRef),
+        cwd: "C:\\repo",
+      });
+
+      const result = yield* applyEnvironmentBundle({
+        current: providerBundle(false),
+        incoming: providerBundle(true),
+        expectedPlan,
+        cwd: "C:\\repo",
+        getProviders: Effect.succeed(before),
+        getSettings: Ref.get(settingsRef),
+        updateSettings,
+        getServerInventory: Effect.succeed(emptyServerInventory),
+        refreshWorkspaceSnapshot: () => Effect.succeed(before),
+        refreshProviderInstance: () => Effect.succeed([codexProvider(true, "ready")]),
+      });
+
+      expect(result.appliedOperations).toEqual([
+        expect.objectContaining({
+          component: "provider",
+          adapter: "provider-settings-enable",
+          instanceId: "codex",
+        }),
+      ]);
+      expect((yield* Ref.get(settingsRef)).providers.codex.enabled).toBe(true);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("enables a modern provider instance without replacing its configuration", () =>
+    Effect.gen(function* () {
+      const settingsRef = yield* Ref.make<ServerSettings>({
+        ...DEFAULT_SERVER_SETTINGS,
+        providerInstances: {
+          [ProviderInstanceId.make("codex")]: {
+            driver: ProviderDriverKind.make("codex"),
+            enabled: false,
+            config: { launchArgs: "--preserve" },
+          },
+          [ProviderInstanceId.make("claudeAgent")]: {
+            driver: ProviderDriverKind.make("claudeAgent"),
+            enabled: true,
+            config: {},
+          },
+        },
+      });
+      const before = [codexProvider(false, "disabled")];
+      const updateSettings = (patch: ServerSettingsPatch) =>
+        Ref.modify(settingsRef, (current) => {
+          const next = applyServerSettingsPatch(current, patch);
+          return [next, next] as const;
+        });
+      const expectedPlan = yield* planEnvironmentBundleApply({
+        current: providerBundle(false),
+        incoming: providerBundle(true),
+        providers: before,
+        serverInventory: emptyServerInventory,
+        settings: yield* Ref.get(settingsRef),
+        cwd: "C:\\repo",
+      });
+
+      yield* applyEnvironmentBundle({
+        current: providerBundle(false),
+        incoming: providerBundle(true),
+        expectedPlan,
+        cwd: "C:\\repo",
+        getProviders: Effect.succeed(before),
+        getSettings: Ref.get(settingsRef),
+        updateSettings,
+        getServerInventory: Effect.succeed(emptyServerInventory),
+        refreshWorkspaceSnapshot: () => Effect.succeed(before),
+        refreshProviderInstance: () => Effect.succeed([codexProvider(true, "ready")]),
+      });
+
+      const settings = yield* Ref.get(settingsRef);
+      expect(settings.providerInstances[ProviderInstanceId.make("codex")]).toEqual({
+        driver: "codex",
+        enabled: true,
+        config: { launchArgs: "--preserve" },
+      });
+      expect(settings.providerInstances[ProviderInstanceId.make("claudeAgent")]?.enabled).toBe(
+        true,
+      );
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("rolls a provider back to disabled when the health check is not ready", () =>
+    Effect.gen(function* () {
+      const settingsRef = yield* Ref.make(disabledCodexSettings());
+      const before = [codexProvider(false, "disabled")];
+      const updateSettings = (patch: ServerSettingsPatch) =>
+        Ref.modify(settingsRef, (current) => {
+          const next = applyServerSettingsPatch(current, patch);
+          return [next, next] as const;
+        });
+      const expectedPlan = yield* planEnvironmentBundleApply({
+        current: providerBundle(false),
+        incoming: providerBundle(true),
+        providers: before,
+        serverInventory: emptyServerInventory,
+        settings: yield* Ref.get(settingsRef),
+        cwd: "C:\\repo",
+      });
+
+      const error = yield* applyEnvironmentBundle({
+        current: providerBundle(false),
+        incoming: providerBundle(true),
+        expectedPlan,
+        cwd: "C:\\repo",
+        getProviders: Effect.succeed(before),
+        getSettings: Ref.get(settingsRef),
+        updateSettings,
+        getServerInventory: Effect.succeed(emptyServerInventory),
+        refreshWorkspaceSnapshot: () => Effect.succeed(before),
+        refreshProviderInstance: () => Effect.succeed([codexProvider(true, "error")]),
+      }).pipe(Effect.flip);
+
+      expect(error.reason).toBe("health-check-failed");
+      expect((yield* Ref.get(settingsRef)).providers.codex.enabled).toBe(false);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("does not overwrite a concurrent provider edit during rollback", () =>
+    Effect.gen(function* () {
+      const settingsRef = yield* Ref.make(disabledCodexSettings());
+      const before = [codexProvider(false, "disabled")];
+      const updateSettings = (patch: ServerSettingsPatch) =>
+        Ref.modify(settingsRef, (current) => {
+          const next = applyServerSettingsPatch(current, patch);
+          return [next, next] as const;
+        });
+      const expectedPlan = yield* planEnvironmentBundleApply({
+        current: providerBundle(false),
+        incoming: providerBundle(true),
+        providers: before,
+        serverInventory: emptyServerInventory,
+        settings: yield* Ref.get(settingsRef),
+        cwd: "C:\\repo",
+      });
+
+      const error = yield* applyEnvironmentBundle({
+        current: providerBundle(false),
+        incoming: providerBundle(true),
+        expectedPlan,
+        cwd: "C:\\repo",
+        getProviders: Effect.succeed(before),
+        getSettings: Ref.get(settingsRef),
+        updateSettings,
+        getServerInventory: Effect.succeed(emptyServerInventory),
+        refreshWorkspaceSnapshot: () => Effect.succeed(before),
+        refreshProviderInstance: () =>
+          updateSettings({ providers: { codex: { launchArgs: "--concurrent-edit" } } }).pipe(
+            Effect.as([codexProvider(true, "error")]),
+          ),
+      }).pipe(Effect.flip);
+
+      expect(error.reason).toBe("rollback-failed");
+      const settings = yield* Ref.get(settingsRef);
+      expect(settings.providers.codex.enabled).toBe(true);
+      expect(settings.providers.codex.launchArgs).toBe("--concurrent-edit");
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("writes, refreshes, and verifies an OpenCode project MCP disable", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;

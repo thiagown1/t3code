@@ -492,6 +492,36 @@ describe("serverSettings helpers", () => {
     });
   });
 
+  it("merges provider instance enablement without replacing opaque config or sibling instances", () => {
+    const codexId = ProviderInstanceId.make("codex");
+    const claudeId = ProviderInstanceId.make("claude-work");
+    const current = {
+      ...DEFAULT_SERVER_SETTINGS,
+      providerInstances: {
+        [codexId]: {
+          driver: ProviderDriverKind.make("codex"),
+          enabled: false,
+          config: { homePath: "~/.codex", token: "opaque" },
+        },
+        [claudeId]: {
+          driver: ProviderDriverKind.make("claudeAgent"),
+          enabled: true,
+          config: { binaryPath: "claude" },
+        },
+      },
+    };
+
+    const next = applyServerSettingsPatch(current, {
+      providerInstanceEnablement: { [codexId]: true },
+    });
+    expect(next.providerInstances[codexId]).toEqual({
+      driver: ProviderDriverKind.make("codex"),
+      enabled: true,
+      config: { homePath: "~/.codex", token: "opaque" },
+    });
+    expect(next.providerInstances[claudeId]).toBe(current.providerInstances[claudeId]);
+  });
+
   it("upserts and removes usageLimitSources per entry so concurrent edits cannot clobber", () => {
     const hubA = UsageLimitSourceId.make("cliproxy-a");
     const hubB = UsageLimitSourceId.make("cliproxy-b");

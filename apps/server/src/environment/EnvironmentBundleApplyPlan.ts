@@ -1,10 +1,12 @@
 import { isDeepStrictEqual } from "node:util";
 
+import { ProviderInstanceId } from "@t3tools/contracts";
 import type {
   EnvironmentBundle,
   EnvironmentBundleApplyOperation,
   EnvironmentBundleApplyPlan,
   EnvironmentBundleServerInventory,
+  ServerSettings,
   ServerProvider,
   ServerProviderSkill,
 } from "@t3tools/contracts";
@@ -55,13 +57,25 @@ export function environmentBundleProviderSkillId(
   return `${provider.instanceId}:${skillOrigin(skill)}:${skill.name}`;
 }
 
-export function areEnvironmentBundleDisableOperationsEffective(input: {
+export function areEnvironmentBundleApplyOperationsEffective(input: {
   readonly providers: ReadonlyArray<ServerProvider>;
   readonly serverInventory: EnvironmentBundleServerInventory;
   readonly cwd: string;
   readonly operations: ReadonlyArray<EnvironmentBundleApplyOperation>;
 }): boolean {
   return input.operations.every((operation) => {
+    if (operation.component === "provider") {
+      return input.providers.some(
+        (provider) =>
+          provider.instanceId === operation.instanceId &&
+          provider.driver === operation.driver &&
+          provider.enabled &&
+          provider.installed &&
+          provider.availability !== "unavailable" &&
+          provider.status === "ready" &&
+          provider.auth.status !== "unauthenticated",
+      );
+    }
     if (operation.component === "mcp") {
       return operation.targetIds.every((targetId) =>
         input.serverInventory.mcpServers.some(
@@ -137,6 +151,7 @@ export function buildEnvironmentBundleApplyPlan(input: {
   readonly incoming: EnvironmentBundle;
   readonly providers: ReadonlyArray<ServerProvider>;
   readonly serverInventory: EnvironmentBundleServerInventory;
+  readonly settings?: ServerSettings;
   readonly cwd: string;
   readonly targetStateHash: string;
 }): EnvironmentBundleApplyPlan {
@@ -147,7 +162,8 @@ export function buildEnvironmentBundleApplyPlan(input: {
       (step) =>
         step.component !== "bundle" &&
         step.component !== "skill" &&
-        step.component !== "mcp-server",
+        step.component !== "mcp-server" &&
+        step.component !== "provider",
     )
     .map((step) => unsupportedStepMessage(step.component, step.id));
   const requestedDisables = new Map<
@@ -291,15 +307,78 @@ export function buildEnvironmentBundleApplyPlan(input: {
     });
   }
 
+  for (const change of diff.providers.changed) {
+    const { before, after } = change;
+    if (before.enabled || !after.enabled || !equalExceptEnabled(before, after)) {
+      blockers.push(`provider:${after.instanceId} supports only metadata-preserving enable`);
+      continue;
+    }
+    const actual = input.providers.find(
+      (provider) => provider.instanceId === after.instanceId && provider.driver === after.driver,
+    );
+    if (
+      !actual ||
+      actual.enabled ||
+      !actual.installed ||
+      actual.availability === "unavailable" ||
+      (actual.version ?? undefined) !== before.version
+    ) {
+      blockers.push(
+        `provider:${after.instanceId} is not a disabled available provider in the current environment`,
+      );
+      continue;
+    }
+    if (!input.settings) {
+      blockers.push(`provider:${after.instanceId} settings could not be inspected`);
+      continue;
+    }
+    const providerInstance =
+      input.settings.providerInstances[ProviderInstanceId.make(after.instanceId)];
+    const legacyProvider = (
+      input.settings.providers as Readonly<
+        Record<string, { readonly enabled?: boolean } | undefined>
+      >
+    )[after.driver];
+    const settingsTarget = providerInstance ? "instance" : "legacy";
+    if (
+      providerInstance
+        ? providerInstance.driver !== after.driver || providerInstance.enabled !== false
+        : after.instanceId !== after.driver || !legacyProvider || legacyProvider.enabled !== false
+    ) {
+      blockers.push(`provider:${after.instanceId} has no disabled settings target`);
+      continue;
+    }
+    operationByName.set(`provider:${after.instanceId}`, {
+      component: "provider",
+      operation: "enable",
+      adapter: "provider-settings-enable",
+      instanceId: after.instanceId,
+      driver: after.driver,
+      settingsTarget,
+      providerInstanceIds: [after.instanceId],
+      requiresProviderReload: true,
+      healthCheckRequired: true,
+    });
+  }
+  for (const provider of diff.providers.added)
+    blockers.push(unsupportedStepMessage("provider", provider.instanceId));
+  for (const provider of diff.providers.removed)
+    blockers.push(unsupportedStepMessage("provider", provider.instanceId));
+
+  const operationKey = (operation: EnvironmentBundleApplyOperation): string => {
+    if (operation.component === "skill") return `skill:${operation.skillName}`;
+    if (operation.component === "mcp") return `mcp:${operation.serverName}`;
+    return `provider:${operation.instanceId}`;
+  };
   const operations = [...operationByName.values()].sort((left, right) =>
-    `${left.component}:${left.component === "skill" ? left.skillName : left.serverName}`.localeCompare(
-      `${right.component}:${right.component === "skill" ? right.skillName : right.serverName}`,
-    ),
+    operationKey(left).localeCompare(operationKey(right)),
   );
   const targetKinds = new Set(
-    operations.map((operation) =>
-      operation.adapter === "opencode-project-mcp-override" ? "opencode" : "claude",
-    ),
+    operations.map((operation) => {
+      if (operation.adapter === "opencode-project-mcp-override") return "opencode";
+      if (operation.adapter === "provider-settings-enable") return "provider-settings";
+      return "claude";
+    }),
   );
   if (targetKinds.size > 1) {
     blockers.push(

@@ -1442,6 +1442,10 @@ export const ServerSettingsPatch = Schema.Struct({
   // patches risk leaving driver-specific config in a half-merged state.
   // The web UI sends a fully-formed map every time it edits this field.
   providerInstances: Schema.optionalKey(Schema.Record(ProviderInstanceId, ProviderInstanceConfig)),
+  // Atomic per-entry enablement changes. Unlike `providerInstances`, this
+  // never replaces an instance config or another instance written
+  // concurrently; the server merges each flag into its current map.
+  providerInstanceEnablement: Schema.optionalKey(Schema.Record(ProviderInstanceId, Schema.Boolean)),
   // Per-entry, unlike `providerInstances`: a client only ever adds or removes
   // one source, and sending the whole map races another edit that has not
   // echoed back yet. `null` removes; the server merges into its current map.

@@ -1,5 +1,11 @@
 import { describe, expect, it } from "@effect/vitest";
-import type { EnvironmentBundle, ServerProvider } from "@t3tools/contracts";
+import {
+  DEFAULT_SERVER_SETTINGS,
+  type EnvironmentBundle,
+  ProviderDriverKind,
+  ProviderInstanceId,
+  type ServerProvider,
+} from "@t3tools/contracts";
 
 import { buildEnvironmentBundleApplyPlan } from "./EnvironmentBundleApplyPlan.ts";
 
@@ -178,7 +184,9 @@ describe("buildEnvironmentBundleApplyPlan", () => {
       targetStateHash: hash,
     });
     expect(plan.canApply).toBe(false);
-    expect(plan.blockers).toContain("provider:claudeAgent requires an application adapter");
+    expect(plan.blockers).toContain(
+      "provider:claudeAgent supports only metadata-preserving enable",
+    );
   });
 
   it("plans a metadata-preserving Claude project MCP disable", () => {
@@ -301,6 +309,105 @@ describe("buildEnvironmentBundleApplyPlan", () => {
     expect(plan.canApply).toBe(false);
     expect(plan.blockers).toContain(
       "Environment Bundle changes span multiple project configuration targets and cannot be applied atomically",
+    );
+  });
+
+  it("plans a metadata-preserving enable for a configured legacy provider", () => {
+    const current = bundle(
+      [],
+      [{ instanceId: "codex", driver: "codex", enabled: false, version: "1.0.0" }],
+    );
+    const incoming = {
+      ...current,
+      providers: [{ instanceId: "codex", driver: "codex", enabled: true, version: "1.0.0" }],
+    };
+    const disabledProvider = {
+      ...provider({ instanceId: "codex", driver: "codex" }),
+      enabled: false,
+      status: "disabled",
+    } as ServerProvider;
+    const plan = buildEnvironmentBundleApplyPlan({
+      current,
+      incoming,
+      providers: [disabledProvider],
+      serverInventory: serverInventory(current),
+      settings: {
+        ...DEFAULT_SERVER_SETTINGS,
+        providers: {
+          ...DEFAULT_SERVER_SETTINGS.providers,
+          codex: { ...DEFAULT_SERVER_SETTINGS.providers.codex, enabled: false },
+        },
+      },
+      cwd: "C:\\repo",
+      targetStateHash: hash,
+    });
+    expect(plan).toEqual(
+      expect.objectContaining({
+        canApply: true,
+        blockers: [],
+        operations: [
+          {
+            component: "provider",
+            operation: "enable",
+            adapter: "provider-settings-enable",
+            instanceId: "codex",
+            driver: "codex",
+            settingsTarget: "legacy",
+            providerInstanceIds: ["codex"],
+            requiresProviderReload: true,
+            healthCheckRequired: true,
+          },
+        ],
+      }),
+    );
+  });
+
+  it("plans provider enablement through the atomic per-instance settings patch", () => {
+    const current = bundle(
+      [],
+      [{ instanceId: "codex", driver: "codex", enabled: false, version: "1.0.0" }],
+    );
+    const incoming = {
+      ...current,
+      providers: [{ instanceId: "codex", driver: "codex", enabled: true, version: "1.0.0" }],
+    };
+    const plan = buildEnvironmentBundleApplyPlan({
+      current,
+      incoming,
+      providers: [
+        {
+          ...provider({ instanceId: "codex", driver: "codex" }),
+          enabled: false,
+          status: "disabled",
+        } as ServerProvider,
+      ],
+      serverInventory: serverInventory(current),
+      settings: {
+        ...DEFAULT_SERVER_SETTINGS,
+        providerInstances: {
+          [ProviderInstanceId.make("codex")]: {
+            driver: ProviderDriverKind.make("codex"),
+            enabled: false,
+            config: {},
+          },
+        },
+      },
+      cwd: "C:\\repo",
+      targetStateHash: hash,
+    });
+    expect(plan).toEqual(
+      expect.objectContaining({
+        canApply: true,
+        blockers: [],
+        operations: [
+          expect.objectContaining({
+            component: "provider",
+            operation: "enable",
+            instanceId: "codex",
+            settingsTarget: "instance",
+          }),
+        ],
+      }),
     );
   });
 });
