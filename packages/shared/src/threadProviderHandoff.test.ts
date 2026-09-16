@@ -163,6 +163,33 @@ describe("ThreadProviderHandoff", () => {
     );
   });
 
+  it("keeps relative references and web URLs while omitting local Unix paths", () => {
+    const envelope = sanitizeThreadProviderHandoff({
+      ...input(),
+      messages: [
+        {
+          id: "portable-message",
+          role: "user",
+          text: "Read src/config.ts and https://example.com/docs/config",
+          createdAt: NOW,
+          updatedAt: NOW,
+        },
+      ],
+      proposedPlans: [
+        {
+          id: "local-plan",
+          planMarkdown: "Read /workspace/private/plan.md",
+          createdAt: NOW,
+          updatedAt: NOW,
+        },
+      ],
+    });
+    expect(envelope.context.messages).toHaveLength(1);
+    expect(envelope.context.proposedPlans).toEqual([]);
+    expect(envelope.omissions).toContainEqual({ kind: "absolute-path", count: 1 });
+    expect(parseThreadProviderHandoff(serializeThreadProviderHandoff(envelope))).toEqual(envelope);
+  });
+
   it("fails closed on forbidden metadata, limits, secrets, absolute paths, and tampering", () => {
     expect(() =>
       sanitizeThreadProviderHandoff({ ...input(), providerSessionId: "provider-secret" }),
@@ -194,6 +221,27 @@ describe("ThreadProviderHandoff", () => {
         ],
       }).context.messages,
     ).toEqual([]);
+    for (const absolutePath of [
+      "/workspace/private/secret.ts",
+      "/mnt/c/Users/private/secret.ts",
+      "/srv/t3/config.json",
+      "/data/t3/state.sqlite",
+    ]) {
+      expect(
+        sanitizeThreadProviderHandoff({
+          ...input(),
+          messages: [
+            {
+              id: `path-${absolutePath}`,
+              role: "user",
+              text: `Read ${absolutePath}`,
+              createdAt: NOW,
+              updatedAt: NOW,
+            },
+          ],
+        }).context.messages,
+      ).toEqual([]);
+    }
 
     const envelope = sanitizeThreadProviderHandoff(input());
     expect(() =>

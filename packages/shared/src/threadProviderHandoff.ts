@@ -110,7 +110,7 @@ const MESSAGE_FORBIDDEN_KEYS = new Map<string, ThreadProviderHandoffOmissionKind
 const SECRET_TEXT =
   /(?:-----BEGIN [^-]+ PRIVATE KEY-----|\bBearer\s+[A-Za-z0-9._~-]{16,}|\b(?:sk|rk|pk)-[A-Za-z0-9_-]{16,}|\b(?:ghp|gho|github_pat|xox[baprs])_[A-Za-z0-9_-]{12,}|\b(?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret)\s*[:=]\s*[^\s,;]{8,})/i;
 const ABSOLUTE_PATH =
-  /(?:^|[\s("'`])(?:[a-zA-Z]:[\\/]|\\\\|\/(?:Users|home|root|tmp|var|etc|opt|private)\/)/;
+  /(?:^|[\s("'`])(?:[a-zA-Z]:[\\/]|\\\\|\/(?:Users|home|root|tmp|var|etc|opt|private)(?:\/|\b)|\/(?!\/)(?:[^/\s"'`]+\/)+[^/\s"'`]+)/;
 
 function normalizeKey(key: string): string {
   return key.toLowerCase().replace(/[^a-z0-9]/g, "");
