@@ -12,6 +12,7 @@ import {
 } from "jsonc-parser/lib/esm/main.js";
 
 import { writeFileStringAtomically } from "../atomicWrite.ts";
+import { findEnvironmentBundleRepositoryRoot } from "./EnvironmentBundlePaths.ts";
 
 const MAX_CLAUDE_SETTINGS_BYTES = FileSystem.Size(1_000_000);
 const MISSING_TARGET_MARKER = "t3-environment-bundle:missing";
@@ -35,24 +36,6 @@ function stateHash(exists: boolean, contents: string): string {
     .update(exists ? `present\0${contents}` : MISSING_TARGET_MARKER)
     .digest("hex");
 }
-
-const findRepositoryRoot = Effect.fn("findEnvironmentBundleRepositoryRoot")(function* (
-  cwd: string,
-) {
-  const fileSystem = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  let current = path.resolve(cwd);
-  while (true) {
-    if (
-      yield* fileSystem.exists(path.join(current, ".git")).pipe(Effect.orElseSucceed(() => false))
-    ) {
-      return current;
-    }
-    const parent = path.dirname(current);
-    if (parent === current) return path.resolve(cwd);
-    current = parent;
-  }
-});
 
 function validateJsonc(contents: string): void {
   if (contents.trim().length === 0) return;
@@ -88,7 +71,7 @@ export const loadClaudeSkillOverrideTargetState = Effect.fn("loadClaudeSkillOver
   function* (cwd: string) {
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
-    const root = yield* findRepositoryRoot(cwd);
+    const root = yield* findEnvironmentBundleRepositoryRoot(cwd);
     const filePath = path.join(root, ".claude", "settings.local.json");
     const exists = yield* fileSystem.exists(filePath).pipe(Effect.orElseSucceed(() => false));
     if (!exists) {
