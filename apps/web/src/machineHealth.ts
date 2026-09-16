@@ -5,8 +5,8 @@ import type {
 } from "@t3tools/contracts";
 
 export const MACHINE_HEALTH_STALE_AFTER_MS = 30_000;
-export const MACHINE_HEALTH_HISTORY_LIMIT = 60;
-export const DEFAULT_MACHINE_HEALTH_THRESHOLD = {
+const MACHINE_HEALTH_HISTORY_LIMIT = 60;
+const DEFAULT_MACHINE_HEALTH_THRESHOLD = {
   attentionPercent: 80,
   criticalPercent: 95,
 } as const satisfies MachineHealthThreshold;

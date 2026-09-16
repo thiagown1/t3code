@@ -198,7 +198,7 @@ export const loadCodexSkillOverrideTargetState = Effect.fn("loadCodexSkillOverri
   },
 );
 
-export function renderCodexSkillDisableOverrides(
+function renderCodexSkillDisableOverrides(
   state: CodexSkillOverrideTargetState,
   skillPaths: ReadonlyArray<string>,
 ): string {

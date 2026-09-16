@@ -24,7 +24,7 @@ export type FirstMateCommandRejection =
   | "routing-source-not-supervisor"
   | "routing-destination-mismatch";
 
-export const FIRST_MATE_ROUTING_RECEIPT_LIMIT = 50;
+const FIRST_MATE_ROUTING_RECEIPT_LIMIT = 50;
 
 export type FirstMateCommandDecision =
   | { readonly accepted: true; readonly events: ReadonlyArray<FirstMateEvent> }

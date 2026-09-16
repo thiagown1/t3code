@@ -17,9 +17,7 @@ import { findEnvironmentBundleRepositoryRoot } from "./EnvironmentBundlePaths.ts
 const MAX_OPENCODE_CONFIG_BYTES = FileSystem.Size(1_000_000);
 const SAFE_SERVER_NAME = /^[a-zA-Z0-9_.-]{1,256}$/u;
 
-export class OpenCodeMcpOverrideTargetError extends Data.TaggedError(
-  "OpenCodeMcpOverrideTargetError",
-)<{
+class OpenCodeMcpOverrideTargetError extends Data.TaggedError("OpenCodeMcpOverrideTargetError")<{
   readonly reason:
     | "invalid-json"
     | "not-found"
@@ -137,7 +135,7 @@ export const loadOpenCodeMcpOverrideTargetState = Effect.fn("loadOpenCodeMcpOver
   },
 );
 
-export function renderOpenCodeMcpDisableOverrides(
+function renderOpenCodeMcpDisableOverrides(
   state: OpenCodeMcpOverrideTargetState,
   serverNames: ReadonlyArray<string>,
 ): string {

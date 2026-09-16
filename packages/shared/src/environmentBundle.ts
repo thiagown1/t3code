@@ -37,7 +37,7 @@ function assertUnique(values: ReadonlyArray<string>, label: string): void {
   }
 }
 
-export function normalizeEnvironmentBundle(bundle: EnvironmentBundleType): EnvironmentBundleType {
+function normalizeEnvironmentBundle(bundle: EnvironmentBundleType): EnvironmentBundleType {
   for (const skill of bundle.skills) {
     if (skill.logicalPath) assertPortableLogicalPath(skill.logicalPath);
   }

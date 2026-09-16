@@ -98,7 +98,7 @@ const FIRSTMATE_APP_NAME = "T3 Code FirstMate";
 
 export type DesktopFlavor = "official" | "firstmate";
 
-export function resolveDesktopFlavor(input: {
+function resolveDesktopFlavor(input: {
   readonly appName?: string;
   readonly isPackaged: boolean;
 }): DesktopFlavor {

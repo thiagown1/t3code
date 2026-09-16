@@ -95,7 +95,7 @@ const statusPriority: Record<FirstMateTopicOperationalStatus, number> = {
   completed: 14,
 };
 
-export const FIRST_MATE_PULL_REQUEST_STALE_AFTER_MS = 3 * 60 * 1_000;
+const FIRST_MATE_PULL_REQUEST_STALE_AFTER_MS = 3 * 60 * 1_000;
 
 const EMPTY_CHECK_COUNTS: Readonly<Record<PullRequestCheckStatus, number>> = {
   pending: 0,
