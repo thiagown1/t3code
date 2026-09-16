@@ -235,6 +235,53 @@ describe("ProviderRuntimeEvent", () => {
     expect(parsed.payload.usage.maxTokens).toBe(200000);
     expect(parsed.payload.usage.usedTokens).toBe(31251);
   });
+
+  it("keeps task model provenance optional and validates known sources", () => {
+    const legacyEvent = {
+      type: "task.started",
+      eventId: "event-task-legacy",
+      provider: "codex",
+      createdAt: "2026-02-28T00:00:05.000Z",
+      threadId: "thread-1",
+      payload: {
+        taskId: "task-1",
+        model: "gpt-5.6-sol",
+        effort: "high",
+      },
+    };
+
+    const legacyParsed = decodeRuntimeEvent(legacyEvent);
+    expect(legacyParsed.type).toBe("task.started");
+    if (legacyParsed.type !== "task.started") {
+      throw new Error("expected task.started");
+    }
+    expect(legacyParsed.payload.modelSource).toBeUndefined();
+    expect(legacyParsed.payload.effortSource).toBeUndefined();
+
+    const sourcedParsed = decodeRuntimeEvent({
+      ...legacyEvent,
+      eventId: "event-task-sourced",
+      payload: {
+        ...legacyEvent.payload,
+        modelSource: "inherited",
+        effortSource: "explicit",
+      },
+    });
+    expect(sourcedParsed.type).toBe("task.started");
+    if (sourcedParsed.type !== "task.started") {
+      throw new Error("expected task.started");
+    }
+    expect(sourcedParsed.payload.modelSource).toBe("inherited");
+    expect(sourcedParsed.payload.effortSource).toBe("explicit");
+
+    expect(() =>
+      decodeRuntimeEvent({
+        ...legacyEvent,
+        eventId: "event-task-invalid-source",
+        payload: { ...legacyEvent.payload, modelSource: "guessed" },
+      }),
+    ).toThrow();
+  });
 });
 
 describe("classifyTaskAgentKind", () => {

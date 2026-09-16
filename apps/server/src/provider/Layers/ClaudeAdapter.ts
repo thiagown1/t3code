@@ -284,6 +284,8 @@ interface ClaudeTaskAgentState {
    * assistant snapshots (authoritative API model). */
   model: string | undefined;
   effort: string | undefined;
+  modelSource: TaskAgentLinkage["modelSource"];
+  effortSource: TaskAgentLinkage["effortSource"];
 }
 
 /**
@@ -1275,6 +1277,8 @@ function taskLinkageFor(
     ...(agent.subagentType ? { role: agent.subagentType } : {}),
     ...(agent.model ? { model: agent.model } : {}),
     ...(agent.effort ? { effort: agent.effort } : {}),
+    ...(agent.modelSource ? { modelSource: agent.modelSource } : {}),
+    ...(agent.effortSource ? { effortSource: agent.effortSource } : {}),
     ...(agent.toolUseId ? { toolUseId: agent.toolUseId } : {}),
     ...(agent.workflowName ? { workflowName: agent.workflowName } : {}),
     ...(agent.runHandles ? { runHandles: agent.runHandles } : {}),
@@ -3130,6 +3134,8 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
             owningAgentId: existing?.owningAgentId,
             model: existing?.model,
             effort: existing?.effort,
+            modelSource: existing?.modelSource,
+            effortSource: existing?.effortSource,
           });
         }
       }
@@ -3551,16 +3557,26 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         if (toolUseId) {
           context.pendingTaskModels.delete(toolUseId);
         }
-        const model =
-          bufferedModel ??
-          trimmedString(launchInput?.model) ??
-          trimmedString(context.session.model ?? undefined);
+        const explicitModel = trimmedString(launchInput?.model);
+        const inheritedModel = trimmedString(context.session.model ?? undefined);
+        const model = bufferedModel ?? explicitModel ?? inheritedModel;
+        const modelSource: TaskAgentLinkage["modelSource"] = explicitModel
+          ? "explicit"
+          : launchingTool && inheritedModel
+            ? "inherited"
+            : undefined;
         const rawLaunchEffort = launchInput?.effort;
-        const effort =
+        const explicitEffort =
           trimmedString(rawLaunchEffort) ??
           (typeof rawLaunchEffort === "number" && Number.isFinite(rawLaunchEffort)
             ? String(rawLaunchEffort)
-            : context.currentEffort);
+            : undefined);
+        const effort = explicitEffort ?? context.currentEffort;
+        const effortSource: TaskAgentLinkage["effortSource"] = explicitEffort
+          ? "explicit"
+          : launchingTool && context.currentEffort
+            ? "inherited"
+            : undefined;
         // Remember the agent identity so every later task.* payload for this
         // taskId is self-describing (identity must survive activity retention).
         context.taskAgents.set(message.task_id, {
@@ -3575,6 +3591,8 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           owningAgentId,
           model,
           effort,
+          modelSource,
+          effortSource,
         });
         context.liveTaskIds.add(message.task_id);
         yield* offerRuntimeEvent({
@@ -3589,6 +3607,8 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
             ...(message.subagent_type ? { role: message.subagent_type } : {}),
             ...(model ? { model } : {}),
             ...(effort ? { effort } : {}),
+            ...(modelSource ? { modelSource } : {}),
+            ...(effortSource ? { effortSource } : {}),
             ...(message.tool_use_id ? { toolUseId: message.tool_use_id } : {}),
             ...(message.workflow_name ? { workflowName: message.workflow_name } : {}),
           },

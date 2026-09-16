@@ -3638,7 +3638,7 @@ describe("ClaudeAdapterLive", () => {
 
       const taskEventsFiber = yield* adapter.streamEvents.pipe(
         Stream.filter((event) => event.type.startsWith("task.")),
-        Stream.take(2),
+        Stream.take(3),
         Stream.runCollect,
         Effect.forkChild,
       );
@@ -3659,8 +3659,28 @@ describe("ClaudeAdapterLive", () => {
         attachments: [],
       });
 
-      // No explicit model/effort on the launch input: the task inherits the
-      // session's selection.
+      // The observed launch input omits model/effort, which is evidence that
+      // the task inherits the session's selection.
+      harness.query.emit({
+        type: "stream_event",
+        session_id: "sdk-session",
+        uuid: "task-model-tool-uuid",
+        parent_tool_use_id: null,
+        event: {
+          type: "content_block_start",
+          index: 0,
+          content_block: {
+            type: "tool_use",
+            id: "toolu_agent_m",
+            name: "Task",
+            input: {
+              description: "Agent M",
+              prompt: "Check the model",
+              subagent_type: "general-purpose",
+            },
+          },
+        },
+      } as unknown as SDKMessage);
       harness.query.emit({
         type: "system",
         subtype: "task_started",
@@ -3692,6 +3712,38 @@ describe("ClaudeAdapterLive", () => {
         uuid: "task-model-progress-uuid",
         session_id: "sdk-session",
       } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "stream_event",
+        session_id: "sdk-session",
+        uuid: "task-explicit-tool-uuid",
+        parent_tool_use_id: null,
+        event: {
+          type: "content_block_start",
+          index: 1,
+          content_block: {
+            type: "tool_use",
+            id: "toolu_agent_explicit",
+            name: "Task",
+            input: {
+              description: "Agent explicit",
+              prompt: "Use these settings",
+              subagent_type: "general-purpose",
+              model: "opus",
+              effort: 7,
+            },
+          },
+        },
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "system",
+        subtype: "task_started",
+        task_id: "task-explicit",
+        description: "Agent explicit",
+        task_type: "local_agent",
+        tool_use_id: "toolu_agent_explicit",
+        uuid: "task-explicit-uuid",
+        session_id: "sdk-session",
+      } as unknown as SDKMessage);
 
       const taskEvents = Array.from(yield* Fiber.join(taskEventsFiber));
       const started = taskEvents[0];
@@ -3699,12 +3751,24 @@ describe("ClaudeAdapterLive", () => {
       if (started?.type === "task.started") {
         assert.equal(started.payload.model, SYNTHETIC_CLAUDE_CAPABLE_MODEL);
         assert.equal(started.payload.effort, "max");
+        assert.equal(started.payload.modelSource, "inherited");
+        assert.equal(started.payload.effortSource, "inherited");
       }
       const progress = taskEvents[1];
       assert.equal(progress?.type, "task.progress");
       if (progress?.type === "task.progress") {
         assert.equal(progress.payload.model, SYNTHETIC_SUBAGENT_MODEL);
         assert.equal(progress.payload.effort, "max");
+        assert.equal(progress.payload.modelSource, "inherited");
+        assert.equal(progress.payload.effortSource, "inherited");
+      }
+      const explicitStarted = taskEvents[2];
+      assert.equal(explicitStarted?.type, "task.started");
+      if (explicitStarted?.type === "task.started") {
+        assert.equal(explicitStarted.payload.model, "opus");
+        assert.equal(explicitStarted.payload.effort, "7");
+        assert.equal(explicitStarted.payload.modelSource, "explicit");
+        assert.equal(explicitStarted.payload.effortSource, "explicit");
       }
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
@@ -3712,7 +3776,7 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
-  it.effect("a subagent snapshot that beats task_started still wins over the seed", () => {
+  it.effect("a subagent snapshot that beats task_started does not invent provenance", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
@@ -3778,11 +3842,15 @@ describe("ClaudeAdapterLive", () => {
       if (started?.type === "task.started") {
         assert.equal(started.payload.model, SYNTHETIC_SUBAGENT_MODEL);
         assert.equal(started.payload.effort, "max");
+        assert.equal(started.payload.modelSource, undefined);
+        assert.equal(started.payload.effortSource, undefined);
       }
       const progress = taskEvents[1];
       assert.equal(progress?.type, "task.progress");
       if (progress?.type === "task.progress") {
         assert.equal(progress.payload.model, SYNTHETIC_SUBAGENT_MODEL);
+        assert.equal(progress.payload.modelSource, undefined);
+        assert.equal(progress.payload.effortSource, undefined);
       }
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),

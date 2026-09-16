@@ -63,6 +63,10 @@ describe("runtimeEventToActivities task progress", () => {
         summary: "Inspecting the panel",
         typedUsage: { totalTokens: 4_200, toolUses: 7 },
         status: "running",
+        model: "claude-sonnet-5",
+        effort: "high",
+        modelSource: "inherited",
+        effortSource: "explicit",
       },
     } satisfies ProviderRuntimeEvent;
 
@@ -76,9 +80,13 @@ describe("runtimeEventToActivities task progress", () => {
     ]);
     expect(progressPayload.summary).toBe("Inspecting the panel");
     expect(progressPayload.status).toBe("running");
+    expect(progressPayload.modelSource).toBe("inherited");
+    expect(progressPayload.effortSource).toBe("explicit");
     expect(progressPayload).not.toHaveProperty("typedUsage");
     expect(usagePayload.typedUsage).toEqual({ totalTokens: 4_200, toolUses: 7 });
     expect(usagePayload.usageSnapshot).toBe(true);
+    expect(usagePayload.modelSource).toBe("inherited");
+    expect(usagePayload.effortSource).toBe("explicit");
     expect(usagePayload).not.toHaveProperty("status");
   });
 });

@@ -1141,6 +1141,8 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
         const payload = event.payload as Record<string, unknown>;
         NodeAssert.equal(payload.model, "gpt-5.6-sol");
         NodeAssert.equal(payload.effort, "high");
+        NodeAssert.equal("modelSource" in payload, false);
+        NodeAssert.equal("effortSource" in payload, false);
       }
 
       const metadataPayload = events[8]?.payload as Record<string, unknown>;

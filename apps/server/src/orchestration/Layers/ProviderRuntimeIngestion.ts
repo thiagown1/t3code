@@ -398,6 +398,8 @@ function taskLinkageActivityFields(payload: Record<string, unknown>): Record<str
     "role",
     "model",
     "effort",
+    "modelSource",
+    "effortSource",
     "toolUseId",
     "parentAgentId",
     "workflowName",
