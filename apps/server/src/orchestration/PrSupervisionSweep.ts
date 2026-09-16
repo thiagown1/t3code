@@ -13,7 +13,7 @@ import { runPrSupervisionAdapter } from "./PrSupervisionAdapter.ts";
 
 const encodeEvidence = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 
-export function supervisionThreadBusy(thread: OrchestrationThreadShell, now: string): boolean {
+function supervisionThreadBusy(thread: OrchestrationThreadShell, now: string): boolean {
   return (
     thread.session?.status === "running" ||
     thread.session?.status === "starting" ||
@@ -132,7 +132,15 @@ export const supervisePrLink = Effect.fn("supervisePrLink")(function* (
     !["needs_work", "gates_passed"].includes(receipt.state ?? "")
   )
     return;
-  const resumeKey = `${receipt.headSha}:${receipt.state}:${receipt.gateCheckId ?? receipt.reason}`;
+  // Gate reconciliations can publish many check IDs for the same evidence.
+  // Charge a resume for changed evidence, not for a new wrapper check.
+  const resumeKey = NodeCrypto.createHash("sha256")
+    .update(
+      [receipt.headSha, receipt.baseSha, receipt.state, receipt.reason, receipt.gateSummary].join(
+        "\0",
+      ),
+    )
+    .digest("hex");
   if (state.lastResumeKey === resumeKey) return;
   const evidence = yield* encodeEvidence({
     state: receipt.state,

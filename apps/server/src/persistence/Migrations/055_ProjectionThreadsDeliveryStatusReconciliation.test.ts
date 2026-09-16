@@ -48,6 +48,8 @@ it.layer(NodeSqliteClient.layerMemory())(
           { migrationId: 53, name: "ProjectionProjectsFirstMate" },
           { migrationId: 54, name: "ProjectionThreadTitleState" },
           { migrationId: 55, name: "ProjectionThreadsDeliveryStatusReconciliation" },
+          { migrationId: 56, name: "ThreadProviderHandoffs" },
+          { migrationId: 57, name: "PullRequestSupervision" },
         ]);
 
         /*

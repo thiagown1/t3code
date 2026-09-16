@@ -880,6 +880,47 @@ it.effect("supervision never calls an adapter while a user approval is pending",
   }).pipe(Effect.provide(NodeServices.layer)),
 );
 
+it.effect("reconciled gate IDs with identical evidence cannot spend another resume", () =>
+  Effect.gen(function* () {
+    const commands: Array<OrchestrationCommand> = [];
+    const link = supervisedTestLink();
+    let lastResumeKey: string | null = null;
+    for (const gateCheckId of [20, 21]) {
+      yield* supervisePrLink(
+        {
+          dispatch: (command) => {
+            commands.push(command);
+            if (command.type === "thread.pull-request.supervise")
+              lastResumeKey = command.resumeKey ?? null;
+            return Effect.succeed({ sequence: 1 });
+          },
+        },
+        makeThread("owner"),
+        makeProject(),
+        { ...link, supervision: { ...link.supervision, lastResumeKey } },
+        NOW,
+        "environment-a",
+        (input) =>
+          Effect.succeed(
+            input.operation === "enroll"
+              ? { schema: "firstmate-pr-supervision/v1" as const, enrolled: true }
+              : {
+                  schema: "firstmate-pr-supervision/v1" as const,
+                  state: "needs_work",
+                  writerAuthorized: true,
+                  headSha: "a".repeat(40),
+                  baseSha: "b".repeat(40),
+                  reason: "Gate failed",
+                  gateSummary: "Unit test failure",
+                  gateCheckId,
+                },
+          ),
+      );
+    }
+    expect(commands).toHaveLength(1);
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
 it.effect("pending evidence and missing writer authority never wake a model", () =>
   Effect.gen(function* () {
     for (const receipt of [

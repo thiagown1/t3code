@@ -35,6 +35,11 @@ export const ProjectionThreadPullRequest = Schema.Struct({
 });
 export type ProjectionThreadPullRequest = typeof ProjectionThreadPullRequest.Type;
 
+function omitEmptySupervision(row: ProjectionThreadPullRequest): ProjectionThreadPullRequest {
+  const { supervision, ...link } = row;
+  return supervision == null ? link : { ...link, supervision };
+}
+
 export const ListProjectionThreadPullRequestsInput = Schema.Struct({
   threadId: ThreadId,
 });
@@ -220,6 +225,7 @@ export const make = Effect.gen(function* () {
     input,
   ) =>
     listProjectionThreadPullRequestRows(input).pipe(
+      Effect.map((rows) => rows.map(omitEmptySupervision)),
       Effect.mapError(
         toPersistenceSqlError("ProjectionThreadPullRequestRepository.listByThreadId:query"),
       ),
@@ -229,6 +235,7 @@ export const make = Effect.gen(function* () {
     input,
   ) =>
     listProjectionThreadPullRequestRowsByPullRequest(normalizeThreadPullRequestKey(input)).pipe(
+      Effect.map((rows) => rows.map(omitEmptySupervision)),
       Effect.mapError(
         toPersistenceSqlError("ProjectionThreadPullRequestRepository.listByPullRequest:query"),
       ),
