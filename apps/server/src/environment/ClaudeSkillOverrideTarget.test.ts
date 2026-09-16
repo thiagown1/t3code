@@ -46,12 +46,17 @@ describe("ClaudeSkillOverrideTarget", () => {
         cwd,
         expectedStateHash: before.stateHash,
         skillNames: ["zeta", "alpha"],
+        mcpServerNames: ["logs", "firebase", "logs"],
       });
       expect(result.written.contents).toContain("// keep me");
       expect(result.written.contents).toContain('"permissions"');
       expect(result.written.contents).toContain('"kept": "on"');
       expect(result.written.contents).toContain('"alpha": "off"');
       expect(result.written.contents).toContain('"zeta": "off"');
+      expect(result.written.contents).toContain('"disabledMcpjsonServers"');
+      expect(result.written.contents.indexOf('"firebase"')).toBeLessThan(
+        result.written.contents.indexOf('"logs"'),
+      );
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 

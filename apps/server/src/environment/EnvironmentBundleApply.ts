@@ -3,6 +3,7 @@ import {
   type EnvironmentBundle,
   type EnvironmentBundleApplyPlan,
   type EnvironmentBundleApplyResult,
+  type EnvironmentBundleServerInventory,
   ProviderInstanceId,
   type ServerProvider,
 } from "@t3tools/contracts";
@@ -17,7 +18,7 @@ import {
   writeClaudeSkillDisableOverrides,
 } from "./ClaudeSkillOverrideTarget.ts";
 import {
-  areClaudeSkillDisableOperationsEffective,
+  areClaudeDisableOperationsEffective,
   buildEnvironmentBundleApplyPlan,
 } from "./EnvironmentBundleApplyPlan.ts";
 
@@ -40,6 +41,7 @@ export const planEnvironmentBundleApply = Effect.fn("planEnvironmentBundleApply"
     readonly current: EnvironmentBundle;
     readonly incoming: EnvironmentBundle;
     readonly providers: ReadonlyArray<ServerProvider>;
+    readonly serverInventory: EnvironmentBundleServerInventory;
     readonly cwd: string;
   }) {
     const target = yield* loadClaudeSkillOverrideTargetState(input.cwd).pipe(
@@ -63,6 +65,11 @@ export const applyEnvironmentBundle = Effect.fn("applyEnvironmentBundle")(functi
   readonly expectedPlan: EnvironmentBundleApplyPlan;
   readonly cwd: string;
   readonly getProviders: Effect.Effect<ReadonlyArray<ServerProvider>>;
+  readonly getServerInventory: Effect.Effect<
+    EnvironmentBundleServerInventory,
+    never,
+    FileSystem.FileSystem | Path.Path
+  >;
   readonly refreshWorkspaceSnapshot: (input: {
     readonly instanceId: ProviderInstanceId;
     readonly cwd: string;
@@ -81,10 +88,16 @@ export const applyEnvironmentBundle = Effect.fn("applyEnvironmentBundle")(functi
       ),
     ),
   );
+  const serverInventory = yield* input.getServerInventory.pipe(
+    Effect.mapError(() =>
+      applyError("snapshot-failed", "Environment Bundle inventory could not be refreshed"),
+    ),
+  );
   const currentPlan = yield* planEnvironmentBundleApply({
     current: input.current,
     incoming: input.incoming,
     providers,
+    serverInventory,
     cwd: input.cwd,
   });
   if (!environmentBundleApplyPlansMatch(input.expectedPlan, currentPlan)) {
@@ -103,7 +116,12 @@ export const applyEnvironmentBundle = Effect.fn("applyEnvironmentBundle")(functi
   const written = yield* writeClaudeSkillDisableOverrides({
     cwd: input.cwd,
     expectedStateHash: currentPlan.targetStateHash,
-    skillNames: currentPlan.operations.map((operation) => operation.skillName),
+    skillNames: currentPlan.operations.flatMap((operation) =>
+      operation.component === "skill" ? [operation.skillName] : [],
+    ),
+    mcpServerNames: currentPlan.operations.flatMap((operation) =>
+      operation.component === "mcp" ? [operation.serverName] : [],
+    ),
   }).pipe(
     Effect.mapError((cause) =>
       applyError(
@@ -128,10 +146,14 @@ export const applyEnvironmentBundle = Effect.fn("applyEnvironmentBundle")(functi
   if (Exit.isSuccess(refreshResult) && refreshResult.value.length > 0) {
     refreshedProviders = refreshResult.value.at(-1)!;
   }
+  const refreshedInventory = yield* input.getServerInventory.pipe(
+    Effect.orElseSucceed(() => serverInventory),
+  );
   const effective =
     Exit.isSuccess(refreshResult) &&
-    areClaudeSkillDisableOperationsEffective({
+    areClaudeDisableOperationsEffective({
       providers: refreshedProviders,
+      serverInventory: refreshedInventory,
       cwd: input.cwd,
       operations: currentPlan.operations,
     });
@@ -146,7 +168,7 @@ export const applyEnvironmentBundle = Effect.fn("applyEnvironmentBundle")(functi
     if (Exit.isFailure(rollback)) {
       return yield* applyError(
         "rollback-failed",
-        "Claude skill disable did not become effective and the previous settings could not be restored safely",
+        "Claude project disable did not become effective and the previous settings could not be restored safely",
       );
     }
     yield* Effect.forEach(
@@ -156,7 +178,7 @@ export const applyEnvironmentBundle = Effect.fn("applyEnvironmentBundle")(functi
     ).pipe(Effect.ignore);
     return yield* applyError(
       "health-check-failed",
-      "Claude skill disable did not become effective after provider refresh; settings were rolled back",
+      "Claude project disable did not become effective after provider refresh; settings were rolled back",
     );
   }
 

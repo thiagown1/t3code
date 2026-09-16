@@ -1,7 +1,10 @@
+import { isDeepStrictEqual } from "node:util";
+
 import type {
   EnvironmentBundle,
   EnvironmentBundleApplyOperation,
   EnvironmentBundleApplyPlan,
+  EnvironmentBundleServerInventory,
   ServerProvider,
   ServerProviderSkill,
 } from "@t3tools/contracts";
@@ -52,13 +55,21 @@ export function environmentBundleProviderSkillId(
   return `${provider.instanceId}:${skillOrigin(skill)}:${skill.name}`;
 }
 
-export function areClaudeSkillDisableOperationsEffective(input: {
+export function areClaudeDisableOperationsEffective(input: {
   readonly providers: ReadonlyArray<ServerProvider>;
+  readonly serverInventory: EnvironmentBundleServerInventory;
   readonly cwd: string;
   readonly operations: ReadonlyArray<EnvironmentBundleApplyOperation>;
 }): boolean {
-  return input.operations.every((operation) =>
-    operation.targetIds.every((targetId) =>
+  return input.operations.every((operation) => {
+    if (operation.component === "mcp") {
+      return operation.targetIds.every((targetId) =>
+        input.serverInventory.mcpServers.some(
+          (server) => server.serverId === targetId && !server.enabled,
+        ),
+      );
+    }
+    return operation.targetIds.every((targetId) =>
       input.providers.some(
         (provider) =>
           provider.driver === "claudeAgent" &&
@@ -67,17 +78,37 @@ export function areClaudeSkillDisableOperationsEffective(input: {
               environmentBundleProviderSkillId(provider, skill) === targetId && !skill.enabled,
           ),
       ),
-    ),
-  );
+    );
+  });
 }
 
 function equalExceptEnabled(
-  before: EnvironmentBundle["skills"][number],
-  after: EnvironmentBundle["skills"][number],
+  before: { readonly enabled: boolean },
+  after: { readonly enabled: boolean },
 ): boolean {
   const { enabled: _beforeEnabled, ...beforeMetadata } = before;
   const { enabled: _afterEnabled, ...afterMetadata } = after;
-  return JSON.stringify(beforeMetadata) === JSON.stringify(afterMetadata);
+  return isDeepStrictEqual(beforeMetadata, afterMetadata);
+}
+
+function claudeMcpIdentity(input: {
+  readonly server: Pick<EnvironmentBundle["mcpServers"][number], "serverId" | "origin">;
+  readonly providers: ReadonlyArray<ServerProvider>;
+}): { readonly instanceId: string; readonly serverName: string } | null {
+  for (const provider of input.providers) {
+    if (provider.driver !== "claudeAgent") continue;
+    const prefix = `claude:${provider.instanceId}:`;
+    if (
+      input.server.origin !== `claude:${provider.instanceId}:project-config` ||
+      !input.server.serverId.startsWith(prefix)
+    )
+      continue;
+    const serverName = input.server.serverId.slice(prefix.length);
+    if (/^[a-zA-Z0-9_.-]{1,256}$/u.test(serverName)) {
+      return { instanceId: provider.instanceId, serverName };
+    }
+  }
+  return null;
 }
 
 function unsupportedStepMessage(component: string, id: string): string {
@@ -88,13 +119,19 @@ export function buildEnvironmentBundleApplyPlan(input: {
   readonly current: EnvironmentBundle;
   readonly incoming: EnvironmentBundle;
   readonly providers: ReadonlyArray<ServerProvider>;
+  readonly serverInventory: EnvironmentBundleServerInventory;
   readonly cwd: string;
   readonly targetStateHash: string;
 }): EnvironmentBundleApplyPlan {
   const diff = diffEnvironmentBundles(input.current, input.incoming);
   const steps = buildEnvironmentBundleApplicationPlan(input.current, input.incoming);
   const blockers = steps
-    .filter((step) => step.component !== "bundle" && step.component !== "skill")
+    .filter(
+      (step) =>
+        step.component !== "bundle" &&
+        step.component !== "skill" &&
+        step.component !== "mcp-server",
+    )
     .map((step) => unsupportedStepMessage(step.component, step.id));
   const requestedDisables = new Map<
     string,
@@ -159,7 +196,7 @@ export function buildEnvironmentBundleApplyPlan(input: {
       continue;
     }
 
-    operationByName.set(after.name, {
+    operationByName.set(`skill:${after.name}`, {
       component: "skill",
       operation: "disable",
       adapter: "claude-project-skill-override",
@@ -170,8 +207,75 @@ export function buildEnvironmentBundleApplyPlan(input: {
     });
   }
 
+  const requestedMcpDisables = new Map(
+    diff.mcpServers.changed.map((change) => [change.after.serverId, change] as const),
+  );
+  for (const change of diff.mcpServers.changed) {
+    if (
+      !change.before.enabled ||
+      change.after.enabled ||
+      !equalExceptEnabled(change.before, change.after)
+    ) {
+      blockers.push(`mcp:${change.after.serverId} supports only metadata-preserving disable`);
+      requestedMcpDisables.delete(change.after.serverId);
+      continue;
+    }
+    const actual = input.serverInventory.mcpServers.find(
+      (server) => server.serverId === change.before.serverId,
+    );
+    const identity = claudeMcpIdentity({
+      server: change.after,
+      providers: input.providers,
+    });
+    if (!actual || !actual.enabled || !isDeepStrictEqual(actual, change.before) || !identity) {
+      blockers.push(
+        `mcp:${change.after.serverId} is not an enabled Claude project MCP in the current workspace`,
+      );
+      requestedMcpDisables.delete(change.after.serverId);
+      continue;
+    }
+  }
+  for (const server of diff.mcpServers.added)
+    blockers.push(unsupportedStepMessage("mcp", server.serverId));
+  for (const server of diff.mcpServers.removed)
+    blockers.push(unsupportedStepMessage("mcp", server.serverId));
+
+  for (const { after } of requestedMcpDisables.values()) {
+    const identity = claudeMcpIdentity({ server: after, providers: input.providers });
+    if (!identity) continue;
+    const affected = input.serverInventory.mcpServers.flatMap((server) => {
+      const candidate = claudeMcpIdentity({
+        server,
+        providers: input.providers,
+      });
+      return server.enabled && candidate?.serverName === identity.serverName
+        ? [{ instanceId: candidate.instanceId, targetId: server.serverId }]
+        : [];
+    });
+    const missingTargets = affected.filter(
+      (candidate) => !requestedMcpDisables.has(candidate.targetId),
+    );
+    if (missingTargets.length > 0) {
+      blockers.push(
+        `mcp:${identity.serverName} would also disable ${missingTargets.map((candidate) => candidate.targetId).join(", ")}`,
+      );
+      continue;
+    }
+    operationByName.set(`mcp:${identity.serverName}`, {
+      component: "mcp",
+      operation: "disable",
+      adapter: "claude-project-mcp-override",
+      serverName: identity.serverName,
+      targetIds: affected.map((candidate) => candidate.targetId).sort(),
+      providerInstanceIds: [...new Set(affected.map((candidate) => candidate.instanceId))].sort(),
+      requiresProviderReload: true,
+    });
+  }
+
   const operations = [...operationByName.values()].sort((left, right) =>
-    left.skillName.localeCompare(right.skillName),
+    `${left.component}:${left.component === "skill" ? left.skillName : left.serverName}`.localeCompare(
+      `${right.component}:${right.component === "skill" ? right.skillName : right.serverName}`,
+    ),
   );
   if (operations.length === 0 && blockers.length === 0) {
     blockers.push("The bundle does not contain any supported changes to apply");

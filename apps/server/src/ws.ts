@@ -2517,10 +2517,19 @@ const makeWsRpcLayer = (
             WS_METHODS.serverPlanEnvironmentBundleApply,
             Effect.gen(function* () {
               const providers = yield* providerRegistry.getProviders;
+              const rawSettings = yield* serverSettings.getSettings.pipe(Effect.orDie);
+              const serverInventory = yield* loadEnvironmentBundleServerInventory({
+                cwd: config.cwd,
+                codexMcpSources: codexMcpInventorySourcesFromSettings(rawSettings),
+                claudeMcpSources: claudeMcpInventorySourcesFromSettings(rawSettings),
+                cursorMcpSources: cursorMcpInventorySourcesFromSettings(rawSettings),
+                openCodeMcpSources: openCodeMcpInventorySourcesFromSettings(rawSettings),
+              });
               return yield* planEnvironmentBundleApply({
                 current,
                 incoming,
                 providers,
+                serverInventory,
                 cwd: config.cwd,
               });
             }),
@@ -2535,6 +2544,18 @@ const makeWsRpcLayer = (
               expectedPlan,
               cwd: config.cwd,
               getProviders: providerRegistry.getProviders,
+              getServerInventory: serverSettings.getSettings.pipe(
+                Effect.orDie,
+                Effect.flatMap((rawSettings) =>
+                  loadEnvironmentBundleServerInventory({
+                    cwd: config.cwd,
+                    codexMcpSources: codexMcpInventorySourcesFromSettings(rawSettings),
+                    claudeMcpSources: claudeMcpInventorySourcesFromSettings(rawSettings),
+                    cursorMcpSources: cursorMcpInventorySourcesFromSettings(rawSettings),
+                    openCodeMcpSources: openCodeMcpInventorySourcesFromSettings(rawSettings),
+                  }),
+                ),
+              ),
               refreshWorkspaceSnapshot: providerRegistry.refreshWorkspaceSnapshot,
             }),
             { "rpc.aggregate": "server" },

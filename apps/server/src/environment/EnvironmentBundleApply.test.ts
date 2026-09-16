@@ -4,8 +4,10 @@ import type { EnvironmentBundle, ServerProvider } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import * as Ref from "effect/Ref";
 
 import { applyEnvironmentBundle, planEnvironmentBundleApply } from "./EnvironmentBundleApply.ts";
+import { loadEnvironmentBundleServerInventory } from "./EnvironmentBundleInventory.ts";
 
 const skill = {
   skillId: "claudeAgent:project:deploy",
@@ -79,7 +81,68 @@ function forCwd(snapshot: ServerProvider, cwd: string): ServerProvider {
   };
 }
 
+const emptyServerInventory = {
+  mcpServers: [],
+  mcpCoverage: "partial" as const,
+  projectInstructions: [],
+  projectInstructionsCoverage: "partial" as const,
+};
+
 describe("EnvironmentBundleApply", () => {
+  it.effect("writes, refreshes, and verifies a Claude project MCP disable", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const cwd = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-environment-mcp-" });
+      yield* fileSystem.makeDirectory(path.join(cwd, ".git"));
+      yield* fileSystem.writeFileString(
+        path.join(cwd, ".mcp.json"),
+        '{ "mcpServers": { "firebase": { "command": "private-command" } } }\n',
+      );
+      const providers = [forCwd(provider(true), cwd)];
+      const getServerInventory = loadEnvironmentBundleServerInventory({
+        cwd,
+        claudeMcpSources: [{ instanceId: "claudeAgent", enabled: true }],
+      });
+      const beforeInventory = yield* getServerInventory;
+      const inventoryReads = yield* Ref.make(0);
+      const refreshedServerInventory = Ref.getAndUpdate(inventoryReads, (count) => count + 1).pipe(
+        Effect.flatMap((count) =>
+          count === 0 ? Effect.succeed(beforeInventory) : getServerInventory,
+        ),
+      );
+      const current = { ...bundle(true), skills: [], mcpServers: beforeInventory.mcpServers };
+      const incoming = {
+        ...current,
+        mcpServers: current.mcpServers.map((server) => ({ ...server, enabled: false })),
+      };
+      const expectedPlan = yield* planEnvironmentBundleApply({
+        current,
+        incoming,
+        providers,
+        serverInventory: beforeInventory,
+        cwd,
+      });
+
+      const result = yield* applyEnvironmentBundle({
+        current,
+        incoming,
+        expectedPlan,
+        cwd,
+        getProviders: Effect.succeed(providers),
+        getServerInventory: refreshedServerInventory,
+        refreshWorkspaceSnapshot: () => Effect.succeed(providers),
+      });
+
+      expect(result.appliedOperations).toEqual([
+        expect.objectContaining({ component: "mcp", serverName: "firebase" }),
+      ]);
+      expect(
+        yield* fileSystem.readFileString(path.join(cwd, ".claude", "settings.local.json")),
+      ).toContain('"disabledMcpjsonServers"');
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("writes, refreshes, and verifies a Claude skill disable", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -91,6 +154,7 @@ describe("EnvironmentBundleApply", () => {
         current: bundle(true),
         incoming: bundle(false),
         providers: before,
+        serverInventory: emptyServerInventory,
         cwd,
       });
       const result = yield* applyEnvironmentBundle({
@@ -99,6 +163,7 @@ describe("EnvironmentBundleApply", () => {
         expectedPlan,
         cwd,
         getProviders: Effect.succeed(before),
+        getServerInventory: Effect.succeed(emptyServerInventory),
         refreshWorkspaceSnapshot: () => Effect.succeed([forCwd(provider(false), cwd)]),
       });
       expect(result.refreshedProviderInstanceIds).toEqual(["claudeAgent"]);
@@ -119,6 +184,7 @@ describe("EnvironmentBundleApply", () => {
         current: bundle(true),
         incoming: bundle(false),
         providers: before,
+        serverInventory: emptyServerInventory,
         cwd,
       });
       const error = yield* applyEnvironmentBundle({
@@ -127,6 +193,7 @@ describe("EnvironmentBundleApply", () => {
         expectedPlan,
         cwd,
         getProviders: Effect.succeed(before),
+        getServerInventory: Effect.succeed(emptyServerInventory),
         refreshWorkspaceSnapshot: () => Effect.succeed(before),
       }).pipe(Effect.flip);
       expect(error.reason).toBe("health-check-failed");
@@ -147,6 +214,7 @@ describe("EnvironmentBundleApply", () => {
         current: bundle(true),
         incoming: bundle(false),
         providers: before,
+        serverInventory: emptyServerInventory,
         cwd,
       });
       const settingsPath = path.join(cwd, ".claude", "settings.local.json");
@@ -158,6 +226,7 @@ describe("EnvironmentBundleApply", () => {
         expectedPlan,
         cwd,
         getProviders: Effect.succeed(before),
+        getServerInventory: Effect.succeed(emptyServerInventory),
         refreshWorkspaceSnapshot: () => Effect.succeed([forCwd(provider(false), cwd)]),
       }).pipe(Effect.flip);
       expect(error.reason).toBe("plan-changed");

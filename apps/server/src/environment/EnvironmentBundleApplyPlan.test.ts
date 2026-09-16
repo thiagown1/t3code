@@ -8,6 +8,7 @@ const hash = "a".repeat(64);
 function bundle(
   skills: EnvironmentBundle["skills"],
   providers?: EnvironmentBundle["providers"],
+  mcpServers: EnvironmentBundle["mcpServers"] = [],
 ): EnvironmentBundle {
   return {
     schemaVersion: 1,
@@ -19,13 +20,20 @@ function bundle(
       name: "Profile",
       capabilities: [],
     },
-    mcpServers: [],
+    mcpServers,
     skills,
     pluginsAndApps: [],
     providers: providers ?? [{ instanceId: "claudeAgent", driver: "claudeAgent", enabled: true }],
     projectInstructions: [],
   };
 }
+
+const serverInventory = (current: EnvironmentBundle) => ({
+  mcpServers: current.mcpServers,
+  mcpCoverage: "partial" as const,
+  projectInstructions: [],
+  projectInstructionsCoverage: "partial" as const,
+});
 
 function provider(input?: {
   instanceId?: string;
@@ -80,6 +88,7 @@ describe("buildEnvironmentBundleApplyPlan", () => {
         current,
         incoming,
         providers: [provider()],
+        serverInventory: serverInventory(current),
         cwd: "C:\\repo",
         targetStateHash: hash,
       }),
@@ -108,6 +117,7 @@ describe("buildEnvironmentBundleApplyPlan", () => {
       current: bundle([disabled]),
       incoming: bundle([enabledSkill]),
       providers: [provider()],
+      serverInventory: serverInventory(bundle([disabled])),
       cwd: "C:\\repo",
       targetStateHash: hash,
     });
@@ -121,6 +131,7 @@ describe("buildEnvironmentBundleApplyPlan", () => {
       current: bundle([codexSkill]),
       incoming: bundle([{ ...codexSkill, enabled: false }]),
       providers: [provider({ instanceId: "codex", driver: "codex" })],
+      serverInventory: serverInventory(bundle([codexSkill])),
       cwd: "C:\\repo",
       targetStateHash: hash,
     });
@@ -144,6 +155,7 @@ describe("buildEnvironmentBundleApplyPlan", () => {
       current,
       incoming,
       providers: [provider(), provider({ instanceId: "work" })],
+      serverInventory: serverInventory(current),
       cwd: "C:\\repo",
       targetStateHash: hash,
     });
@@ -161,10 +173,51 @@ describe("buildEnvironmentBundleApplyPlan", () => {
       current,
       incoming,
       providers: [provider()],
+      serverInventory: serverInventory(current),
       cwd: "C:\\repo",
       targetStateHash: hash,
     });
     expect(plan.canApply).toBe(false);
     expect(plan.blockers).toContain("provider:claudeAgent requires an application adapter");
+  });
+
+  it("plans a metadata-preserving Claude project MCP disable", () => {
+    const mcp = {
+      serverId: "claude:claudeAgent:firebase",
+      origin: "claude:claudeAgent:project-config",
+      enabled: true,
+      configurationRef: "claude:claudeAgent:mcp:firebase",
+      credentialRefs: [],
+      allowedTools: [],
+      blockedTools: [],
+    };
+    const current = bundle([], undefined, [mcp]);
+    const incoming = bundle([], undefined, [{ ...mcp, enabled: false }]);
+    expect(
+      buildEnvironmentBundleApplyPlan({
+        current,
+        incoming,
+        providers: [provider()],
+        serverInventory: serverInventory(current),
+        cwd: "C:\\repo",
+        targetStateHash: hash,
+      }),
+    ).toEqual(
+      expect.objectContaining({
+        canApply: true,
+        blockers: [],
+        operations: [
+          {
+            component: "mcp",
+            operation: "disable",
+            adapter: "claude-project-mcp-override",
+            serverName: "firebase",
+            targetIds: ["claude:claudeAgent:firebase"],
+            providerInstanceIds: ["claudeAgent"],
+            requiresProviderReload: true,
+          },
+        ],
+      }),
+    );
   });
 });

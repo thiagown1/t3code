@@ -69,12 +69,17 @@ function validateJsonc(contents: string): void {
     (Object.hasOwn(parsed, "skillOverrides") &&
       (parsed.skillOverrides === null ||
         typeof parsed.skillOverrides !== "object" ||
-        Array.isArray(parsed.skillOverrides)))
+        Array.isArray(parsed.skillOverrides))) ||
+    (Object.hasOwn(parsed, "disabledMcpjsonServers") &&
+      (!Array.isArray(parsed.disabledMcpjsonServers) ||
+        parsed.disabledMcpjsonServers.some(
+          (name: unknown) => typeof name !== "string" || !/^[a-zA-Z0-9_.-]{1,256}$/u.test(name),
+        )))
   ) {
     throw new ClaudeSkillOverrideTargetError({
       reason: "invalid-json",
       message:
-        "Claude project settings are not a valid JSON object with an object skillOverrides map",
+        "Claude project settings are not a valid JSON object with supported skill and MCP overrides",
     });
   }
 }
@@ -130,6 +135,7 @@ export const loadClaudeSkillOverrideTargetState = Effect.fn("loadClaudeSkillOver
 export function renderClaudeSkillDisableOverrides(
   state: ClaudeSkillOverrideTargetState,
   skillNames: ReadonlyArray<string>,
+  mcpServerNames: ReadonlyArray<string> = [],
 ): string {
   const eol = state.contents.includes("\r\n") ? "\r\n" : "\n";
   let contents = state.contents.trim().length === 0 ? `{${eol}}${eol}` : state.contents;
@@ -141,7 +147,27 @@ export function renderClaudeSkillDisableOverrides(
       }),
     );
   }
+  if (mcpServerNames.length > 0) {
+    const parsed = parseJsonc(contents) as { disabledMcpjsonServers?: ReadonlyArray<string> };
+    const disabledMcpjsonServers = [
+      ...new Set([...(parsed.disabledMcpjsonServers ?? []), ...mcpServerNames]),
+    ].sort();
+    contents = applyEdits(
+      contents,
+      modify(contents, ["disabledMcpjsonServers"], disabledMcpjsonServers, {
+        formattingOptions: { insertSpaces: true, tabSize: 2, eol },
+      }),
+    );
+  }
   return contents.endsWith(eol) ? contents : `${contents}${eol}`;
+}
+
+export function claudeDisabledMcpServerNames(
+  state: ClaudeSkillOverrideTargetState,
+): ReadonlySet<string> {
+  if (state.contents.trim().length === 0) return new Set();
+  const parsed = parseJsonc(state.contents) as { disabledMcpjsonServers?: ReadonlyArray<string> };
+  return new Set(parsed.disabledMcpjsonServers ?? []);
 }
 
 export const writeClaudeSkillDisableOverrides = Effect.fn("writeClaudeSkillDisableOverrides")(
@@ -149,6 +175,7 @@ export const writeClaudeSkillDisableOverrides = Effect.fn("writeClaudeSkillDisab
     readonly cwd: string;
     readonly expectedStateHash: string;
     readonly skillNames: ReadonlyArray<string>;
+    readonly mcpServerNames?: ReadonlyArray<string>;
   }) {
     const current = yield* loadClaudeSkillOverrideTargetState(input.cwd);
     if (current.stateHash !== input.expectedStateHash) {
@@ -157,7 +184,11 @@ export const writeClaudeSkillDisableOverrides = Effect.fn("writeClaudeSkillDisab
         message: "Claude project settings changed after the Environment Bundle dry run",
       });
     }
-    const contents = renderClaudeSkillDisableOverrides(current, input.skillNames);
+    const contents = renderClaudeSkillDisableOverrides(
+      current,
+      input.skillNames,
+      input.mcpServerNames,
+    );
     yield* writeFileStringAtomically({ filePath: current.filePath, contents }).pipe(
       Effect.mapError(
         () =>

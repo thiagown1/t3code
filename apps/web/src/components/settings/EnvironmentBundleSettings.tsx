@@ -416,10 +416,11 @@ function EnvironmentBundleReview({
         </div>
       ) : applyMode === "authoritative" && authoritativePlan ? (
         <div className="rounded-lg border border-success/30 bg-success/5 p-3 text-xs text-muted-foreground">
-          This plan can atomically disable {authoritativePlan.operations.length} Claude skill
+          This plan can atomically apply {authoritativePlan.operations.length} Claude project
+          disable
           {authoritativePlan.operations.length === 1 ? "" : "s"}. The server will recheck the
-          destination hash, refresh every affected provider, and roll back unless the disabled state
-          is observed.
+          destination hash, refresh every affected provider, and roll back unless every disabled
+          skill or MCP is observed.
         </div>
       ) : applyMode === "settings" ? (
         <div className="rounded-lg border border-success/30 bg-success/5 p-3 text-xs text-muted-foreground">

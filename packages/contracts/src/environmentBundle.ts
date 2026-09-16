@@ -134,7 +134,7 @@ export const EnvironmentBundleServerInventory = Schema.Struct({
 });
 export type EnvironmentBundleServerInventory = typeof EnvironmentBundleServerInventory.Type;
 
-export const EnvironmentBundleApplyOperation = Schema.Struct({
+const EnvironmentBundleClaudeSkillDisableOperation = Schema.Struct({
   component: Schema.Literal("skill"),
   operation: Schema.Literal("disable"),
   adapter: Schema.Literal("claude-project-skill-override"),
@@ -143,6 +143,19 @@ export const EnvironmentBundleApplyOperation = Schema.Struct({
   providerInstanceIds: Schema.Array(StableId).check(Schema.isMinLength(1)),
   requiresProviderReload: Schema.Literal(true),
 });
+const EnvironmentBundleClaudeMcpDisableOperation = Schema.Struct({
+  component: Schema.Literal("mcp"),
+  operation: Schema.Literal("disable"),
+  adapter: Schema.Literal("claude-project-mcp-override"),
+  serverName: StableId,
+  targetIds: Schema.Array(StableId).check(Schema.isMinLength(1)),
+  providerInstanceIds: Schema.Array(StableId).check(Schema.isMinLength(1)),
+  requiresProviderReload: Schema.Literal(true),
+});
+export const EnvironmentBundleApplyOperation = Schema.Union([
+  EnvironmentBundleClaudeSkillDisableOperation,
+  EnvironmentBundleClaudeMcpDisableOperation,
+]);
 export type EnvironmentBundleApplyOperation = typeof EnvironmentBundleApplyOperation.Type;
 
 /**

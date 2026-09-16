@@ -336,6 +336,33 @@ command = "do-not-export"
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
+  it.effect("applies Claude project-local MCP disable overrides to the inventory", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-environment-bundle-" });
+      yield* fileSystem.makeDirectory(path.join(root, ".git"), { recursive: true });
+      yield* fileSystem.makeDirectory(path.join(root, ".claude"), { recursive: true });
+      yield* fileSystem.writeFileString(
+        path.join(root, ".mcp.json"),
+        encodeUnknownJson({ mcpServers: { firebase: { command: "private-command" } } }),
+      );
+      yield* fileSystem.writeFileString(
+        path.join(root, ".claude", "settings.local.json"),
+        '{ "disabledMcpjsonServers": ["firebase"] }\n',
+      );
+
+      const inventory = yield* loadEnvironmentBundleServerInventory({
+        cwd: root,
+        claudeMcpSources: [{ instanceId: "claude-work", enabled: true }],
+      });
+
+      expect(inventory.mcpServers).toEqual([
+        expect.objectContaining({ serverId: "claude:claude-work:firebase", enabled: false }),
+      ]);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
   it("discovers Cursor instances without exposing provider configuration", () => {
     const settings = {
       providerInstances: {

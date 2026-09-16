@@ -19,6 +19,10 @@ import * as Path from "effect/Path";
 import { parse as parseJsonc, type ParseError } from "jsonc-parser/lib/esm/main.js";
 
 import { expandHomePathWith } from "../pathExpansion.ts";
+import {
+  claudeDisabledMcpServerNames,
+  loadClaudeSkillOverrideTargetState,
+} from "./ClaudeSkillOverrideTarget.ts";
 
 const MAX_PROJECT_INSTRUCTION_BYTES = FileSystem.Size(256_000);
 const MAX_MCP_CONFIG_BYTES = FileSystem.Size(1_000_000);
@@ -610,9 +614,24 @@ const loadClaudeMcpInventory = Effect.fn("loadEnvironmentBundleClaudeMcpInventor
   root: string,
   sources: ReadonlyArray<ClaudeMcpInventorySource>,
 ) {
-  return yield* loadProjectJsonMcpInventory(root, sources, {
+  const disabledNames = yield* loadClaudeSkillOverrideTargetState(root).pipe(
+    Effect.map(claudeDisabledMcpServerNames),
+    Effect.orElseSucceed(() => new Set<string>()),
+  );
+  const inventory = yield* loadProjectJsonMcpInventory(root, sources, {
     provider: "claude",
     relativeConfigPath: [".mcp.json"],
+  });
+  return inventory.map((server) => {
+    const source = sources.find(
+      (candidate) => server.origin === `claude:${candidate.instanceId}:project-config`,
+    );
+    const prefix = source ? `claude:${source.instanceId}:` : "";
+    const nativeName =
+      prefix && server.serverId.startsWith(prefix) ? server.serverId.slice(prefix.length) : "";
+    if (!nativeName || !disabledNames.has(nativeName)) return server;
+    const disabled = { ...server, enabled: false };
+    return { ...disabled, configurationHash: sanitizedConfigurationHash(disabled) };
   });
 });
 
