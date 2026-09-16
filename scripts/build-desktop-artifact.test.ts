@@ -56,6 +56,7 @@ import {
   resolveDesktopUpdateChannel,
   resolveDesktopWebAssetBrand,
   resolveResourceMonitorRustTargets,
+  resolveStageInstallCommand,
   resolveWindowsServerAsarIgnoreGlobs,
   resourceMonitorExecutableName,
   resolveGitHubPublishConfig,
@@ -92,7 +93,12 @@ import {
   wslRuntimeArchiveStem,
 } from "./build-desktop-artifact.ts";
 import { BRAND_ASSET_PATHS } from "./lib/brand-assets.ts";
-import { HostProcessArchitecture, HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import {
+  HostProcessArchitecture,
+  HostProcessEnvironment,
+  HostProcessPlatform,
+} from "@t3tools/shared/hostProcess";
+import { SpawnExecutableResolution } from "@t3tools/shared/shell";
 import { symlinksSupported } from "@t3tools/shared/testing/symlinks";
 
 // A minimal stand-in for the Linux CLI release archive: one top-level
@@ -546,6 +552,30 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       },
     });
   });
+
+  it.effect("resolves staged installs through the repository vp shim", () =>
+    Effect.gen(function* () {
+      let resolvedCandidate: string | undefined;
+      const command = yield* resolveStageInstallCommand("C:\\repo").pipe(
+        Effect.provideService(HostProcessPlatform, "win32"),
+        Effect.provideService(HostProcessEnvironment, {
+          PATH: "./node_modules/.bin",
+          PATHEXT: ".COM;.EXE;.BAT;.CMD",
+        }),
+        Effect.provideService(SpawnExecutableResolution, (candidate) => {
+          resolvedCandidate = candidate;
+          return `${candidate}.CMD`;
+        }),
+      );
+
+      assert.equal(resolvedCandidate, "C:\\repo\\node_modules\\.bin\\vp");
+      assert.deepStrictEqual(command, {
+        command: '^"C:\\repo\\node_modules\\.bin\\vp.CMD^"',
+        args: ['^"install^"', '^"--prod^"'],
+        shell: true,
+      });
+    }),
+  );
 
   it("stages pnpm 11 allowBuilds and patchedDependencies in the workspace yaml", () => {
     assert.deepStrictEqual(
