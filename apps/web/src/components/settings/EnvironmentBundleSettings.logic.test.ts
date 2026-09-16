@@ -327,6 +327,48 @@ describe("Environment Bundle settings", () => {
     expect(providerInstance.enabled).toBe(true);
   });
 
+  it("prepares a default provider disable through legacy provider settings", () => {
+    const providers = {
+      codex: {
+        enabled: true,
+        homePath: "C:/secret-local-path",
+        launchArgs: "--strict-config",
+      },
+    } as unknown as ServerSettings["providers"];
+    const providerInstances = {} as ServerSettings["providerInstances"];
+    const current = buildEnvironmentBundleInventory({
+      environmentId: "desk",
+      environmentLabel: "Desk",
+      cwd: null,
+      capabilityProfile: profile,
+      providers: [
+        {
+          instanceId: "codex",
+          driver: "codex",
+          enabled: true,
+          version: "1.2.3",
+          skills: [],
+        },
+      ],
+    });
+    const incoming = {
+      ...current,
+      providers: [{ ...current.providers[0]!, enabled: false }],
+    };
+    const context = { providerInstances, providers };
+
+    expect(getEnvironmentBundleApplyReadiness(current, incoming, context)).toEqual({
+      canApply: true,
+      capabilityProfileChanged: false,
+      blockers: [],
+      providerInstancesToDisable: ["codex"],
+      codexMcpServersToDisable: [],
+    });
+    expect(buildEnvironmentBundleSettingsPatch(current, incoming, context)).toEqual({
+      providers: { codex: { enabled: false } },
+    });
+  });
+
   it("keeps provider enablement blocked until a health-checked adapter exists", () => {
     const providerInstances = {
       codex_work: { driver: "codex", enabled: false, config: { homePath: "C:/local" } },

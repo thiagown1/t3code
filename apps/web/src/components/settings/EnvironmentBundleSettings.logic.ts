@@ -29,6 +29,18 @@ interface InventoryProvider {
 }
 
 const CODEX_DEFAULT_INSTANCE_ID = defaultInstanceIdForDriver(ProviderDriverKind.make("codex"));
+const LEGACY_PROVIDER_DRIVERS = new Set<keyof ServerSettings["providers"]>([
+  "antigravity",
+  "claudeAgent",
+  "codex",
+  "cursor",
+  "grok",
+  "opencode",
+]);
+
+function isLegacyProviderDriver(value: string): value is keyof ServerSettings["providers"] {
+  return LEGACY_PROVIDER_DRIVERS.has(value as keyof ServerSettings["providers"]);
+}
 
 export type EnvironmentBundleEnablementComponent =
   | "capability"
@@ -477,11 +489,16 @@ export function getEnvironmentBundleApplyReadiness(
       const { enabled: beforeEnabled, ...beforeMetadata } = before;
       const { enabled: afterEnabled, ...afterMetadata } = after;
       const local = localProviderInstances?.[after.instanceId];
+      const isLegacyDefault =
+        !Object.hasOwn(localProviderInstances ?? {}, after.instanceId) &&
+        after.instanceId === after.driver &&
+        isLegacyProviderDriver(after.driver) &&
+        context?.providers?.[after.driver] !== undefined;
       return (
         beforeEnabled &&
         !afterEnabled &&
         JSON.stringify(beforeMetadata) === JSON.stringify(afterMetadata) &&
-        local?.driver === after.driver
+        (local?.driver === after.driver || isLegacyDefault)
       );
     })
     .map(({ after }) => after.instanceId);
@@ -575,12 +592,24 @@ export function buildEnvironmentBundleSettingsPatch(
   >;
   const nextProviderInstances: Record<string, ProviderInstanceConfig> = { ...providerInstances };
   let providerInstancesChanged = false;
+  const legacyProviderPatch: Record<string, { enabled?: boolean; launchArgs?: string }> = {};
   let legacyCodexLaunchArgs = context.providers?.codex.launchArgs;
-  let legacyCodexChanged = false;
   for (const instanceId of readiness.providerInstancesToDisable) {
     const instance = providerInstances[instanceId];
     if (!instance) {
-      throw new Error(`Environment Bundle provider settings not found: ${instanceId}`);
+      const incomingProvider = incoming.providers.find(
+        (provider) => provider.instanceId === instanceId,
+      );
+      if (
+        !incomingProvider ||
+        incomingProvider.instanceId !== incomingProvider.driver ||
+        !isLegacyProviderDriver(incomingProvider.driver) ||
+        context.providers?.[incomingProvider.driver] === undefined
+      ) {
+        throw new Error(`Environment Bundle provider settings not found: ${instanceId}`);
+      }
+      legacyProviderPatch[incomingProvider.driver] = { enabled: false };
+      continue;
     }
     nextProviderInstances[instanceId] = { ...instance, enabled: false };
     providerInstancesChanged = true;
@@ -595,7 +624,10 @@ export function buildEnvironmentBundleSettingsPatch(
         legacyCodexLaunchArgs,
         target.serverName,
       );
-      legacyCodexChanged = true;
+      legacyProviderPatch.codex = {
+        ...legacyProviderPatch.codex,
+        launchArgs: legacyCodexLaunchArgs,
+      };
       continue;
     }
     if (!instance || instance.driver !== "codex") {
@@ -627,11 +659,9 @@ export function buildEnvironmentBundleSettingsPatch(
             nextProviderInstances as unknown as ServerSettings["providerInstances"],
         }
       : {}),
-    ...(legacyCodexChanged
+    ...(Object.keys(legacyProviderPatch).length > 0
       ? {
-          providers: {
-            codex: { launchArgs: legacyCodexLaunchArgs! },
-          },
+          providers: legacyProviderPatch as NonNullable<ServerSettingsPatch["providers"]>,
         }
       : {}),
   };
