@@ -104,6 +104,9 @@ const claudeAgentInstanceId = ProviderInstanceId.make("claudeAgent");
 const CODEX_DRIVER = ProviderDriverKind.make("codex");
 const CLAUDE_AGENT_DRIVER = ProviderDriverKind.make("claudeAgent");
 const CURSOR_DRIVER = ProviderDriverKind.make("cursor");
+const GROK_DRIVER = ProviderDriverKind.make("grok");
+const OPENCODE_DRIVER = ProviderDriverKind.make("opencode");
+const ANTIGRAVITY_DRIVER = ProviderDriverKind.make("antigravity");
 
 const assistantQuoteText = 'Keep the shared parser for "résumé".\nPreserve line breaks.';
 const assistantCitation = {
@@ -430,12 +433,18 @@ function makeProviderServiceLayer(
   const codex = makeFakeCodexAdapter(CODEX_DRIVER, input.supportsConversationRollback);
   const claude = makeFakeCodexAdapter(CLAUDE_AGENT_DRIVER);
   const cursor = makeFakeCodexAdapter(CURSOR_DRIVER);
+  const grok = makeFakeCodexAdapter(GROK_DRIVER);
+  const opencode = makeFakeCodexAdapter(OPENCODE_DRIVER);
+  const antigravity = makeFakeCodexAdapter(ANTIGRAVITY_DRIVER);
   const registry =
     input.registry ??
     makeAdapterRegistryMock({
       [ProviderDriverKind.make("codex")]: codex.adapter,
       [ProviderDriverKind.make("claudeAgent")]: claude.adapter,
       [ProviderDriverKind.make("cursor")]: cursor.adapter,
+      [ProviderDriverKind.make("grok")]: grok.adapter,
+      [ProviderDriverKind.make("opencode")]: opencode.adapter,
+      [ProviderDriverKind.make("antigravity")]: antigravity.adapter,
     });
 
   const providerAdapterLayer = Layer.succeed(
@@ -477,6 +486,9 @@ function makeProviderServiceLayer(
     codex,
     claude,
     cursor,
+    grok,
+    opencode,
+    antigravity,
     layer,
   };
 }
@@ -2129,6 +2141,112 @@ routing.layer("ProviderServiceLive routing", (it) => {
 
       assert.deepStrictEqual(result, { status: "not-linked" });
       assert.strictEqual(routing.codex.archiveThread.mock.calls.length, 0);
+    }),
+  );
+
+  it.effect("previews Codex cleanup without calling or starting an adapter", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-cleanup-preview-codex");
+      yield* provider.startSession(threadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        threadId,
+        runtimeMode: "full-access",
+      });
+      routing.codex.startSession.mockClear();
+      routing.codex.archiveThread.mockClear();
+      routing.codex.listSessions.mockClear();
+
+      const preview = yield* provider.previewThreadCleanup(threadId);
+
+      assert.deepStrictEqual(preview.provider, {
+        status: "linked",
+        provider: CODEX_DRIVER,
+        capabilities: {
+          archive: "supported",
+          unarchive: "known-not-implemented",
+          delete: "known-not-implemented",
+        },
+        transcript: {
+          archiveLocal: "preserved",
+          tombstoneLocal: "preserved",
+        },
+      });
+      assert.equal(routing.codex.startSession.mock.calls.length, 0);
+      assert.equal(routing.codex.archiveThread.mock.calls.length, 0);
+      assert.equal(routing.codex.listSessions.mock.calls.length, 0);
+    }),
+  );
+
+  it.effect("previews an unlinked cleanup without consulting any adapter", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-cleanup-preview-unlinked");
+      routing.codex.startSession.mockClear();
+      routing.codex.archiveThread.mockClear();
+      routing.claude.startSession.mockClear();
+
+      const preview = yield* provider.previewThreadCleanup(threadId);
+
+      assert.deepStrictEqual(preview.provider, {
+        status: "not-linked",
+        capabilities: {
+          archive: "not-linked",
+          unarchive: "not-linked",
+          delete: "not-linked",
+        },
+        transcript: "not-linked",
+      });
+      assert.equal(routing.codex.startSession.mock.calls.length, 0);
+      assert.equal(routing.codex.archiveThread.mock.calls.length, 0);
+      assert.equal(routing.claude.startSession.mock.calls.length, 0);
+    }),
+  );
+
+  it.effect("reports cleanup capabilities for every built-in provider without adapter calls", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const scenarios = [
+        [CLAUDE_AGENT_DRIVER, routing.claude],
+        [CURSOR_DRIVER, routing.cursor],
+        [GROK_DRIVER, routing.grok],
+        [OPENCODE_DRIVER, routing.opencode],
+        [ANTIGRAVITY_DRIVER, routing.antigravity],
+      ] as const;
+
+      for (const [driver, adapter] of scenarios) {
+        const threadId = asThreadId(`thread-cleanup-preview-${driver}`);
+        yield* provider.startSession(threadId, {
+          provider: driver,
+          providerInstanceId: ProviderInstanceId.make(driver),
+          threadId,
+          runtimeMode: "full-access",
+        });
+        adapter.startSession.mockClear();
+        adapter.archiveThread.mockClear();
+        adapter.listSessions.mockClear();
+
+        const preview = yield* provider.previewThreadCleanup(threadId);
+
+        assert.deepStrictEqual(preview.provider, {
+          status: "linked",
+          provider: driver,
+          capabilities: {
+            archive: "unsupported",
+            unarchive: "unsupported",
+            delete: "unsupported",
+          },
+          transcript: {
+            archiveLocal: "preserved",
+            tombstoneLocal: "preserved",
+          },
+        });
+        assert.equal(adapter.startSession.mock.calls.length, 0);
+        assert.equal(adapter.archiveThread.mock.calls.length, 0);
+        assert.equal(adapter.listSessions.mock.calls.length, 0);
+        yield* provider.stopSession({ threadId });
+      }
     }),
   );
 

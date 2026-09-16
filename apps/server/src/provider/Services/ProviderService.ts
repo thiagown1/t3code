@@ -27,6 +27,7 @@ import type {
   MessageId,
   ThreadId,
   ProviderTurnStartResult,
+  ThreadCleanupPreview,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
@@ -103,6 +104,12 @@ export interface ProviderServiceShape {
   readonly archiveConversation: (
     threadId: ThreadId,
   ) => Effect.Effect<ProviderConversationArchiveResult, ProviderServiceError>;
+
+  /** Describe local and provider cleanup effects without starting a runtime,
+   * calling an adapter, or mutating persisted state. */
+  readonly previewThreadCleanup: (
+    threadId: ThreadId,
+  ) => Effect.Effect<ThreadCleanupPreview, ProviderServiceError>;
 
   /**
    * List active provider sessions.

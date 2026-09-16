@@ -10234,6 +10234,64 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("previews thread cleanup without provider calls or orchestration writes", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("thread-cleanup-preview-rpc");
+      const preview = {
+        threadId,
+        local: {
+          archive: { outcome: "archived" as const, reversible: true as const },
+          tombstone: { outcome: "tombstoned" as const, reversible: false as const },
+          terminalHistory: { archive: "preserved" as const, tombstone: "deleted" as const },
+          attachments: { archive: "preserved" as const, tombstone: "deleted" as const },
+          eventStoreAudit: "retained" as const,
+        },
+        provider: {
+          status: "not-linked" as const,
+          capabilities: {
+            archive: "not-linked" as const,
+            unarchive: "not-linked" as const,
+            delete: "not-linked" as const,
+          },
+          transcript: "not-linked" as const,
+        },
+        irreversible: {
+          archiveLocal: false as const,
+          tombstoneLocal: true as const,
+          deleteTerminalHistory: true as const,
+          deleteAttachments: true as const,
+          deleteRemoteConversation: false as const,
+        },
+      };
+      const previewThreadCleanup = vi.fn<
+        ProviderService.ProviderService["Service"]["previewThreadCleanup"]
+      >(() => Effect.succeed(preview));
+      const dispatch = vi.fn(() => Effect.die("cleanup preview must not dispatch"));
+      const archiveConversation = vi.fn(() =>
+        Effect.die("cleanup preview must not call providers"),
+      );
+
+      yield* buildAppUnderTest({
+        layers: {
+          providerService: { previewThreadCleanup, archiveConversation },
+          orchestrationEngine: { dispatch },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const response = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.previewThreadCleanup]({ threadId }),
+        ),
+      );
+
+      assert.deepStrictEqual(response, preview);
+      assert.deepStrictEqual(previewThreadCleanup.mock.calls, [[threadId]]);
+      assert.equal(archiveConversation.mock.calls.length, 0);
+      assert.equal(dispatch.mock.calls.length, 0);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("does not precheck session state before the archive event is committed", () =>
     Effect.gen(function* () {
       const threadId = ThreadId.make("thread-archive-precheck");

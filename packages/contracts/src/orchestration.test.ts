@@ -31,6 +31,7 @@ import {
   ThreadCreatedPayload,
   ThreadTurnDiff,
   ThreadTurnStartRequestedPayload,
+  ThreadCleanupPreview,
   SnapShotAccessibility,
   isProviderSendTurnSupportedImageMimeType,
   PROVIDER_SEND_TURN_MAX_FILE_BYTES,
@@ -69,6 +70,49 @@ const decodeOrchestrationEvent = Schema.decodeUnknownEffect(OrchestrationEvent);
 const decodeThreadMetaUpdatedPayload = Schema.decodeUnknownEffect(ThreadMetaUpdatedPayload);
 const decodeDispatchCommandError = Schema.decodeUnknownEffect(OrchestrationDispatchCommandError);
 const decodeSnapShotAccessibility = Schema.decodeUnknownEffect(SnapShotAccessibility);
+const decodeThreadCleanupPreview = Schema.decodeUnknownEffect(ThreadCleanupPreview);
+
+it.effect("decodes cleanup preview with explicit local retention and provider capabilities", () =>
+  Effect.gen(function* () {
+    const preview = yield* decodeThreadCleanupPreview({
+      threadId: "thread-cleanup-preview",
+      local: {
+        archive: { outcome: "archived", reversible: true },
+        tombstone: { outcome: "tombstoned", reversible: false },
+        terminalHistory: { archive: "preserved", tombstone: "deleted" },
+        attachments: { archive: "preserved", tombstone: "deleted" },
+        eventStoreAudit: "retained",
+      },
+      provider: {
+        status: "linked",
+        provider: "codex",
+        capabilities: {
+          archive: "supported",
+          unarchive: "known-not-implemented",
+          delete: "known-not-implemented",
+        },
+        transcript: {
+          archiveLocal: "preserved",
+          tombstoneLocal: "preserved",
+        },
+      },
+      irreversible: {
+        archiveLocal: false,
+        tombstoneLocal: true,
+        deleteTerminalHistory: true,
+        deleteAttachments: true,
+        deleteRemoteConversation: false,
+      },
+    });
+
+    assert.strictEqual(preview.provider.status, "linked");
+    if (preview.provider.status === "linked") {
+      assert.strictEqual(preview.provider.capabilities.archive, "supported");
+      assert.strictEqual(preview.provider.transcript.tombstoneLocal, "preserved");
+    }
+    assert.strictEqual(preview.local.eventStoreAudit, "retained");
+  }),
+);
 
 it.effect("decodes a dispatch error after its bootstrap thread was deleted", () =>
   Effect.gen(function* () {

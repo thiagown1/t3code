@@ -31,7 +31,7 @@ import {
   TrimmedString,
   TurnId,
 } from "./baseSchemas.ts";
-import { ProviderInstanceId } from "./providerInstance.ts";
+import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 import {
   PullRequestActor,
   PullRequestCheck,
@@ -48,6 +48,7 @@ export const ORCHESTRATION_WS_METHODS = {
   getFullThreadDiff: "orchestration.getFullThreadDiff",
   searchThreads: "orchestration.searchThreads",
   getArchivedShellSnapshot: "orchestration.getArchivedShellSnapshot",
+  previewThreadCleanup: "orchestration.previewThreadCleanup",
   subscribeShell: "orchestration.subscribeShell",
   subscribeThread: "orchestration.subscribeThread",
 } as const;
@@ -634,6 +635,68 @@ export const ThreadArchiveReceipt = Schema.Struct({
   createdAt: IsoDateTime,
 });
 export type ThreadArchiveReceipt = typeof ThreadArchiveReceipt.Type;
+
+export const ThreadCleanupCapabilityStatus = Schema.Literals([
+  "supported",
+  "known-not-implemented",
+  "unsupported",
+  "unavailable",
+  "not-linked",
+]);
+export type ThreadCleanupCapabilityStatus = typeof ThreadCleanupCapabilityStatus.Type;
+
+const ThreadCleanupCapabilities = Schema.Struct({
+  archive: ThreadCleanupCapabilityStatus,
+  unarchive: ThreadCleanupCapabilityStatus,
+  delete: ThreadCleanupCapabilityStatus,
+});
+
+export const ThreadCleanupPreview = Schema.Struct({
+  threadId: ThreadId,
+  local: Schema.Struct({
+    archive: Schema.Struct({
+      outcome: Schema.Literal("archived"),
+      reversible: Schema.Literal(true),
+    }),
+    tombstone: Schema.Struct({
+      outcome: Schema.Literal("tombstoned"),
+      reversible: Schema.Literal(false),
+    }),
+    terminalHistory: Schema.Struct({
+      archive: Schema.Literal("preserved"),
+      tombstone: Schema.Literal("deleted"),
+    }),
+    attachments: Schema.Struct({
+      archive: Schema.Literal("preserved"),
+      tombstone: Schema.Literal("deleted"),
+    }),
+    eventStoreAudit: Schema.Literal("retained"),
+  }),
+  provider: Schema.Union([
+    Schema.Struct({
+      status: Schema.Literal("not-linked"),
+      capabilities: ThreadCleanupCapabilities,
+      transcript: Schema.Literal("not-linked"),
+    }),
+    Schema.Struct({
+      status: Schema.Literal("linked"),
+      provider: ProviderDriverKind,
+      capabilities: ThreadCleanupCapabilities,
+      transcript: Schema.Struct({
+        archiveLocal: Schema.Literal("preserved"),
+        tombstoneLocal: Schema.Literal("preserved"),
+      }),
+    }),
+  ]),
+  irreversible: Schema.Struct({
+    archiveLocal: Schema.Literal(false),
+    tombstoneLocal: Schema.Literal(true),
+    deleteTerminalHistory: Schema.Literal(true),
+    deleteAttachments: Schema.Literal(true),
+    deleteRemoteConversation: Schema.Literal(false),
+  }),
+});
+export type ThreadCleanupPreview = typeof ThreadCleanupPreview.Type;
 
 const OrchestrationLatestTurnState = Schema.Literals([
   "running",
@@ -2399,6 +2462,10 @@ export const OrchestrationRpcSchemas = {
   getArchivedShellSnapshot: {
     input: Schema.Struct({}),
     output: OrchestrationShellSnapshot,
+  },
+  previewThreadCleanup: {
+    input: Schema.Struct({ threadId: ThreadId }),
+    output: ThreadCleanupPreview,
   },
   subscribeThread: {
     input: OrchestrationSubscribeThreadInput,

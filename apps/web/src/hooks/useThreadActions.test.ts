@@ -2,10 +2,12 @@ import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
+  confirmThreadCleanup,
   navigateAfterThreadDeletion,
   requestThreadUnpinConfirmation,
   ThreadArchiveBlockedError,
 } from "./useThreadActions";
+import { threadCleanupConfirmationMessage } from "@t3tools/client-runtime/state/orchestration";
 import { toastManager } from "../components/ui/toast";
 
 describe("navigateAfterThreadDeletion", () => {
@@ -102,5 +104,34 @@ describe("requestThreadUnpinConfirmation", () => {
     });
 
     expect(result._tag).toBe("Failure");
+  });
+});
+
+describe("confirmThreadCleanup", () => {
+  it("fails closed when dialogs are unavailable", async () => {
+    const result = await confirmThreadCleanup({
+      preview: null,
+      action: "tombstone",
+      title: "Remote thread",
+      confirm: null,
+    });
+
+    expect(result).toMatchObject({ _tag: "Success", value: false });
+  });
+
+  it("shows the conservative old-server message and returns the user's decision", async () => {
+    const confirm = vi.fn(async () => false);
+    const result = await confirmThreadCleanup({
+      preview: null,
+      action: "archive",
+      title: "Remote thread",
+      confirm,
+    });
+
+    expect(confirm).toHaveBeenCalledWith(
+      threadCleanupConfirmationMessage(null, { action: "archive", title: "Remote thread" }),
+      { variant: "default" },
+    );
+    expect(result).toMatchObject({ _tag: "Success", value: false });
   });
 });

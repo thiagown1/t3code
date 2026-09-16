@@ -2182,6 +2182,7 @@ export default function Sidebar() {
     reorderActiveThread,
     archiveThread,
     deleteThread,
+    requestThreadCleanupConfirmation,
   } = useThreadActions();
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
@@ -2984,11 +2985,10 @@ export default function Sidebar() {
       );
       if (thread === undefined) return false;
       if (confirmThreadArchive) {
-        const api = readLocalApi();
-        if (api === undefined) return false;
-        const confirmed = await settlePromise(() =>
-          api.dialogs.confirm(`Archive thread "${thread.title}"?`),
-        );
+        const confirmed = await requestThreadCleanupConfirmation(threadRef, {
+          action: "archive",
+          title: thread.title,
+        });
         if (confirmed._tag === "Failure" || !confirmed.value) return false;
       }
       const result = await archiveThread(threadRef);
@@ -3005,7 +3005,7 @@ export default function Sidebar() {
       }
       return false;
     },
-    [archiveThread, confirmThreadArchive, threads],
+    [archiveThread, confirmThreadArchive, requestThreadCleanupConfirmation, threads],
   );
 
   // Dropping files on a row opens that thread and attaches the files there.
@@ -4139,7 +4139,7 @@ export default function Sidebar() {
           api.dialogs.confirm(
             [
               `Delete ${count} thread${count === 1 ? "" : "s"}?`,
-              "This permanently clears conversation history for these threads.",
+              "T3 will remove these threads from your lists and delete their terminal history and stored attachments. Conversation records remain in the audit log, and provider conversations stay unchanged.",
             ].join("\n"),
             { variant: "destructive" },
           ),
@@ -4383,9 +4383,10 @@ export default function Sidebar() {
             return;
           case "archive": {
             if (confirmThreadArchive) {
-              const confirmed = await settlePromise(() =>
-                api.dialogs.confirm(`Archive thread "${thread.title}"?`),
-              );
+              const confirmed = await requestThreadCleanupConfirmation(threadRef, {
+                action: "archive",
+                title: thread.title,
+              });
               if (confirmed._tag === "Failure" || !confirmed.value) return;
             }
             let didArchive = false;
@@ -4411,15 +4412,10 @@ export default function Sidebar() {
           }
           case "delete": {
             if (confirmThreadDelete) {
-              const confirmed = await settlePromise(() =>
-                api.dialogs.confirm(
-                  [
-                    `Delete thread "${thread.title}"?`,
-                    "This permanently clears conversation history for this thread.",
-                  ].join("\n"),
-                  { variant: "destructive" },
-                ),
-              );
+              const confirmed = await requestThreadCleanupConfirmation(threadRef, {
+                action: "tombstone",
+                title: thread.title,
+              });
               if (confirmed._tag === "Failure" || !confirmed.value) return;
             }
             const result = await deleteThread(threadRef);
@@ -4455,6 +4451,7 @@ export default function Sidebar() {
       copyPathToClipboard,
       copyThreadIdToClipboard,
       deleteThread,
+      requestThreadCleanupConfirmation,
       exportThreadBundle,
       handleMultiSelectContextMenu,
       markThreadUnread,

@@ -321,9 +321,11 @@ function ProjectDetail({
               : [`This removes ${members.length} grouped project entries.`]),
             ...(projectThreads.length > 0
               ? [
-                  "This permanently clears conversation history for those threads and any archived threads.",
+                  "T3 removes those threads from your lists, deletes terminal history and stored attachments, and retains conversation records in the audit log. Provider conversations stay unchanged.",
                 ]
-              : ["This permanently clears any archived conversation history."]),
+              : [
+                  "T3 removes archived threads from your lists and retains their conversation records in the audit log. Provider conversations stay unchanged.",
+                ]),
             isWholeGroup && !hasOtherMembers
               ? "This removes only the project entries, not the files on disk."
               : "Other entries in this grouped project are unaffected.",

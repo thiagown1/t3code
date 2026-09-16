@@ -1,4 +1,4 @@
-import { ORCHESTRATION_WS_METHODS } from "@t3tools/contracts";
+import { ORCHESTRATION_WS_METHODS, type ThreadCleanupPreview } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import { Atom } from "effect/unstable/reactivity";
 
@@ -37,6 +37,62 @@ export type {
   ResolveFirstMateDecisionInput,
   SelectFirstMateTopicInput,
 } from "../operations/commands.ts";
+
+function providerLabel(preview: ThreadCleanupPreview): string | null {
+  if (preview.provider.status === "not-linked") return null;
+  switch (String(preview.provider.provider)) {
+    case "codex":
+      return "Codex";
+    case "claudeAgent":
+      return "Claude";
+    case "cursor":
+      return "Cursor";
+    case "grok":
+      return "Grok";
+    case "opencode":
+      return "OpenCode";
+    case "antigravity":
+      return "Antigravity";
+    default:
+      return String(preview.provider.provider);
+  }
+}
+
+export function threadCleanupConfirmationMessage(
+  preview: ThreadCleanupPreview | null,
+  input: { readonly action: "archive" | "tombstone"; readonly title: string },
+): string {
+  if (input.action === "archive") {
+    const providerOutcome =
+      preview === null
+        ? "This older server cannot preview provider cleanup. The provider-side outcome is unknown before archiving; check the archive receipt if the server provides one."
+        : preview.provider.status === "not-linked"
+          ? "No provider conversation is linked."
+          : preview.provider.capabilities.archive === "supported"
+            ? `After the local archive, T3 will attempt to archive the ${providerLabel(preview)} provider conversation. Its provider transcript is preserved, and the actual outcome is recorded in the archive receipt.`
+            : preview.provider.capabilities.archive === "unavailable"
+              ? `T3 cannot currently confirm whether the ${providerLabel(preview)} provider conversation can be archived. The archive receipt will record the actual provider-side outcome.`
+              : `The ${providerLabel(preview)} provider conversation and transcript stay unchanged because remote archiving is unsupported.`;
+    return [
+      `Archive thread "${input.title}"?`,
+      "T3 will hide the thread. Conversation history, terminal history, attachments, and the audit log stay available.",
+      providerOutcome,
+    ].join("\n\n");
+  }
+
+  const providerOutcome =
+    preview === null
+      ? "This older server cannot preview provider cleanup. This action does not request deletion of a provider conversation."
+      : preview.provider.status === "not-linked"
+        ? "No provider conversation is linked."
+        : `The ${providerLabel(preview)} provider conversation and transcript stay unchanged.`;
+  return [
+    `Remove thread "${input.title}" from T3?`,
+    "T3 will remove the thread from your lists and delete its terminal history and stored attachments. Conversation records remain in the audit log.",
+    providerOutcome,
+    "This cannot be undone in T3.",
+  ].join("\n\n");
+}
 
 export function createOrchestrationEnvironmentAtoms<R, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | Crypto.Crypto | R, E>,
@@ -145,6 +201,11 @@ export function createOrchestrationEnvironmentAtoms<R, E>(
     archivedShellSnapshot: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:orchestration:archived-shell-snapshot",
       tag: ORCHESTRATION_WS_METHODS.getArchivedShellSnapshot,
+    }),
+    threadCleanupPreview: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:orchestration:thread-cleanup-preview",
+      tag: ORCHESTRATION_WS_METHODS.previewThreadCleanup,
+      staleTimeMs: 0,
     }),
   };
 }

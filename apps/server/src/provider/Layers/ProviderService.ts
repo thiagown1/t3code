@@ -34,6 +34,7 @@ import {
   type ProviderRuntimeEvent,
   type ProviderSession,
   type ServerSettings as ServerSettingsValue,
+  type ThreadCleanupPreview,
 } from "@t3tools/contracts";
 import { expandAssistantCitationsForProvider } from "@t3tools/shared/assistantCitations";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
@@ -2142,6 +2143,66 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     } as const;
   });
 
+  const previewThreadCleanup: ProviderServiceMethod<"previewThreadCleanup"> = Effect.fn(
+    "previewThreadCleanup",
+  )(function* (threadId) {
+    const binding = yield* directory.getBinding(threadId);
+    let provider: ThreadCleanupPreview["provider"];
+    if (Option.isNone(binding)) {
+      provider = {
+        status: "not-linked",
+        capabilities: {
+          archive: "not-linked",
+          unarchive: "not-linked",
+          delete: "not-linked",
+        },
+        transcript: "not-linked",
+      };
+    } else {
+      const adapter =
+        binding.value.providerInstanceId === undefined
+          ? Option.none<ProviderAdapterShape<ProviderAdapterError>>()
+          : yield* registry.getByInstance(binding.value.providerInstanceId).pipe(Effect.option);
+      const isCodex = String(binding.value.provider) === "codex";
+      provider = {
+        status: "linked",
+        provider: binding.value.provider,
+        capabilities: {
+          archive: Option.isNone(adapter)
+            ? "unavailable"
+            : adapter.value.archiveThread === undefined
+              ? "unsupported"
+              : "supported",
+          unarchive: isCodex ? "known-not-implemented" : "unsupported",
+          delete: isCodex ? "known-not-implemented" : "unsupported",
+        },
+        transcript: {
+          archiveLocal: "preserved",
+          tombstoneLocal: "preserved",
+        },
+      };
+    }
+
+    return {
+      threadId,
+      local: {
+        archive: { outcome: "archived", reversible: true },
+        tombstone: { outcome: "tombstoned", reversible: false },
+        terminalHistory: { archive: "preserved", tombstone: "deleted" },
+        attachments: { archive: "preserved", tombstone: "deleted" },
+        eventStoreAudit: "retained",
+      },
+      provider,
+      irreversible: {
+        archiveLocal: false,
+        tombstoneLocal: true,
+        deleteTerminalHistory: true,
+        deleteAttachments: true,
+        deleteRemoteConversation: false,
+      },
+    } satisfies ThreadCleanupPreview;
+  });
+
   const listSessions: ProviderServiceMethod<"listSessions"> = Effect.fn("listSessions")(
     function* () {
       const currentAdapters = yield* getAdapterEntries;
@@ -2455,6 +2516,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     respondToUserInput,
     stopSession,
     archiveConversation,
+    previewThreadCleanup,
     listSessions,
     getCapabilities,
     getInstanceInfo,

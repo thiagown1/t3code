@@ -1,6 +1,7 @@
 import type { ThreadMoveDestination } from "../threads/threadOrder";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { canSnooze, effectiveSnoozed } from "@t3tools/client-runtime/state/thread-settled";
+import { threadCleanupConfirmationMessage } from "@t3tools/client-runtime/state/orchestration";
 import * as Cause from "effect/Cause";
 import * as Haptics from "expo-haptics";
 import { useCallback, useRef } from "react";
@@ -16,6 +17,8 @@ import { environmentServerConfigsAtom } from "../../state/server";
 import { environmentThreadShells, threadEnvironment } from "../../state/threads";
 import { queuedThreadKeysAtom } from "../../state/use-thread-outbox";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { useAtomQueryRunner } from "../../state/use-atom-query-runner";
+import { orchestrationEnvironment } from "../../state/orchestration";
 import {
   beginPendingThreadOrder,
   getPendingThreadOrder,
@@ -64,6 +67,15 @@ function environmentSupportsTitleRegeneration(
   return (
     appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities
       .threadTitleRegeneration === true
+  );
+}
+
+function environmentSupportsThreadCleanupPreview(
+  environmentId: EnvironmentThreadShell["environmentId"],
+) {
+  return (
+    appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities
+      .threadCleanupPreview === true
   );
 }
 
@@ -196,34 +208,53 @@ function useThreadActionExecutor(
 function useConfirmDeleteThread(
   executeAction: (action: ThreadListAction, thread: EnvironmentThreadShell) => Promise<boolean>,
 ) {
+  const previewThreadCleanup = useAtomQueryRunner(orchestrationEnvironment.threadCleanupPreview, {
+    reportFailure: false,
+    refresh: true,
+  });
   return useCallback(
     (thread: EnvironmentThreadShell) => {
       const title = "Delete thread?";
-      const message = `“${thread.title}” will be permanently deleted, including its terminal history.`;
-      if (process.env.EXPO_OS === "ios") {
-        Alert.alert(title, message, [
-          { text: "Cancel", style: "cancel" },
-          {
-            text: "Delete",
-            style: "destructive",
-            onPress: () => {
-              void executeAction("delete", thread);
+      void (async () => {
+        const preview = environmentSupportsThreadCleanupPreview(thread.environmentId)
+          ? await previewThreadCleanup({
+              environmentId: thread.environmentId,
+              input: { threadId: thread.id },
+            })
+          : null;
+        if (preview?._tag === "Failure") {
+          Alert.alert("Could not inspect cleanup", actionFailureMessage("delete", preview.cause));
+          return;
+        }
+        const message = threadCleanupConfirmationMessage(preview?.value ?? null, {
+          action: "tombstone",
+          title: thread.title,
+        });
+        if (process.env.EXPO_OS === "ios") {
+          Alert.alert(title, message, [
+            { text: "Cancel", style: "cancel" },
+            {
+              text: "Remove from T3",
+              style: "destructive",
+              onPress: () => {
+                void executeAction("delete", thread);
+              },
             },
+          ]);
+          return;
+        }
+        showConfirmDialog({
+          title,
+          message,
+          confirmText: "Remove from T3",
+          destructive: true,
+          onConfirm: () => {
+            void executeAction("delete", thread);
           },
-        ]);
-        return;
-      }
-      showConfirmDialog({
-        title,
-        message,
-        confirmText: "Delete",
-        destructive: true,
-        onConfirm: () => {
-          void executeAction("delete", thread);
-        },
-      });
+        });
+      })();
     },
-    [executeAction],
+    [executeAction, previewThreadCleanup],
   );
 }
 

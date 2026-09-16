@@ -92,6 +92,7 @@ export function useThreadActionMenu(input: {
     confirmAndUnpinThread,
     archiveThread,
     deleteThread,
+    requestThreadCleanupConfirmation,
   } = useThreadActions();
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
@@ -303,9 +304,10 @@ export function useThreadActionMenu(input: {
             return;
           case "archive": {
             if (confirmThreadArchive) {
-              const confirmed = await settlePromise(() =>
-                api.dialogs.confirm(`Archive thread "${thread.title}"?`),
-              );
+              const confirmed = await requestThreadCleanupConfirmation(threadRef, {
+                action: "archive",
+                title: thread.title,
+              });
               if (confirmed._tag === "Failure" || !confirmed.value) return;
             }
             let didArchive = false;
@@ -324,15 +326,10 @@ export function useThreadActionMenu(input: {
           }
           case "delete": {
             if (confirmThreadDelete) {
-              const confirmed = await settlePromise(() =>
-                api.dialogs.confirm(
-                  [
-                    `Delete thread "${thread.title}"?`,
-                    "This permanently clears conversation history for this thread.",
-                  ].join("\n"),
-                  { variant: "destructive" },
-                ),
-              );
+              const confirmed = await requestThreadCleanupConfirmation(threadRef, {
+                action: "tombstone",
+                title: thread.title,
+              });
               if (confirmed._tag === "Failure" || !confirmed.value) return;
             }
             const deleted = await deleteThread(threadRef);
@@ -362,6 +359,7 @@ export function useThreadActionMenu(input: {
       copyPathToClipboard,
       copyThreadIdToClipboard,
       deleteThread,
+      requestThreadCleanupConfirmation,
       exportThreadBundle,
       handleNewThread,
       logicalProjectKeyByPhysicalKey,
