@@ -319,6 +319,10 @@
       "types": "./src/threadBundle.ts",
       "import": "./src/threadBundle.ts"
     },
+    "./threadProviderHandoff": {
+      "types": "./src/threadProviderHandoff.ts",
+      "import": "./src/threadProviderHandoff.ts"
+    },
     "./desktopAppControl": {
       "types": "./src/desktopAppControl.ts",
       "import": "./src/desktopAppControl.ts"
