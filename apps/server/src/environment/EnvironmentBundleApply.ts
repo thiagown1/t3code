@@ -22,8 +22,15 @@ import {
   writeClaudeSkillDisableOverrides,
 } from "./ClaudeSkillOverrideTarget.ts";
 import {
+  loadCodexSkillOverrideTargetState,
+  rollbackCodexSkillDisableOverrides,
+  writeCodexSkillDisableOverrides,
+} from "./CodexSkillOverrideTarget.ts";
+import {
   areEnvironmentBundleApplyOperationsEffective,
   buildEnvironmentBundleApplyPlan,
+  environmentBundleProviderSkillId,
+  environmentBundleProviderSkills,
 } from "./EnvironmentBundleApplyPlan.ts";
 import {
   canRollbackProviderEnables,
@@ -50,6 +57,26 @@ function providerEnableOperations(
     (operation): operation is ProviderEnableOperation =>
       operation.adapter === "provider-settings-enable",
   );
+}
+
+function codexSkillPaths(input: {
+  readonly providers: ReadonlyArray<ServerProvider>;
+  readonly cwd: string;
+  readonly operations: ReadonlyArray<EnvironmentBundleApplyOperation>;
+}): ReadonlyArray<string> {
+  const targetIds = new Set(
+    input.operations.flatMap((operation) =>
+      operation.adapter === "codex-project-skill-override" ? operation.targetIds : [],
+    ),
+  );
+  const paths = input.providers.flatMap((provider) =>
+    provider.driver !== "codex"
+      ? []
+      : environmentBundleProviderSkills(provider, input.cwd).flatMap((skill) =>
+          targetIds.has(environmentBundleProviderSkillId(provider, skill)) ? [skill.path] : [],
+        ),
+  );
+  return [...new Set(paths)].sort();
 }
 
 function applyError(
@@ -97,23 +124,35 @@ export const planEnvironmentBundleApply = Effect.fn("planEnvironmentBundleApply"
     const usesOpenCodeTarget = draft.operations.every(
       (operation) => operation.adapter === "opencode-project-mcp-override",
     );
-    const target = usesOpenCodeTarget
-      ? yield* loadOpenCodeMcpOverrideTargetState(input.cwd).pipe(
+    const usesCodexSkillTarget = draft.operations.every(
+      (operation) => operation.adapter === "codex-project-skill-override",
+    );
+    const target = usesCodexSkillTarget
+      ? yield* loadCodexSkillOverrideTargetState(input.cwd).pipe(
           Effect.mapError(() =>
             applyError(
               "snapshot-failed",
-              "OpenCode project configuration could not be inspected for the Environment Bundle dry run",
+              "Codex project configuration could not be inspected for the Environment Bundle dry run",
             ),
           ),
         )
-      : yield* loadClaudeSkillOverrideTargetState(input.cwd).pipe(
-          Effect.mapError(() =>
-            applyError(
-              "snapshot-failed",
-              "Claude project settings could not be inspected for the Environment Bundle dry run",
+      : usesOpenCodeTarget
+        ? yield* loadOpenCodeMcpOverrideTargetState(input.cwd).pipe(
+            Effect.mapError(() =>
+              applyError(
+                "snapshot-failed",
+                "OpenCode project configuration could not be inspected for the Environment Bundle dry run",
+              ),
             ),
-          ),
-        );
+          )
+        : yield* loadClaudeSkillOverrideTargetState(input.cwd).pipe(
+            Effect.mapError(() =>
+              applyError(
+                "snapshot-failed",
+                "Claude project settings could not be inspected for the Environment Bundle dry run",
+              ),
+            ),
+          );
     return buildEnvironmentBundleApplyPlan({ ...input, targetStateHash: target.stateHash });
   },
 );
@@ -277,12 +316,38 @@ export const applyEnvironmentBundle = Effect.fn("applyEnvironmentBundle")(functi
   const usesOpenCodeTarget = currentPlan.operations.every(
     (operation) => operation.adapter === "opencode-project-mcp-override",
   );
+  const usesCodexSkillTarget = currentPlan.operations.every(
+    (operation) => operation.adapter === "codex-project-skill-override",
+  );
   let rollbackEffect: Effect.Effect<
     void,
     EnvironmentBundleApplyError,
     FileSystem.FileSystem | Path.Path
   >;
-  if (usesOpenCodeTarget) {
+  if (usesCodexSkillTarget) {
+    const skillPaths = codexSkillPaths({
+      providers,
+      cwd: input.cwd,
+      operations: currentPlan.operations,
+    });
+    const written = yield* writeCodexSkillDisableOverrides({
+      cwd: input.cwd,
+      expectedStateHash: currentPlan.targetStateHash,
+      skillPaths,
+    }).pipe(
+      Effect.mapError((cause) =>
+        applyError(
+          cause.reason === "state-changed" ? "plan-changed" : "persistence-failed",
+          cause.message,
+        ),
+      ),
+    );
+    rollbackEffect = rollbackCodexSkillDisableOverrides({
+      cwd: input.cwd,
+      expectedWrittenStateHash: written.written.stateHash,
+      previous: written.previous,
+    }).pipe(Effect.mapError((cause) => applyError("rollback-failed", cause.message)));
+  } else if (usesOpenCodeTarget) {
     const written = yield* writeOpenCodeMcpDisableOverrides({
       cwd: input.cwd,
       expectedStateHash: currentPlan.targetStateHash,

@@ -143,6 +143,15 @@ const EnvironmentBundleClaudeSkillDisableOperation = Schema.Struct({
   providerInstanceIds: Schema.Array(StableId).check(Schema.isMinLength(1)),
   requiresProviderReload: Schema.Literal(true),
 });
+const EnvironmentBundleCodexSkillDisableOperation = Schema.Struct({
+  component: Schema.Literal("skill"),
+  operation: Schema.Literal("disable"),
+  adapter: Schema.Literal("codex-project-skill-override"),
+  skillName: StableId,
+  targetIds: Schema.Array(StableId).check(Schema.isMinLength(1)),
+  providerInstanceIds: Schema.Array(StableId).check(Schema.isMinLength(1)),
+  requiresProviderReload: Schema.Literal(true),
+});
 const EnvironmentBundleClaudeMcpDisableOperation = Schema.Struct({
   component: Schema.Literal("mcp"),
   operation: Schema.Literal("disable"),
@@ -174,6 +183,7 @@ const EnvironmentBundleProviderEnableOperation = Schema.Struct({
 });
 export const EnvironmentBundleApplyOperation = Schema.Union([
   EnvironmentBundleClaudeSkillDisableOperation,
+  EnvironmentBundleCodexSkillDisableOperation,
   EnvironmentBundleClaudeMcpDisableOperation,
   EnvironmentBundleOpenCodeMcpDisableOperation,
   EnvironmentBundleProviderEnableOperation,

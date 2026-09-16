@@ -126,6 +126,45 @@ function disabledCodexSettings(): ServerSettings {
   };
 }
 
+function codexSkillBundle(enabled: boolean): EnvironmentBundle {
+  return {
+    ...bundle(true),
+    skills: [
+      {
+        skillId: "codex:project:deploy",
+        name: "deploy",
+        origin: "project",
+        enabled,
+        logicalPath: ".agents/skills/deploy/SKILL.md",
+      },
+    ],
+    providers: [{ instanceId: "codex", driver: "codex", enabled: true }],
+  };
+}
+
+function codexSkillProvider(cwd: string, enabled: boolean): ServerProvider {
+  return {
+    ...provider(true),
+    instanceId: "codex",
+    driver: "codex",
+    workspaceSnapshots: [
+      {
+        cwd,
+        checkedAt: "2026-09-15T00:00:00.000Z",
+        slashCommands: [],
+        skills: [
+          {
+            name: "deploy",
+            path: `${cwd}\\.agents\\skills\\deploy\\SKILL.md`,
+            scope: "project",
+            enabled,
+          },
+        ],
+      },
+    ],
+  } as unknown as ServerProvider;
+}
+
 describe("EnvironmentBundleApply", () => {
   it.effect("enables a legacy provider and keeps it enabled only after a ready health check", () =>
     Effect.gen(function* () {
@@ -510,6 +549,75 @@ describe("EnvironmentBundleApply", () => {
       expect(
         yield* fileSystem.readFileString(path.join(cwd, ".claude", "settings.local.json")),
       ).toContain('"deploy": "off"');
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("writes, refreshes, and verifies a Codex project skill disable", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const cwd = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-environment-codex-" });
+      yield* fileSystem.makeDirectory(path.join(cwd, ".git"));
+      const configPath = path.join(cwd, ".codex", "config.toml");
+      yield* fileSystem.makeDirectory(path.dirname(configPath), { recursive: true });
+      yield* fileSystem.writeFileString(
+        configPath,
+        "# preserve project config\n[mcp_servers.logs]\nenabled = true\n",
+      );
+      const before = [codexSkillProvider(cwd, true)];
+      const expectedPlan = yield* planEnvironmentBundleApply({
+        current: codexSkillBundle(true),
+        incoming: codexSkillBundle(false),
+        providers: before,
+        serverInventory: emptyServerInventory,
+        cwd,
+      });
+
+      const result = yield* applyEnvironmentBundle({
+        current: codexSkillBundle(true),
+        incoming: codexSkillBundle(false),
+        expectedPlan,
+        cwd,
+        getProviders: Effect.succeed(before),
+        getServerInventory: Effect.succeed(emptyServerInventory),
+        refreshWorkspaceSnapshot: () => Effect.succeed([codexSkillProvider(cwd, false)]),
+      });
+
+      expect(result.refreshedProviderInstanceIds).toEqual(["codex"]);
+      const persisted = yield* fileSystem.readFileString(configPath);
+      expect(persisted).toContain("# preserve project config");
+      expect(persisted).toContain("[[skills.config]]");
+      expect(persisted).toContain("enabled = false");
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("rolls a Codex skill override back when refresh still reports it enabled", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const cwd = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-environment-codex-" });
+      yield* fileSystem.makeDirectory(path.join(cwd, ".git"));
+      const before = [codexSkillProvider(cwd, true)];
+      const expectedPlan = yield* planEnvironmentBundleApply({
+        current: codexSkillBundle(true),
+        incoming: codexSkillBundle(false),
+        providers: before,
+        serverInventory: emptyServerInventory,
+        cwd,
+      });
+
+      const error = yield* applyEnvironmentBundle({
+        current: codexSkillBundle(true),
+        incoming: codexSkillBundle(false),
+        expectedPlan,
+        cwd,
+        getProviders: Effect.succeed(before),
+        getServerInventory: Effect.succeed(emptyServerInventory),
+        refreshWorkspaceSnapshot: () => Effect.succeed(before),
+      }).pipe(Effect.flip);
+
+      expect(error.reason).toBe("health-check-failed");
+      expect(yield* fileSystem.exists(path.join(cwd, ".codex", "config.toml"))).toBe(false);
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 

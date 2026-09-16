@@ -45,6 +45,7 @@ function provider(input?: {
   instanceId?: string;
   driver?: string;
   skillName?: string;
+  skillPath?: string;
 }): ServerProvider {
   const instanceId = input?.instanceId ?? "claudeAgent";
   return {
@@ -67,7 +68,7 @@ function provider(input?: {
         skills: [
           {
             name: input?.skillName ?? "deploy",
-            path: "C:\\repo\\.claude\\skills\\deploy\\SKILL.md",
+            path: input?.skillPath ?? "C:\\repo\\.claude\\skills\\deploy\\SKILL.md",
             scope: "project",
             enabled: true,
           },
@@ -117,7 +118,7 @@ describe("buildEnvironmentBundleApplyPlan", () => {
     });
   });
 
-  it("blocks enablement and non-Claude targets", () => {
+  it("blocks skill enablement and plans a metadata-preserving Codex skill disable", () => {
     const disabled = { ...enabledSkill, enabled: false };
     const enablePlan = buildEnvironmentBundleApplyPlan({
       current: bundle([disabled]),
@@ -133,17 +134,34 @@ describe("buildEnvironmentBundleApplyPlan", () => {
     );
 
     const codexSkill = { ...enabledSkill, skillId: "codex:project:deploy" };
-    const nonClaudePlan = buildEnvironmentBundleApplyPlan({
+    const codexPlan = buildEnvironmentBundleApplyPlan({
       current: bundle([codexSkill]),
       incoming: bundle([{ ...codexSkill, enabled: false }]),
-      providers: [provider({ instanceId: "codex", driver: "codex" })],
+      providers: [
+        provider({
+          instanceId: "codex",
+          driver: "codex",
+          skillPath: "C:\\repo\\.agents\\skills\\deploy\\SKILL.md",
+        }),
+      ],
       serverInventory: serverInventory(bundle([codexSkill])),
       cwd: "C:\\repo",
       targetStateHash: hash,
     });
-    expect(nonClaudePlan.canApply).toBe(false);
-    expect(nonClaudePlan.blockers).toContain(
-      "skill:codex:project:deploy is not an enabled Claude skill in the current workspace",
+    expect(codexPlan).toEqual(
+      expect.objectContaining({
+        canApply: true,
+        blockers: [],
+        operations: [
+          expect.objectContaining({
+            component: "skill",
+            adapter: "codex-project-skill-override",
+            skillName: "deploy",
+            targetIds: ["codex:project:deploy"],
+            providerInstanceIds: ["codex"],
+          }),
+        ],
+      }),
     );
   });
 
@@ -165,6 +183,38 @@ describe("buildEnvironmentBundleApplyPlan", () => {
       cwd: "C:\\repo",
       targetStateHash: hash,
     });
+    expect(plan.canApply).toBe(false);
+    expect(plan.blockers).toContain("skill:deploy would also disable work:project:deploy");
+  });
+
+  it("blocks a Codex path override that would silently affect another instance", () => {
+    const codexSkill = { ...enabledSkill, skillId: "codex:project:deploy" };
+    const second = { ...enabledSkill, skillId: "work:project:deploy" };
+    const providers = [
+      { instanceId: "codex", driver: "codex", enabled: true },
+      { instanceId: "work", driver: "codex", enabled: true },
+    ];
+    const current = bundle([codexSkill, second], providers);
+    const plan = buildEnvironmentBundleApplyPlan({
+      current,
+      incoming: bundle([{ ...codexSkill, enabled: false }, second], providers),
+      providers: [
+        provider({
+          instanceId: "codex",
+          driver: "codex",
+          skillPath: "C:\\repo\\.agents\\skills\\deploy\\SKILL.md",
+        }),
+        provider({
+          instanceId: "work",
+          driver: "codex",
+          skillPath: "c:\\REPO\\.agents\\skills\\deploy\\SKILL.md",
+        }),
+      ],
+      serverInventory: serverInventory(current),
+      cwd: "C:\\repo",
+      targetStateHash: hash,
+    });
+
     expect(plan.canApply).toBe(false);
     expect(plan.blockers).toContain("skill:deploy would also disable work:project:deploy");
   });

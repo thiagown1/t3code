@@ -18,7 +18,8 @@ import {
 type SkillOrigin = EnvironmentBundle["skills"][number]["origin"];
 
 function normalizedPath(value: string): string {
-  return value.replaceAll("\\", "/").replace(/\/$/u, "");
+  const normalized = value.replaceAll("\\", "/").replace(/\/$/u, "");
+  return /^[a-z]:\//iu.test(normalized) ? normalized.toLowerCase() : normalized;
 }
 
 function skillOrigin(skill: Pick<ServerProviderSkill, "path" | "scope">): SkillOrigin {
@@ -86,7 +87,8 @@ export function areEnvironmentBundleApplyOperationsEffective(input: {
     return operation.targetIds.every((targetId) =>
       input.providers.some(
         (provider) =>
-          provider.driver === "claudeAgent" &&
+          provider.driver ===
+            (operation.adapter === "codex-project-skill-override" ? "codex" : "claudeAgent") &&
           environmentBundleProviderSkills(provider, input.cwd).some(
             (skill) =>
               environmentBundleProviderSkillId(provider, skill) === targetId && !skill.enabled,
@@ -193,7 +195,7 @@ export function buildEnvironmentBundleApplyPlan(input: {
   const operationByName = new Map<string, EnvironmentBundleApplyOperation>();
   for (const { after } of requestedDisables.values()) {
     const matches = input.providers.flatMap((provider) => {
-      if (provider.driver !== "claudeAgent") return [];
+      if (provider.driver !== "claudeAgent" && provider.driver !== "codex") return [];
       const skill = environmentBundleProviderSkills(provider, input.cwd).find(
         (candidate) =>
           candidate.enabled &&
@@ -204,16 +206,32 @@ export function buildEnvironmentBundleApplyPlan(input: {
     });
     if (matches.length === 0) {
       blockers.push(
-        `skill:${after.skillId} is not an enabled Claude skill in the current workspace`,
+        `skill:${after.skillId} is not an enabled supported skill in the current workspace`,
       );
       continue;
     }
+    if (matches.length > 1) {
+      blockers.push(`skill:${after.skillId} is ambiguous in the current workspace`);
+      continue;
+    }
+    const match = matches[0]!;
+    const adapter =
+      match.provider.driver === "codex"
+        ? ("codex-project-skill-override" as const)
+        : ("claude-project-skill-override" as const);
+    const matchedPath = normalizedPath(match.skill.path);
 
     const affected = input.providers.flatMap((provider) =>
-      provider.driver !== "claudeAgent"
+      provider.driver !== match.provider.driver
         ? []
         : environmentBundleProviderSkills(provider, input.cwd)
-            .filter((skill) => skill.enabled && skill.name === after.name)
+            .filter(
+              (skill) =>
+                skill.enabled &&
+                (adapter === "claude-project-skill-override"
+                  ? skill.name === after.name
+                  : normalizedPath(skill.path) === matchedPath),
+            )
             .map((skill) => ({
               instanceId: provider.instanceId,
               targetId: environmentBundleProviderSkillId(provider, skill),
@@ -229,15 +247,20 @@ export function buildEnvironmentBundleApplyPlan(input: {
       continue;
     }
 
-    operationByName.set(`skill:${after.name}`, {
-      component: "skill",
-      operation: "disable",
-      adapter: "claude-project-skill-override",
-      skillName: after.name,
-      targetIds: affected.map((candidate) => candidate.targetId).sort(),
-      providerInstanceIds: [...new Set(affected.map((candidate) => candidate.instanceId))].sort(),
-      requiresProviderReload: true,
-    });
+    operationByName.set(
+      adapter === "claude-project-skill-override"
+        ? `skill:claude:${after.name}`
+        : `skill:codex:${matchedPath}`,
+      {
+        component: "skill",
+        operation: "disable",
+        adapter,
+        skillName: after.name,
+        targetIds: affected.map((candidate) => candidate.targetId).sort(),
+        providerInstanceIds: [...new Set(affected.map((candidate) => candidate.instanceId))].sort(),
+        requiresProviderReload: true,
+      },
+    );
   }
 
   const requestedMcpDisables = new Map(
@@ -366,7 +389,8 @@ export function buildEnvironmentBundleApplyPlan(input: {
     blockers.push(unsupportedStepMessage("provider", provider.instanceId));
 
   const operationKey = (operation: EnvironmentBundleApplyOperation): string => {
-    if (operation.component === "skill") return `skill:${operation.skillName}`;
+    if (operation.component === "skill")
+      return `skill:${operation.adapter}:${operation.targetIds.join(",")}`;
     if (operation.component === "mcp") return `mcp:${operation.serverName}`;
     return `provider:${operation.instanceId}`;
   };
@@ -376,6 +400,7 @@ export function buildEnvironmentBundleApplyPlan(input: {
   const targetKinds = new Set(
     operations.map((operation) => {
       if (operation.adapter === "opencode-project-mcp-override") return "opencode";
+      if (operation.adapter === "codex-project-skill-override") return "codex";
       if (operation.adapter === "provider-settings-enable") return "provider-settings";
       return "claude";
     }),
