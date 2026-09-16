@@ -6,6 +6,9 @@ import * as NodePath from "node:path";
 import { pathToFileURL } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 
+import { ProjectId, RepositoryIdentity } from "@t3tools/contracts";
+import { normalizeGitRemoteUrl } from "@t3tools/shared/git";
+import * as Schema from "effect/Schema";
 import {
   buildThreadBundle,
   parseThreadBundleJson,
@@ -64,6 +67,7 @@ export interface ExportT3ThreadBundleOptions {
   readonly environmentId: string;
   readonly outputPath: string;
   readonly selection: ExportSelection;
+  readonly projectIdentitiesPath?: string;
   readonly bundleId?: string;
   readonly exportedAt?: string;
 }
@@ -139,6 +143,16 @@ interface PlanRow {
   readonly updatedAt: unknown;
 }
 
+const ProjectIdentityOverride = Schema.Struct({
+  sourceProjectId: ProjectId,
+  repositoryIdentity: Schema.NullOr(RepositoryIdentity),
+});
+const ProjectIdentityFile = Schema.Struct({
+  projects: Schema.Array(ProjectIdentityOverride),
+});
+
+type ProjectIdentityOverride = typeof ProjectIdentityOverride.Type;
+
 const fail = (code: SafeErrorCode, message: string): never => {
   throw new OfflineThreadBundleExportError(code, message);
 };
@@ -160,6 +174,79 @@ function nonNegativeInteger(value: unknown, label: string): number {
     return fail("invalid-source", `Source database contains invalid ${label}`);
   }
   return value;
+}
+
+function readProjectIdentityOverrides(path: string): ReadonlyArray<ProjectIdentityOverride> {
+  let json: unknown;
+  try {
+    json = JSON.parse(NodeFS.readFileSync(path, "utf8"));
+  } catch {
+    return fail("invalid-source", "Project identity metadata is invalid");
+  }
+  try {
+    return Schema.decodeUnknownSync(ProjectIdentityFile, {
+      onExcessProperty: "error",
+    })(json).projects;
+  } catch {
+    return fail("invalid-source", "Project identity metadata is invalid");
+  }
+}
+
+function applyProjectIdentityOverrides(
+  input: ReturnType<typeof readBundleInput>,
+  path: string | undefined,
+): ReturnType<typeof readBundleInput> {
+  if (path === undefined) return input;
+  const overrides = readProjectIdentityOverrides(path);
+  const selectedProjectIds = new Set(
+    input.entries.map((entry) => requiredString(entry.project.id, "project ID")),
+  );
+  const overrideByProject = new Map<string, ProjectIdentityOverride>();
+  for (const override of overrides) {
+    const projectId = requiredString(override.sourceProjectId, "project identity project ID");
+    if (overrideByProject.has(projectId)) {
+      return fail("invalid-source", "Project identity metadata contains duplicate project IDs");
+    }
+    if (!selectedProjectIds.has(projectId)) {
+      return fail("invalid-source", "Project identity metadata contains an extra project ID");
+    }
+    if (override.repositoryIdentity !== null) {
+      const remoteUrl = override.repositoryIdentity.locator.remoteUrl;
+      let hasCredentials = false;
+      try {
+        const parsed = new URL(remoteUrl);
+        hasCredentials = parsed.username.length > 0 || parsed.password.length > 0;
+      } catch {
+        // SCP-style Git remotes are not URL-shaped and do not carry a password
+        // field; normalizeGitRemoteUrl still validates their comparison key.
+      }
+      if (hasCredentials) {
+        return fail("invalid-source", "Project identity metadata contains remote credentials");
+      }
+      if (normalizeGitRemoteUrl(remoteUrl) !== override.repositoryIdentity.canonicalKey) {
+        return fail("invalid-source", "Project identity metadata has a mismatched canonical key");
+      }
+    }
+    overrideByProject.set(projectId, override);
+  }
+  if (overrideByProject.size !== selectedProjectIds.size) {
+    return fail("invalid-source", "Project identity metadata is missing a selected project ID");
+  }
+  return {
+    entries: input.entries.map((entry) => {
+      const projectId = requiredString(entry.project.id, "project ID");
+      const override = overrideByProject.get(projectId)!;
+      return override.repositoryIdentity === null
+        ? entry
+        : {
+            ...entry,
+            project: {
+              ...entry.project,
+              repositoryIdentity: override.repositoryIdentity,
+            },
+          };
+    }),
+  };
 }
 
 function sqliteBoolean(value: unknown, label: string): boolean {
@@ -605,6 +692,7 @@ export function exportT3ThreadBundle(
   if (input === undefined) {
     return fail("invalid-source", "Failed to read a consistent source database snapshot");
   }
+  input = applyProjectIdentityOverrides(input, options.projectIdentitiesPath);
 
   let serialized: string;
   let exportedMessageCount: number;
@@ -644,6 +732,7 @@ export function parseExportT3ThreadBundleArgs(
   let databasePath: string | undefined;
   let environmentId: string | undefined;
   let outputPath: string | undefined;
+  let projectIdentitiesPath: string | undefined;
   let open = false;
   const threadIds: Array<string> = [];
   for (let index = 0; index < args.length; index += 1) {
@@ -659,6 +748,7 @@ export function parseExportT3ThreadBundleArgs(
     if (argument === "--database") databasePath = takeValue();
     else if (argument === "--environment-id") environmentId = takeValue();
     else if (argument === "--output") outputPath = takeValue();
+    else if (argument === "--project-identities") projectIdentitiesPath = takeValue();
     else if (argument === "--open") open = true;
     else if (argument === "--thread") {
       threadIds.push(
@@ -680,6 +770,7 @@ export function parseExportT3ThreadBundleArgs(
     environmentId,
     outputPath,
     selection: open ? { mode: "open" } : { mode: "threads", threadIds },
+    ...(projectIdentitiesPath === undefined ? {} : { projectIdentitiesPath }),
   };
 }
 

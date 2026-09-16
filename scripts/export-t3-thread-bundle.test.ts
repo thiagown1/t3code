@@ -165,6 +165,27 @@ function hashFile(path: string): string {
   return NodeCrypto.createHash("sha256").update(NodeFS.readFileSync(path)).digest("hex");
 }
 
+function writeProjectIdentities(directory: string, projects: ReadonlyArray<unknown>): string {
+  const path = NodePath.join(directory, "project-identities.json");
+  NodeFS.writeFileSync(path, JSON.stringify({ projects }), "utf8");
+  return path;
+}
+
+const turboStationIdentity = {
+  sourceProjectId: "project-source",
+  repositoryIdentity: {
+    canonicalKey: "github.com/thiagown1/turbo_station",
+    locator: {
+      source: "git-remote",
+      remoteName: "origin",
+      remoteUrl: "https://github.com/thiagown1/turbo_station.git",
+    },
+    provider: "github",
+    owner: "thiagown1",
+    name: "turbo_station",
+  },
+} as const;
+
 describe("offline T3 Thread Bundle exporter", () => {
   it("exports open official threads with sourceProjectId and all proposed plans", () => {
     const { database, databasePath, outputPath } = fixture();
@@ -199,6 +220,113 @@ describe("offline T3 Thread Bundle exporter", () => {
     });
     expect(bundle.threads[0]?.messages[0]?.text).toBe("portable text");
     expect(bundle.threads[0]?.proposedPlans).toHaveLength(1);
+  });
+
+  it("applies an exact, schema-validated repository identity override", () => {
+    const { database, databasePath, outputPath, directory } = fixture();
+    insertThread(database);
+    close(database);
+    const projectIdentitiesPath = writeProjectIdentities(directory, [turboStationIdentity]);
+
+    exportT3ThreadBundle({
+      databasePath,
+      environmentId: "official-source",
+      outputPath,
+      projectIdentitiesPath,
+      selection: { mode: "open" },
+      bundleId: "fixture-bundle",
+      exportedAt: NOW,
+    });
+
+    expect(
+      parseThreadBundleJson(NodeFS.readFileSync(outputPath, "utf8")).threads[0]?.project,
+    ).toEqual({
+      sourceProjectId: "project-source",
+      title: "Source project",
+      repositoryCanonicalKey: "github.com/thiagown1/turbo_station",
+      repositoryProvider: "github",
+      repositoryOwner: "thiagown1",
+      repositoryName: "turbo_station",
+    });
+  });
+
+  it("accepts an explicit null identity for a selected non-Git project", () => {
+    const { database, databasePath, outputPath, directory } = fixture();
+    insertThread(database);
+    close(database);
+    const projectIdentitiesPath = writeProjectIdentities(directory, [
+      { sourceProjectId: "project-source", repositoryIdentity: null },
+    ]);
+
+    exportT3ThreadBundle({
+      databasePath,
+      environmentId: "official-source",
+      outputPath,
+      projectIdentitiesPath,
+      selection: { mode: "open" },
+      bundleId: "fixture-bundle",
+      exportedAt: NOW,
+    });
+
+    expect(
+      parseThreadBundleJson(NodeFS.readFileSync(outputPath, "utf8")).threads[0]?.project,
+    ).toEqual({ sourceProjectId: "project-source", title: "Source project" });
+  });
+
+  it.each([
+    ["missing", []],
+    ["extra", [{ sourceProjectId: "project-extra", repositoryIdentity: null }]],
+    ["unexpected field", [{ ...turboStationIdentity, unexpected: true }]],
+    [
+      "duplicate",
+      [
+        { sourceProjectId: "project-source", repositoryIdentity: null },
+        { sourceProjectId: "project-source", repositoryIdentity: null },
+      ],
+    ],
+    [
+      "canonical mismatch",
+      [
+        {
+          ...turboStationIdentity,
+          repositoryIdentity: {
+            ...turboStationIdentity.repositoryIdentity,
+            canonicalKey: "github.com/other/repo",
+          },
+        },
+      ],
+    ],
+    [
+      "remote credentials",
+      [
+        {
+          ...turboStationIdentity,
+          repositoryIdentity: {
+            ...turboStationIdentity.repositoryIdentity,
+            locator: {
+              ...turboStationIdentity.repositoryIdentity.locator,
+              remoteUrl: "https://token:secret@github.com/thiagown1/turbo_station.git",
+            },
+          },
+        },
+      ],
+    ],
+  ])("rejects %s project identity metadata without output", (_reason, projects) => {
+    const { database, databasePath, outputPath, directory } = fixture();
+    insertThread(database);
+    close(database);
+    const projectIdentitiesPath = writeProjectIdentities(directory, projects);
+
+    expect(() =>
+      exportT3ThreadBundle({
+        databasePath,
+        environmentId: "official-source",
+        outputPath,
+        projectIdentitiesPath,
+        selection: { mode: "open" },
+      }),
+    ).toThrow(expect.objectContaining({ code: "invalid-source" }));
+    expect(NodeFS.existsSync(outputPath)).toBe(false);
   });
 
   it("exports more than 200 messages without a best-effort history limit", () => {
@@ -448,12 +576,28 @@ describe("offline T3 Thread Bundle exporter", () => {
         "source",
         "--output",
         "bundle.json",
+        "--project-identities",
+        "identities.json",
         "--thread",
         "one,two",
         "--thread",
         "three",
       ]).selection,
     ).toEqual({ mode: "threads", threadIds: ["one", "two", "three"] });
+    expect(
+      parseExportT3ThreadBundleArgs([
+        "--database",
+        "source.sqlite",
+        "--environment-id",
+        "source",
+        "--output",
+        "bundle.json",
+        "--project-identities",
+        "identities.json",
+        "--thread",
+        "one",
+      ]).projectIdentitiesPath,
+    ).toBe("identities.json");
     expect(() =>
       parseExportT3ThreadBundleArgs([
         "--database",
