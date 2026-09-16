@@ -46,6 +46,7 @@ export const supervisePrLink = Effect.fn("supervisePrLink")(function* (
     repository: link.repository,
     pullRequest: link.number,
     owner: state.owner,
+    ...(state.lockSha ? { lockSha: state.lockSha } : {}),
     baseRef: state.baseRef,
     headRef: state.headRef,
   };
@@ -54,6 +55,7 @@ export const supervisePrLink = Effect.fn("supervisePrLink")(function* (
     reason: string,
     resumeKey?: string,
     message?: string,
+    lockSha?: string,
   ) => {
     const key = NodeCrypto.createHash("sha256")
       .update(JSON.stringify([state.owner, action, resumeKey ?? reason]))
@@ -71,12 +73,16 @@ export const supervisePrLink = Effect.fn("supervisePrLink")(function* (
       headRef: state.headRef,
       action,
       reason,
+      ...(lockSha ? { lockSha } : {}),
       ...(resumeKey ? { resumeKey } : {}),
       ...(message ? { message } : {}),
     });
   };
-  const runAdapter = (operation: "enroll" | "observe" | "release") =>
-    adapter({ ...input, operation }).pipe(
+  const runAdapter = (
+    operation: "enroll" | "observe" | "release" | "inspect",
+    lockSha = state.lockSha,
+  ) =>
+    adapter({ ...input, operation, ...(lockSha ? { lockSha } : {}) }).pipe(
       Effect.catch(() =>
         dispatch(
           "blocked",
@@ -99,7 +105,19 @@ export const supervisePrLink = Effect.fn("supervisePrLink")(function* (
                 ? "PR closed or merged."
                 : null;
   if (stopReason) {
-    const released = yield* runAdapter("release");
+    // An enrollment can publish its lock and lose the response before persisting
+    // its SHA. Recover only this registration's UUID, without reacquiring.
+    let lockSha = state.lockSha;
+    if (!lockSha) {
+      const inspected = yield* runAdapter("inspect");
+      if (!inspected || inspected.lockSha === undefined) return;
+      if (inspected.lockSha === null) {
+        yield* dispatch("released", stopReason);
+        return;
+      }
+      lockSha = inspected.lockSha;
+    }
+    const released = yield* runAdapter("release", lockSha);
     if (!released || typeof released.released !== "boolean") return;
     yield* dispatch("released", stopReason);
     return;
@@ -112,12 +130,22 @@ export const supervisePrLink = Effect.fn("supervisePrLink")(function* (
     return;
   const enrolled = yield* runAdapter("enroll");
   if (!enrolled) return;
-  if (!enrolled.enrolled) {
+  if (!enrolled.enrolled || !enrolled.lockSha) {
     yield* dispatch("blocked", enrolled.reason ?? "Writer coordination unavailable.");
     return;
   }
   if (state.state === "pending") {
-    yield* dispatch("enrolled", "Exclusive writer registered.");
+    yield* dispatch(
+      "enrolled",
+      "Exclusive writer registered.",
+      undefined,
+      undefined,
+      enrolled.lockSha,
+    );
+    return;
+  }
+  if (state.lockSha !== enrolled.lockSha) {
+    yield* dispatch("blocked", "Writer acquisition changed; refusing to resume.");
     return;
   }
   const receipt = yield* runAdapter("observe");

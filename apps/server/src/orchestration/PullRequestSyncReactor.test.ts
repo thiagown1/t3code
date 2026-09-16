@@ -761,6 +761,7 @@ const supervisedTestLink = () => ({
   supervision: {
     owner: "firstmate:00000000-0000-4000-8000-000000000001",
     environmentKey: "environment-a",
+    lockSha: "a".repeat(40),
     state: "watching" as const,
     baseRef: "main",
     headRef: "feature",
@@ -807,7 +808,11 @@ it.effect("pending enrollment is recovered before any automatic model turn", () 
       "environment-a",
       (input) => {
         operations.push(input.operation);
-        return Effect.succeed({ schema: "firstmate-pr-supervision/v1" as const, enrolled: true });
+        return Effect.succeed({
+          schema: "firstmate-pr-supervision/v1" as const,
+          enrolled: true,
+          lockSha: "a".repeat(40),
+        });
       },
     );
     expect(operations).toEqual(["enroll"]);
@@ -836,7 +841,11 @@ it.effect("supervision resumes the linked original thread only after writer auth
         operations.push(input.operation);
         return Effect.succeed(
           input.operation === "enroll"
-            ? { schema: "firstmate-pr-supervision/v1" as const, enrolled: true }
+            ? {
+                schema: "firstmate-pr-supervision/v1" as const,
+                enrolled: true,
+                lockSha: "a".repeat(40),
+              }
             : {
                 schema: "firstmate-pr-supervision/v1" as const,
                 state: "needs_work",
@@ -903,7 +912,11 @@ it.effect("reconciled gate IDs with identical evidence cannot spend another resu
         (input) =>
           Effect.succeed(
             input.operation === "enroll"
-              ? { schema: "firstmate-pr-supervision/v1" as const, enrolled: true }
+              ? {
+                  schema: "firstmate-pr-supervision/v1" as const,
+                  enrolled: true,
+                  lockSha: "a".repeat(40),
+                }
               : {
                   schema: "firstmate-pr-supervision/v1" as const,
                   state: "needs_work",
@@ -943,7 +956,11 @@ it.effect("pending evidence and missing writer authority never wake a model", ()
         (input) =>
           Effect.succeed(
             input.operation === "enroll"
-              ? { schema: "firstmate-pr-supervision/v1" as const, enrolled: true }
+              ? {
+                  schema: "firstmate-pr-supervision/v1" as const,
+                  enrolled: true,
+                  lockSha: "a".repeat(40),
+                }
               : { schema: "firstmate-pr-supervision/v1" as const, ...receipt },
           ),
       );
@@ -980,5 +997,69 @@ it.effect("exhausted supervision releases ownership without another model call",
       action: "released",
       reason: "Three automatic resumptions exhausted.",
     });
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("cleanup recovers a lost enrollment receipt without acquiring a new writer", () =>
+  Effect.gen(function* () {
+    const operations: string[] = [];
+    const commands: Array<OrchestrationCommand> = [];
+    const link = supervisedTestLink();
+    const { lockSha: _lost, ...pending } = link.supervision;
+    yield* supervisePrLink(
+      {
+        dispatch: (command) => {
+          commands.push(command);
+          return Effect.succeed({ sequence: 1 });
+        },
+      },
+      makeThread("owner"),
+      makeProject(),
+      { ...link, supervision: { ...pending, state: "stopping" } },
+      NOW,
+      "environment-a",
+      (input) => {
+        operations.push(input.operation);
+        if (input.operation === "inspect")
+          return Effect.succeed({
+            schema: "firstmate-pr-supervision/v1" as const,
+            lockSha: "b".repeat(40),
+          });
+        expect(input.lockSha).toBe("b".repeat(40));
+        return Effect.succeed({ schema: "firstmate-pr-supervision/v1" as const, released: true });
+      },
+    );
+    expect(operations).toEqual(["inspect", "release"]);
+    expect(commands).toHaveLength(1);
+    expect(commands[0]).toMatchObject({ action: "released" });
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("a changed writer acquisition blocks the old enrollment without resuming", () =>
+  Effect.gen(function* () {
+    const commands: Array<OrchestrationCommand> = [];
+    yield* supervisePrLink(
+      {
+        dispatch: (command) => {
+          commands.push(command);
+          return Effect.succeed({ sequence: 1 });
+        },
+      },
+      makeThread("owner"),
+      makeProject(),
+      supervisedTestLink(),
+      NOW,
+      "environment-a",
+      (input) => {
+        expect(input.operation).toBe("enroll");
+        return Effect.succeed({
+          schema: "firstmate-pr-supervision/v1" as const,
+          enrolled: true,
+          lockSha: "b".repeat(40),
+        });
+      },
+    );
+    expect(commands).toHaveLength(1);
+    expect(commands[0]).toMatchObject({ action: "blocked" });
   }).pipe(Effect.provide(NodeServices.layer)),
 );

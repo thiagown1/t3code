@@ -1138,7 +1138,14 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         if (command.action === "enrolled") {
           if (previous.state !== "pending")
             return yield* reject("Enrollment is no longer pending.");
-          supervision = { ...previous, state: "watching", lastReason: null };
+          if (!command.lockSha || !/^[a-f0-9]{40}$/.test(command.lockSha))
+            return yield* reject("Enrollment requires the exact writer acquisition SHA.");
+          supervision = {
+            ...previous,
+            lockSha: command.lockSha,
+            state: "watching",
+            lastReason: null,
+          };
         } else if (command.action === "wake") {
           if (
             previous.state !== "watching" ||

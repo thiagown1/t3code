@@ -7,6 +7,7 @@ export const PrSupervisionReceipt = Schema.Struct({
   repository: Schema.optional(Schema.String),
   pullRequest: Schema.optional(Schema.Finite),
   owner: Schema.optional(Schema.String),
+  lockSha: Schema.optional(Schema.NullOr(Schema.String)),
   state: Schema.optional(Schema.String),
   reason: Schema.optional(Schema.String),
   headSha: Schema.optional(Schema.String),
@@ -21,7 +22,8 @@ export type PrSupervisionReceipt = typeof PrSupervisionReceipt.Type;
 
 export interface PrSupervisionAdapterInput {
   readonly cwd: string;
-  readonly operation: "enroll" | "observe" | "release";
+  readonly operation: "enroll" | "observe" | "release" | "inspect";
+  readonly lockSha?: string;
   readonly repository: string;
   readonly pullRequest: number;
   readonly owner: string;

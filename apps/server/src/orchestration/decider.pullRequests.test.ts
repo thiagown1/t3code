@@ -115,7 +115,7 @@ const snapshot: ThreadPullRequestSnapshot = {
 };
 
 const supervisorOwner = "firstmate:00000000-0000-4000-8000-000000000001";
-const superviseCommand = (action: "start" | "wake" | "stop", overrides = {}) => ({
+const superviseCommand = (action: "start" | "wake" | "stop" | "enrolled", overrides = {}) => ({
   type: "thread.pull-request.supervise" as const,
   commandId: CommandId.make(`supervise-${action}`),
   threadId: THREAD_ID,
@@ -145,6 +145,30 @@ const supervisedLink = () =>
   });
 
 it.layer(NodeServices.layer)("PR owner supervision", (it) => {
+  it.effect("enrollment persists its exact writer generation and rejects missing proof", () =>
+    Effect.gen(function* () {
+      const link = supervisedLink();
+      const model = makeReadModel([
+        { ...link, supervision: { ...link.supervision!, state: "pending" } },
+      ]);
+      const missing = yield* decideOrchestrationCommand({
+        readModel: model,
+        command: superviseCommand("enrolled"),
+      }).pipe(Effect.result);
+      expect(missing._tag).toBe("Failure");
+      const events = yield* decideOrchestrationCommand({
+        readModel: model,
+        command: superviseCommand("enrolled", { lockSha: "a".repeat(40) }),
+      });
+      const event = expectSingleEvent(events, "thread.pull-request-linked");
+      const replayed = yield* projectEvent(model, { ...event, sequence: 1 });
+      expect(replayed.threads[0]?.pullRequests[0]?.supervision).toMatchObject({
+        state: "watching",
+        lockSha: "a".repeat(40),
+      });
+    }),
+  );
+
   it.effect("rejects a resume from a copied environment or pending enrollment", () =>
     Effect.gen(function* () {
       const link = supervisedLink();

@@ -276,7 +276,8 @@ const make = Effect.gen(function* () {
             host: target.host,
             repository: target.repository,
             number: target.number,
-            action: receipt.enrolled ? "enrolled" : "blocked",
+            action: receipt.enrolled && receipt.lockSha ? "enrolled" : "blocked",
+            ...(receipt.lockSha ? { lockSha: receipt.lockSha } : {}),
             owner,
             environmentKey,
             baseRef: input.baseRef,
@@ -286,7 +287,7 @@ const make = Effect.gen(function* () {
           .pipe(Effect.catchCause(dispatchFailure(PullRequestLinkFailedError)));
         return {
           owner,
-          state: receipt.enrolled ? "watching" : "unavailable",
+          state: receipt.enrolled && receipt.lockSha ? "watching" : "unavailable",
           reason: receipt.reason ?? null,
         };
       }),

@@ -868,6 +868,7 @@ export const ThreadDeliveryStatus = Schema.Literals([
 export type ThreadDeliveryStatus = typeof ThreadDeliveryStatus.Type;
 
 export const ThreadPullRequestSupervision = Schema.Struct({
+  lockSha: Schema.optional(Schema.String),
   owner: TrimmedNonEmptyString,
   environmentKey: TrimmedNonEmptyString,
   state: Schema.Literals(["pending", "watching", "stopping", "stopped", "blocked"]),
@@ -1791,6 +1792,7 @@ const ThreadPullRequestSupervisionCommand = Schema.Struct({
   environmentKey: TrimmedNonEmptyString,
   baseRef: TrimmedNonEmptyString,
   headRef: TrimmedNonEmptyString,
+  lockSha: Schema.optional(Schema.String),
   resumeKey: Schema.optional(TrimmedNonEmptyString),
   message: Schema.optional(Schema.String),
   reason: Schema.optional(Schema.String),
