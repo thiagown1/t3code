@@ -89,6 +89,132 @@ const emptyServerInventory = {
 };
 
 describe("EnvironmentBundleApply", () => {
+  it.effect("writes, refreshes, and verifies an OpenCode project MCP disable", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const cwd = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-environment-opencode-" });
+      yield* fileSystem.makeDirectory(path.join(cwd, ".git"));
+      const configPath = path.join(cwd, "opencode.jsonc");
+      yield* fileSystem.writeFileString(
+        configPath,
+        '{ "mcp": { "servers": { "firebase": { "type": "local", "command": ["private-command"] } } } }\n',
+      );
+      const providers = [
+        {
+          ...forCwd(provider(true), cwd),
+          instanceId: "opencode",
+          driver: "opencode",
+          workspaceSnapshots: [],
+        } as unknown as ServerProvider,
+      ];
+      const getServerInventory = loadEnvironmentBundleServerInventory({
+        cwd,
+        openCodeMcpSources: [{ instanceId: "opencode", enabled: true }],
+      });
+      const beforeInventory = yield* getServerInventory;
+      const inventoryReads = yield* Ref.make(0);
+      const refreshedServerInventory = Ref.getAndUpdate(inventoryReads, (count) => count + 1).pipe(
+        Effect.flatMap((count) =>
+          count === 0 ? Effect.succeed(beforeInventory) : getServerInventory,
+        ),
+      );
+      const current: EnvironmentBundle = {
+        ...bundle(true),
+        mcpServers: beforeInventory.mcpServers,
+        skills: [],
+        providers: [{ instanceId: "opencode", driver: "opencode", enabled: true }],
+      };
+      const incoming = {
+        ...current,
+        mcpServers: current.mcpServers.map((server) => ({ ...server, enabled: false })),
+      };
+      const expectedPlan = yield* planEnvironmentBundleApply({
+        current,
+        incoming,
+        providers,
+        serverInventory: beforeInventory,
+        cwd,
+      });
+
+      const result = yield* applyEnvironmentBundle({
+        current,
+        incoming,
+        expectedPlan,
+        cwd,
+        getProviders: Effect.succeed(providers),
+        getServerInventory: refreshedServerInventory,
+        refreshWorkspaceSnapshot: () => Effect.succeed(providers),
+      });
+
+      expect(result.appliedOperations).toEqual([
+        expect.objectContaining({
+          component: "mcp",
+          adapter: "opencode-project-mcp-override",
+          serverName: "firebase",
+        }),
+      ]);
+      const persisted = yield* fileSystem.readFileString(configPath);
+      expect(persisted).toContain('"disabled": true');
+      expect(persisted).toContain('"private-command"');
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("rolls back an OpenCode MCP disable when refreshed inventory stays enabled", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const cwd = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-environment-opencode-" });
+      yield* fileSystem.makeDirectory(path.join(cwd, ".git"));
+      const configPath = path.join(cwd, "opencode.jsonc");
+      const original =
+        '{ "mcp": { "servers": { "firebase": { "type": "local", "command": ["private-command"] } } } }\n';
+      yield* fileSystem.writeFileString(configPath, original);
+      const providers = [
+        {
+          ...forCwd(provider(true), cwd),
+          instanceId: "opencode",
+          driver: "opencode",
+          workspaceSnapshots: [],
+        } as unknown as ServerProvider,
+      ];
+      const beforeInventory = yield* loadEnvironmentBundleServerInventory({
+        cwd,
+        openCodeMcpSources: [{ instanceId: "opencode", enabled: true }],
+      });
+      const current: EnvironmentBundle = {
+        ...bundle(true),
+        mcpServers: beforeInventory.mcpServers,
+        skills: [],
+        providers: [{ instanceId: "opencode", driver: "opencode", enabled: true }],
+      };
+      const incoming = {
+        ...current,
+        mcpServers: current.mcpServers.map((server) => ({ ...server, enabled: false })),
+      };
+      const expectedPlan = yield* planEnvironmentBundleApply({
+        current,
+        incoming,
+        providers,
+        serverInventory: beforeInventory,
+        cwd,
+      });
+
+      const error = yield* applyEnvironmentBundle({
+        current,
+        incoming,
+        expectedPlan,
+        cwd,
+        getProviders: Effect.succeed(providers),
+        getServerInventory: Effect.succeed(beforeInventory),
+        refreshWorkspaceSnapshot: () => Effect.succeed(providers),
+      }).pipe(Effect.flip);
+
+      expect(error.reason).toBe("health-check-failed");
+      expect(yield* fileSystem.readFileString(configPath)).toBe(original);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("writes, refreshes, and verifies a Claude project MCP disable", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;

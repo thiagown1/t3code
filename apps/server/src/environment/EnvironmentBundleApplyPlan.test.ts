@@ -220,4 +220,87 @@ describe("buildEnvironmentBundleApplyPlan", () => {
       }),
     );
   });
+
+  it("plans a metadata-preserving OpenCode project MCP disable", () => {
+    const mcp = {
+      serverId: "opencode:opencode:firebase",
+      origin: "opencode:opencode:project-config",
+      enabled: true,
+      configurationRef: "opencode:opencode:mcp:firebase",
+      credentialRefs: [],
+      allowedTools: [],
+      blockedTools: [],
+    };
+    const current = bundle(
+      [],
+      [{ instanceId: "opencode", driver: "opencode", enabled: true }],
+      [mcp],
+    );
+    const incoming = { ...current, mcpServers: [{ ...mcp, enabled: false }] };
+    expect(
+      buildEnvironmentBundleApplyPlan({
+        current,
+        incoming,
+        providers: [provider({ instanceId: "opencode", driver: "opencode" })],
+        serverInventory: serverInventory(current),
+        cwd: "C:\\repo",
+        targetStateHash: hash,
+      }),
+    ).toEqual(
+      expect.objectContaining({
+        canApply: true,
+        blockers: [],
+        operations: [
+          {
+            component: "mcp",
+            operation: "disable",
+            adapter: "opencode-project-mcp-override",
+            serverName: "firebase",
+            targetIds: ["opencode:opencode:firebase"],
+            providerInstanceIds: ["opencode"],
+            requiresProviderReload: true,
+          },
+        ],
+      }),
+    );
+  });
+
+  it("blocks a batch that spans Claude and OpenCode project settings", () => {
+    const claudeMcp = {
+      serverId: "claude:claudeAgent:firebase",
+      origin: "claude:claudeAgent:project-config",
+      enabled: true,
+      configurationRef: "claude:claudeAgent:mcp:firebase",
+      credentialRefs: [],
+      allowedTools: [],
+      blockedTools: [],
+    };
+    const openCodeMcp = {
+      ...claudeMcp,
+      serverId: "opencode:opencode:logs",
+      origin: "opencode:opencode:project-config",
+      configurationRef: "opencode:opencode:mcp:logs",
+    };
+    const providers = [
+      { instanceId: "claudeAgent", driver: "claudeAgent", enabled: true },
+      { instanceId: "opencode", driver: "opencode", enabled: true },
+    ];
+    const current = bundle([], providers, [claudeMcp, openCodeMcp]);
+    const incoming = {
+      ...current,
+      mcpServers: current.mcpServers.map((server) => ({ ...server, enabled: false })),
+    };
+    const plan = buildEnvironmentBundleApplyPlan({
+      current,
+      incoming,
+      providers: [provider(), provider({ instanceId: "opencode", driver: "opencode" })],
+      serverInventory: serverInventory(current),
+      cwd: "C:\\repo",
+      targetStateHash: hash,
+    });
+    expect(plan.canApply).toBe(false);
+    expect(plan.blockers).toContain(
+      "Environment Bundle changes span multiple project configuration targets and cannot be applied atomically",
+    );
+  });
 });

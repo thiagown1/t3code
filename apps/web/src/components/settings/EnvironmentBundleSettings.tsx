@@ -416,7 +416,7 @@ function EnvironmentBundleReview({
         </div>
       ) : applyMode === "authoritative" && authoritativePlan ? (
         <div className="rounded-lg border border-success/30 bg-success/5 p-3 text-xs text-muted-foreground">
-          This plan can atomically apply {authoritativePlan.operations.length} Claude project
+          This plan can atomically apply {authoritativePlan.operations.length} project configuration
           disable
           {authoritativePlan.operations.length === 1 ? "" : "s"}. The server will recheck the
           destination hash, refresh every affected provider, and roll back unless every disabled

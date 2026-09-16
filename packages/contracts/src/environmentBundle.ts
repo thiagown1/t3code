@@ -152,9 +152,19 @@ const EnvironmentBundleClaudeMcpDisableOperation = Schema.Struct({
   providerInstanceIds: Schema.Array(StableId).check(Schema.isMinLength(1)),
   requiresProviderReload: Schema.Literal(true),
 });
+const EnvironmentBundleOpenCodeMcpDisableOperation = Schema.Struct({
+  component: Schema.Literal("mcp"),
+  operation: Schema.Literal("disable"),
+  adapter: Schema.Literal("opencode-project-mcp-override"),
+  serverName: StableId,
+  targetIds: Schema.Array(StableId).check(Schema.isMinLength(1)),
+  providerInstanceIds: Schema.Array(StableId).check(Schema.isMinLength(1)),
+  requiresProviderReload: Schema.Literal(true),
+});
 export const EnvironmentBundleApplyOperation = Schema.Union([
   EnvironmentBundleClaudeSkillDisableOperation,
   EnvironmentBundleClaudeMcpDisableOperation,
+  EnvironmentBundleOpenCodeMcpDisableOperation,
 ]);
 export type EnvironmentBundleApplyOperation = typeof EnvironmentBundleApplyOperation.Type;
 

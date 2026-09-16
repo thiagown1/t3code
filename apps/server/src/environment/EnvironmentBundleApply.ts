@@ -18,9 +18,16 @@ import {
   writeClaudeSkillDisableOverrides,
 } from "./ClaudeSkillOverrideTarget.ts";
 import {
-  areClaudeDisableOperationsEffective,
+  areEnvironmentBundleDisableOperationsEffective,
   buildEnvironmentBundleApplyPlan,
 } from "./EnvironmentBundleApplyPlan.ts";
+import {
+  loadOpenCodeMcpOverrideTargetState,
+  rollbackOpenCodeMcpDisableOverrides,
+  writeOpenCodeMcpDisableOverrides,
+} from "./OpenCodeMcpOverrideTarget.ts";
+
+const EMPTY_TARGET_STATE_HASH = "0".repeat(64);
 
 function applyError(
   reason: EnvironmentBundleApplyError["reason"],
@@ -44,18 +51,32 @@ export const planEnvironmentBundleApply = Effect.fn("planEnvironmentBundleApply"
     readonly serverInventory: EnvironmentBundleServerInventory;
     readonly cwd: string;
   }) {
-    const target = yield* loadClaudeSkillOverrideTargetState(input.cwd).pipe(
-      Effect.mapError(() =>
-        applyError(
-          "snapshot-failed",
-          "Claude project settings could not be inspected for the Environment Bundle dry run",
-        ),
-      ),
-    );
-    return buildEnvironmentBundleApplyPlan({
+    const draft = buildEnvironmentBundleApplyPlan({
       ...input,
-      targetStateHash: target.stateHash,
+      targetStateHash: EMPTY_TARGET_STATE_HASH,
     });
+    if (draft.blockers.length > 0 || draft.operations.length === 0) return draft;
+    const usesOpenCodeTarget = draft.operations.every(
+      (operation) => operation.adapter === "opencode-project-mcp-override",
+    );
+    const target = usesOpenCodeTarget
+      ? yield* loadOpenCodeMcpOverrideTargetState(input.cwd).pipe(
+          Effect.mapError(() =>
+            applyError(
+              "snapshot-failed",
+              "OpenCode project configuration could not be inspected for the Environment Bundle dry run",
+            ),
+          ),
+        )
+      : yield* loadClaudeSkillOverrideTargetState(input.cwd).pipe(
+          Effect.mapError(() =>
+            applyError(
+              "snapshot-failed",
+              "Claude project settings could not be inspected for the Environment Bundle dry run",
+            ),
+          ),
+        );
+    return buildEnvironmentBundleApplyPlan({ ...input, targetStateHash: target.stateHash });
   },
 );
 
@@ -113,23 +134,58 @@ export const applyEnvironmentBundle = Effect.fn("applyEnvironmentBundle")(functi
     );
   }
 
-  const written = yield* writeClaudeSkillDisableOverrides({
-    cwd: input.cwd,
-    expectedStateHash: currentPlan.targetStateHash,
-    skillNames: currentPlan.operations.flatMap((operation) =>
-      operation.component === "skill" ? [operation.skillName] : [],
-    ),
-    mcpServerNames: currentPlan.operations.flatMap((operation) =>
-      operation.component === "mcp" ? [operation.serverName] : [],
-    ),
-  }).pipe(
-    Effect.mapError((cause) =>
-      applyError(
-        cause.reason === "state-changed" ? "plan-changed" : "persistence-failed",
-        cause.message,
-      ),
-    ),
+  const usesOpenCodeTarget = currentPlan.operations.every(
+    (operation) => operation.adapter === "opencode-project-mcp-override",
   );
+  let rollbackEffect: Effect.Effect<
+    void,
+    EnvironmentBundleApplyError,
+    FileSystem.FileSystem | Path.Path
+  >;
+  if (usesOpenCodeTarget) {
+    const written = yield* writeOpenCodeMcpDisableOverrides({
+      cwd: input.cwd,
+      expectedStateHash: currentPlan.targetStateHash,
+      serverNames: currentPlan.operations.flatMap((operation) =>
+        operation.adapter === "opencode-project-mcp-override" ? [operation.serverName] : [],
+      ),
+    }).pipe(
+      Effect.mapError((cause) =>
+        applyError(
+          cause.reason === "state-changed" ? "plan-changed" : "persistence-failed",
+          cause.message,
+        ),
+      ),
+    );
+    rollbackEffect = rollbackOpenCodeMcpDisableOverrides({
+      cwd: input.cwd,
+      expectedWrittenStateHash: written.written.stateHash,
+      previous: written.previous,
+    }).pipe(Effect.mapError((cause) => applyError("rollback-failed", cause.message)));
+  } else {
+    const written = yield* writeClaudeSkillDisableOverrides({
+      cwd: input.cwd,
+      expectedStateHash: currentPlan.targetStateHash,
+      skillNames: currentPlan.operations.flatMap((operation) =>
+        operation.component === "skill" ? [operation.skillName] : [],
+      ),
+      mcpServerNames: currentPlan.operations.flatMap((operation) =>
+        operation.adapter === "claude-project-mcp-override" ? [operation.serverName] : [],
+      ),
+    }).pipe(
+      Effect.mapError((cause) =>
+        applyError(
+          cause.reason === "state-changed" ? "plan-changed" : "persistence-failed",
+          cause.message,
+        ),
+      ),
+    );
+    rollbackEffect = rollbackClaudeSkillDisableOverrides({
+      cwd: input.cwd,
+      expectedWrittenStateHash: written.written.stateHash,
+      previous: written.previous,
+    }).pipe(Effect.mapError((cause) => applyError("rollback-failed", cause.message)));
+  }
   const providerInstanceIds = [
     ...new Set(currentPlan.operations.flatMap((operation) => operation.providerInstanceIds)),
   ]
@@ -151,24 +207,18 @@ export const applyEnvironmentBundle = Effect.fn("applyEnvironmentBundle")(functi
   );
   const effective =
     Exit.isSuccess(refreshResult) &&
-    areClaudeDisableOperationsEffective({
+    areEnvironmentBundleDisableOperationsEffective({
       providers: refreshedProviders,
       serverInventory: refreshedInventory,
       cwd: input.cwd,
       operations: currentPlan.operations,
     });
   if (!effective) {
-    const rollback = yield* Effect.exit(
-      rollbackClaudeSkillDisableOverrides({
-        cwd: input.cwd,
-        expectedWrittenStateHash: written.written.stateHash,
-        previous: written.previous,
-      }),
-    );
+    const rollback = yield* Effect.exit(rollbackEffect);
     if (Exit.isFailure(rollback)) {
       return yield* applyError(
         "rollback-failed",
-        "Claude project disable did not become effective and the previous settings could not be restored safely",
+        "Project configuration disable did not become effective and the previous settings could not be restored safely",
       );
     }
     yield* Effect.forEach(
@@ -178,7 +228,7 @@ export const applyEnvironmentBundle = Effect.fn("applyEnvironmentBundle")(functi
     ).pipe(Effect.ignore);
     return yield* applyError(
       "health-check-failed",
-      "Claude project disable did not become effective after provider refresh; settings were rolled back",
+      "Project configuration disable did not become effective after provider refresh; settings were rolled back",
     );
   }
 

@@ -55,7 +55,7 @@ export function environmentBundleProviderSkillId(
   return `${provider.instanceId}:${skillOrigin(skill)}:${skill.name}`;
 }
 
-export function areClaudeDisableOperationsEffective(input: {
+export function areEnvironmentBundleDisableOperationsEffective(input: {
   readonly providers: ReadonlyArray<ServerProvider>;
   readonly serverInventory: EnvironmentBundleServerInventory;
   readonly cwd: string;
@@ -91,21 +91,38 @@ function equalExceptEnabled(
   return isDeepStrictEqual(beforeMetadata, afterMetadata);
 }
 
-function claudeMcpIdentity(input: {
+function projectMcpIdentity(input: {
   readonly server: Pick<EnvironmentBundle["mcpServers"][number], "serverId" | "origin">;
   readonly providers: ReadonlyArray<ServerProvider>;
-}): { readonly instanceId: string; readonly serverName: string } | null {
+}): {
+  readonly instanceId: string;
+  readonly serverName: string;
+  readonly adapter: "claude-project-mcp-override" | "opencode-project-mcp-override";
+} | null {
   for (const provider of input.providers) {
-    if (provider.driver !== "claudeAgent") continue;
-    const prefix = `claude:${provider.instanceId}:`;
+    const providerPrefix =
+      provider.driver === "claudeAgent"
+        ? "claude"
+        : provider.driver === "opencode"
+          ? "opencode"
+          : null;
+    if (!providerPrefix) continue;
+    const prefix = `${providerPrefix}:${provider.instanceId}:`;
     if (
-      input.server.origin !== `claude:${provider.instanceId}:project-config` ||
+      input.server.origin !== `${providerPrefix}:${provider.instanceId}:project-config` ||
       !input.server.serverId.startsWith(prefix)
     )
       continue;
     const serverName = input.server.serverId.slice(prefix.length);
     if (/^[a-zA-Z0-9_.-]{1,256}$/u.test(serverName)) {
-      return { instanceId: provider.instanceId, serverName };
+      return {
+        instanceId: provider.instanceId,
+        serverName,
+        adapter:
+          provider.driver === "claudeAgent"
+            ? "claude-project-mcp-override"
+            : "opencode-project-mcp-override",
+      };
     }
   }
   return null;
@@ -223,13 +240,13 @@ export function buildEnvironmentBundleApplyPlan(input: {
     const actual = input.serverInventory.mcpServers.find(
       (server) => server.serverId === change.before.serverId,
     );
-    const identity = claudeMcpIdentity({
+    const identity = projectMcpIdentity({
       server: change.after,
       providers: input.providers,
     });
     if (!actual || !actual.enabled || !isDeepStrictEqual(actual, change.before) || !identity) {
       blockers.push(
-        `mcp:${change.after.serverId} is not an enabled Claude project MCP in the current workspace`,
+        `mcp:${change.after.serverId} is not an enabled supported project MCP in the current workspace`,
       );
       requestedMcpDisables.delete(change.after.serverId);
       continue;
@@ -241,14 +258,16 @@ export function buildEnvironmentBundleApplyPlan(input: {
     blockers.push(unsupportedStepMessage("mcp", server.serverId));
 
   for (const { after } of requestedMcpDisables.values()) {
-    const identity = claudeMcpIdentity({ server: after, providers: input.providers });
+    const identity = projectMcpIdentity({ server: after, providers: input.providers });
     if (!identity) continue;
     const affected = input.serverInventory.mcpServers.flatMap((server) => {
-      const candidate = claudeMcpIdentity({
+      const candidate = projectMcpIdentity({
         server,
         providers: input.providers,
       });
-      return server.enabled && candidate?.serverName === identity.serverName
+      return server.enabled &&
+        candidate?.adapter === identity.adapter &&
+        candidate.serverName === identity.serverName
         ? [{ instanceId: candidate.instanceId, targetId: server.serverId }]
         : [];
     });
@@ -261,10 +280,10 @@ export function buildEnvironmentBundleApplyPlan(input: {
       );
       continue;
     }
-    operationByName.set(`mcp:${identity.serverName}`, {
+    operationByName.set(`mcp:${identity.adapter}:${identity.serverName}`, {
       component: "mcp",
       operation: "disable",
-      adapter: "claude-project-mcp-override",
+      adapter: identity.adapter,
       serverName: identity.serverName,
       targetIds: affected.map((candidate) => candidate.targetId).sort(),
       providerInstanceIds: [...new Set(affected.map((candidate) => candidate.instanceId))].sort(),
@@ -277,6 +296,16 @@ export function buildEnvironmentBundleApplyPlan(input: {
       `${right.component}:${right.component === "skill" ? right.skillName : right.serverName}`,
     ),
   );
+  const targetKinds = new Set(
+    operations.map((operation) =>
+      operation.adapter === "opencode-project-mcp-override" ? "opencode" : "claude",
+    ),
+  );
+  if (targetKinds.size > 1) {
+    blockers.push(
+      "Environment Bundle changes span multiple project configuration targets and cannot be applied atomically",
+    );
+  }
   if (operations.length === 0 && blockers.length === 0) {
     blockers.push("The bundle does not contain any supported changes to apply");
   }
