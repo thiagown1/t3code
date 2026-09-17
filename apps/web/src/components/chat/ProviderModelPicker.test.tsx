@@ -8,6 +8,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 
 import { deriveProviderInstanceEntries } from "../../providerInstances";
+import { matchesModelPickerLock } from "./ModelPickerContent";
 import { ProviderModelPicker } from "./ProviderModelPicker";
 import type { ModelEsque } from "./providerIconUtils";
 
@@ -175,5 +176,43 @@ describe("ProviderModelPicker", () => {
     expect(markup).toContain("size-4");
     expect(markup).toContain("h-3");
     expect(markup).toContain("text-[7px]");
+  });
+});
+
+describe("matchesModelPickerLock", () => {
+  const codex = ProviderDriverKind.make("codex");
+  const claude = ProviderDriverKind.make("claudeAgent");
+
+  it("hides other drivers on a started thread when migration is not offered", () => {
+    expect(
+      matchesModelPickerLock({
+        entry: { driverKind: claude, continuationGroupKey: undefined },
+        lockedProvider: codex,
+        lockedContinuationGroupKey: null,
+        allowDriverMigration: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("offers other drivers as migration targets when migration is allowed", () => {
+    expect(
+      matchesModelPickerLock({
+        entry: { driverKind: claude, continuationGroupKey: undefined },
+        lockedProvider: codex,
+        lockedContinuationGroupKey: null,
+        allowDriverMigration: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("still refuses a foreign continuation group inside the locked driver", () => {
+    expect(
+      matchesModelPickerLock({
+        entry: { driverKind: codex, continuationGroupKey: "other-profile" },
+        lockedProvider: codex,
+        lockedContinuationGroupKey: "this-profile",
+        allowDriverMigration: true,
+      }),
+    ).toBe(false);
   });
 });

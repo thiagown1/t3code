@@ -631,14 +631,29 @@ const make = Effect.gen(function* () {
       });
     }
     const preferredProvider: ProviderDriverKind = desiredDriverKind;
+    // A driver switch abandons the source provider session instead of resuming
+    // it: resume cursors are provider-native, so neither the driver guard nor
+    // the continuation guard below applies. The conversation does not travel
+    // with the switch; the client seeds the target session explicitly.
+    const driverSwitch =
+      thread.session !== null &&
+      requestedModelSelection !== undefined &&
+      requestedModelSelection.instanceId !== currentInstanceId &&
+      currentInfo.driverKind !== desiredInfo.driverKind;
     if (options?.pendingTurnStart === true && thread.session?.status !== "running") {
       yield* setThreadSession({
         threadId,
         session: {
           threadId,
           status: "starting",
-          providerName: activeSession?.provider ?? preferredProvider,
-          providerInstanceId: activeSession?.providerInstanceId ?? desiredInstanceId,
+          // A driver switch is already committed to the target, so the session
+          // must not advertise the provider it is leaving.
+          providerName: driverSwitch
+            ? preferredProvider
+            : (activeSession?.provider ?? preferredProvider),
+          providerInstanceId: driverSwitch
+            ? desiredInstanceId
+            : (activeSession?.providerInstanceId ?? desiredInstanceId),
           runtimeMode: desiredRuntimeMode,
           activeTurnId: null,
           lastError: null,
@@ -662,17 +677,11 @@ const make = Effect.gen(function* () {
       });
     }
     if (
+      !driverSwitch &&
       thread.session !== null &&
       requestedModelSelection !== undefined &&
       requestedModelSelection.instanceId !== currentInstanceId
     ) {
-      if (currentInfo.driverKind !== desiredInfo.driverKind) {
-        return yield* new ProviderAdapterRequestError({
-          provider: preferredProvider,
-          method: "thread.turn.start",
-          detail: `Thread '${threadId}' is bound to driver '${currentInfo.driverKind}' and cannot switch to '${desiredInfo.driverKind}'.`,
-        });
-      }
       if (
         currentInfo.continuationIdentity.continuationKey !==
         desiredInfo.continuationIdentity.continuationKey
@@ -762,6 +771,7 @@ const make = Effect.gen(function* () {
         !Equal.equals(previousModelSelection, requestedModelSelection);
 
       if (
+        !driverSwitch &&
         !runtimeModeChanged &&
         !cwdChanged &&
         !instanceChanged &&
@@ -772,9 +782,13 @@ const make = Effect.gen(function* () {
         return existingSessionThreadId;
       }
 
-      const resumeCursor = shouldRestartForModelChange
-        ? undefined
-        : (activeSession?.resumeCursor ?? undefined);
+      // Handing a source-driver cursor to the target driver would either fail
+      // the resume or replay a foreign transcript, so the switch always starts
+      // the target session cold.
+      const resumeCursor =
+        driverSwitch || shouldRestartForModelChange
+          ? undefined
+          : (activeSession?.resumeCursor ?? undefined);
       yield* Effect.logInfo("provider command reactor restarting provider session", {
         threadId,
         existingSessionThreadId,
@@ -792,6 +806,7 @@ const make = Effect.gen(function* () {
         instanceChanged,
         shouldRestartForModelChange,
         shouldRestartForModelSelectionChange,
+        driverSwitch,
         hasResumeCursor: resumeCursor !== undefined,
       });
       const restartedSession = yield* startProviderSession(

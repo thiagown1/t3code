@@ -1462,3 +1462,66 @@ export function restorePlanFollowUpComposer(input: {
     detectTrigger: true,
   });
 }
+
+const PROVIDER_MIGRATION_TRANSCRIPT_MAX_CHARS = 24_000;
+const PROVIDER_MIGRATION_MESSAGE_MAX_CHARS = 4_000;
+
+/**
+ * A driver switch abandons the source provider session, so nothing the target
+ * driver receives comes from the old conversation. This renders the visible
+ * transcript as plain text the user can read, trim, and send as the first turn
+ * on the target driver. It is deliberately lossy and never throws: an escape
+ * hatch that fails on a long thread is not an escape hatch.
+ */
+export function buildProviderMigrationPrompt(input: {
+  messages: ReadonlyArray<Pick<ChatMessage, "role" | "text" | "streaming">>;
+  sourceLabel: string;
+  targetLabel: string;
+  maxChars?: number;
+}): string {
+  const maxChars = input.maxChars ?? PROVIDER_MIGRATION_TRANSCRIPT_MAX_CHARS;
+  const rendered = input.messages
+    .filter((message) => !message.streaming && message.text.trim().length > 0)
+    .map((message) => {
+      const text = message.text.trim();
+      const body =
+        text.length > PROVIDER_MIGRATION_MESSAGE_MAX_CHARS
+          ? `${text.slice(0, PROVIDER_MIGRATION_MESSAGE_MAX_CHARS)}\n[… message truncated …]`
+          : text;
+      return `## ${message.role}\n${body}`;
+    });
+
+  // The opening ask is what the rest of the thread refers back to, so it
+  // survives truncation even when the tail is what fits.
+  const first = rendered[0];
+  const tail: string[] = [];
+  let used = first?.length ?? 0;
+  let omitted = 0;
+  for (let index = rendered.length - 1; index >= 1; index -= 1) {
+    const entry = rendered[index]!;
+    if (used + entry.length > maxChars) {
+      omitted = index;
+      break;
+    }
+    used += entry.length;
+    tail.unshift(entry);
+  }
+
+  const parts = [
+    ...(first ? [first] : []),
+    ...(omitted > 0 ? [`## note\n[… ${omitted} earlier message(s) omitted …]`] : []),
+    ...tail,
+  ];
+
+  return [
+    `This thread moved from ${input.sourceLabel} to ${input.targetLabel}. The previous provider session does not carry over, so the conversation so far is reproduced below.`,
+    "",
+    "---",
+    "",
+    ...(parts.length > 0 ? [parts.join("\n\n")] : ["(no transcript available)"]),
+    "",
+    "---",
+    "",
+    "Continue from here.",
+  ].join("\n");
+}

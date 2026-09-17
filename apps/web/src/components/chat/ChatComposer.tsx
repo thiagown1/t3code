@@ -1361,6 +1361,7 @@ export interface ChatComposerProps {
 
   // Provider / model
   lockedProvider: ProviderDriverKind | null;
+  allowDriverMigration?: boolean;
   providerStatuses: ServerProvider[];
   /** False until the environment's server config has arrived at least once. */
   providerCatalogKnown: boolean;
@@ -1489,6 +1490,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     runtimeMode,
     interactionMode: requestedInteractionMode,
     lockedProvider,
+    allowDriverMigration,
     providerStatuses,
     providerCatalogKnown,
     activeProjectDefaultModelSelection,
@@ -4983,6 +4985,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             : selectedModelForPickerWithCustomFallback
         }
         lockedProvider={lockedProvider}
+        allowDriverMigration={allowDriverMigration === true}
         lockedContinuationGroupKey={lockedContinuationGroupKey}
         instanceEntries={providerInstanceEntries}
         keybindings={keybindings}
