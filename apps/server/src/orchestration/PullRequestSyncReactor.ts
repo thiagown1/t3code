@@ -1,3 +1,6 @@
+import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
+import { supervisePrLink } from "./PrSupervisionSweep.ts";
+import { supervisionEnvironmentKey } from "./PrSupervisionEnvironment.ts";
 import { siblingPullRequestUrl } from "@t3tools/shared/changeRequestUrl";
 import {
   CommandId,
@@ -125,11 +128,14 @@ export class PullRequestSyncReactor extends Context.Service<
 
 /** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* () {
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const environmentKey = yield* supervisionEnvironmentKey;
   const engine = yield* OrchestrationEngine.OrchestrationEngineService;
   const snapshots = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
   const pullRequests = yield* PullRequestService.PullRequestService;
   const crypto = yield* Crypto.Crypto;
 
+  let supervisionCursor = 0;
   const lastSyncedAt = new Map<string, number>();
   const requested = new Map<string, number>();
   let requestGeneration = 0;
@@ -313,13 +319,64 @@ export const make = Effect.gen(function* () {
     );
   });
 
+  // Adapter calls have independent timeouts and must not occupy the host-sync
+  // worker or postpone explicit requestSync refreshes.
+  const supervisionSweep = Effect.fn("PullRequestSyncReactor.supervisionSweep")(function* () {
+    const [active, archived] = yield* Effect.all([
+      snapshots.getShellSnapshot(),
+      snapshots.getArchivedShellSnapshot(),
+    ]);
+    const snapshot = {
+      projects: active.projects,
+      threads: [...active.threads, ...archived.threads],
+    };
+    const nowIso = DateTime.formatIso(yield* DateTime.now);
+    // Bound repository adapters separately from the existing cheap host sync.
+    const supervised = snapshot.threads.flatMap((thread) =>
+      thread.pullRequests
+        .filter(
+          (link) =>
+            link.supervision?.environmentKey === environmentKey &&
+            link.supervision.state !== "stopped",
+        )
+        .map((link) => ({ thread, link })),
+    );
+    const batch = Array.from(
+      { length: Math.min(2, supervised.length) },
+      (_, index) => supervised[(supervisionCursor + index) % supervised.length]!,
+    );
+    supervisionCursor = supervised.length
+      ? (supervisionCursor + batch.length) % supervised.length
+      : 0;
+    for (const { thread, link } of batch) {
+      const project = snapshot.projects.find((project) => project.id === thread.projectId);
+      if (!project) continue;
+      yield* supervisePrLink(engine, thread, project, link, nowIso, environmentKey).pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        Effect.catchCause(
+          logSkipped("PR supervision sweep deferred", { threadId: thread.id, number: link.number }),
+        ),
+      );
+    }
+  });
+
   const worker = yield* makeDrainableWorker(() =>
     sweep().pipe(Effect.catchCause(logSkipped("pull request sync sweep failed", {}))),
+  );
+
+  const supervisionWorker = yield* makeDrainableWorker(() =>
+    supervisionSweep().pipe(Effect.catchCause(logSkipped("PR supervision sweep failed", {}))),
   );
 
   const start: PullRequestSyncReactor["Service"]["start"] = Effect.fn(
     "PullRequestSyncReactor.start",
   )(function* () {
+    yield* forkParked(
+      Effect.gen(function* () {
+        yield* supervisionWorker.enqueue(undefined);
+        yield* supervisionWorker.drain;
+      }).pipe(Effect.repeat(Schedule.spaced("1 minute")), Effect.asVoid),
+    );
     yield* forkParked(
       Effect.gen(function* () {
         yield* worker.enqueue(undefined);

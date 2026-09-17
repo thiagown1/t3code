@@ -17,9 +17,7 @@ import { findEnvironmentBundleRepositoryRoot } from "./EnvironmentBundlePaths.ts
 const MAX_CLAUDE_SETTINGS_BYTES = FileSystem.Size(1_000_000);
 const MISSING_TARGET_MARKER = "t3-environment-bundle:missing";
 
-export class ClaudeSkillOverrideTargetError extends Data.TaggedError(
-  "ClaudeSkillOverrideTargetError",
-)<{
+class ClaudeSkillOverrideTargetError extends Data.TaggedError("ClaudeSkillOverrideTargetError")<{
   readonly reason: "invalid-json" | "too-large" | "state-changed" | "persistence-failed";
   readonly message: string;
 }> {}
@@ -115,7 +113,7 @@ export const loadClaudeSkillOverrideTargetState = Effect.fn("loadClaudeSkillOver
   },
 );
 
-export function renderClaudeSkillDisableOverrides(
+function renderClaudeSkillDisableOverrides(
   state: ClaudeSkillOverrideTargetState,
   skillNames: ReadonlyArray<string>,
   mcpServerNames: ReadonlyArray<string> = [],

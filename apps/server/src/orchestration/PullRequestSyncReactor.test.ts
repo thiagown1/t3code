@@ -1,3 +1,8 @@
+import { layerTest as serverConfigLayerTest } from "../config.ts";
+import { ServerEnvironmentIdentity } from "../environment/ServerEnvironment.ts";
+import { EnvironmentId } from "@t3tools/contracts";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { supervisePrLink } from "./PrSupervisionSweep.ts";
 import {
   ProjectId,
   ProviderInstanceId,
@@ -13,7 +18,7 @@ import {
   type ThreadPullRequestLink,
   type ThreadPullRequestSnapshot,
 } from "@t3tools/contracts";
-import { assert, describe, it } from "@effect/vitest";
+import { assert, describe, expect, it } from "@effect/vitest";
 import * as Crypto from "effect/Crypto";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -152,6 +157,7 @@ function makeSummary(
 }
 
 interface HarnessOptions {
+  readonly archivedSnapshot?: () => Effect.Effect<OrchestrationShellSnapshot>;
   readonly invalidate?: PullRequestService["Service"]["invalidate"];
   readonly snapshot: OrchestrationShellSnapshot;
   readonly summary?: (
@@ -200,9 +206,14 @@ const makeHarness = Effect.fn("makePullRequestSyncHarness")(function* (options: 
   };
 
   const dependencies = Layer.mergeAll(
+    Layer.succeed(ServerEnvironmentIdentity, {
+      getEnvironmentId: Effect.succeed(EnvironmentId.make("test-environment")),
+    }),
     Layer.mock(ProjectionSnapshotQuery)({
       getShellSnapshot: () =>
         Queue.offer(snapshotReads, undefined).pipe(Effect.andThen(Ref.get(snapshots))),
+      getArchivedShellSnapshot:
+        options.archivedSnapshot ?? (() => Effect.succeed(makeSnapshot([]))),
     }),
     Layer.mock(PullRequestService)({
       summary,
@@ -227,7 +238,11 @@ const makeHarness = Effect.fn("makePullRequestSyncHarness")(function* (options: 
     linkCommands,
     summaryCalls,
     stackCalls,
-    layer: PullRequestSyncReactor.layer.pipe(Layer.provide(dependencies)),
+    layer: PullRequestSyncReactor.layer.pipe(
+      Layer.provide(dependencies),
+      Layer.provide(serverConfigLayerTest("/test", { prefix: "pr-supervision-" })),
+      Layer.provide(NodeServices.layer),
+    ),
   };
 });
 
@@ -744,3 +759,433 @@ describe("PullRequestSyncReactor", () => {
     ),
   );
 });
+const supervisedTestLink = () => ({
+  ...makeLink(42, null),
+  supervision: {
+    owner: "firstmate:00000000-0000-4000-8000-000000000001",
+    environmentKey: "environment-a",
+    lockSha: "a".repeat(40),
+    headSha: "b".repeat(40),
+    state: "watching" as const,
+    baseRef: "main",
+    headRef: "feature",
+    resumes: 0,
+    lastResumeKey: null,
+    lastReason: null,
+    expiresAt: "2999-01-01T00:00:00.000Z",
+  },
+});
+
+it.effect("a copied database cannot acquire, wake or release the original environment's PR", () =>
+  Effect.gen(function* () {
+    for (const state of ["pending", "watching", "stopping", "blocked"] as const) {
+      const link = supervisedTestLink();
+      yield* supervisePrLink(
+        { dispatch: () => Effect.die("must not dispatch") },
+        makeThread("copied-owner"),
+        makeProject(),
+        { ...link, supervision: { ...link.supervision, state } },
+        NOW,
+        "different-environment",
+        () => Effect.die("must not call adapter"),
+      );
+    }
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("pending enrollment is recovered before any automatic model turn", () =>
+  Effect.gen(function* () {
+    const commands: Array<OrchestrationCommand> = [];
+    const operations: string[] = [];
+    const link = supervisedTestLink();
+    yield* supervisePrLink(
+      {
+        dispatch: (command) => {
+          commands.push(command);
+          return Effect.succeed({ sequence: 1 });
+        },
+      },
+      makeThread("owner"),
+      makeProject(),
+      { ...link, supervision: { ...link.supervision, state: "pending" } },
+      NOW,
+      "environment-a",
+      (input) => {
+        operations.push(input.operation);
+        return Effect.succeed({
+          schema: "firstmate-pr-supervision/v1" as const,
+          enrolled: true,
+          lockSha: "a".repeat(40),
+          headSha: "b".repeat(40),
+        });
+      },
+    );
+    expect(operations).toEqual(["enroll"]);
+    expect(commands).toHaveLength(1);
+    expect(commands[0]).toMatchObject({ action: "enrolled" });
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("supervision resumes the linked original thread only after writer authorization", () =>
+  Effect.gen(function* () {
+    const commands: Array<OrchestrationCommand> = [];
+    const operations: string[] = [];
+    yield* supervisePrLink(
+      {
+        dispatch: (command) => {
+          commands.push(command);
+          return Effect.succeed({ sequence: 1 });
+        },
+      },
+      makeThread("original-owner"),
+      makeProject(),
+      supervisedTestLink(),
+      NOW,
+      "environment-a",
+      (input) => {
+        operations.push(input.operation);
+        return Effect.succeed(
+          input.operation === "enroll"
+            ? {
+                schema: "firstmate-pr-supervision/v1" as const,
+                enrolled: true,
+                lockSha: "a".repeat(40),
+                headSha: "b".repeat(40),
+              }
+            : {
+                schema: "firstmate-pr-supervision/v1" as const,
+                state: "needs_work",
+                writerAuthorized: true,
+                headSha: "a".repeat(40),
+                gateCheckId: 20,
+              },
+        );
+      },
+    );
+    expect(operations).toEqual(["observe"]);
+    expect(commands).toHaveLength(1);
+    expect(commands[0]).toMatchObject({
+      type: "thread.pull-request.supervise",
+      action: "wake",
+      threadId: "original-owner",
+    });
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect(
+  "a same-branch push advances the enrolled revision before any gate can wake the model",
+  () =>
+    Effect.gen(function* () {
+      const commands: Array<OrchestrationCommand> = [];
+      const observedInputs: Array<{ headSha?: string }> = [];
+      yield* supervisePrLink(
+        {
+          dispatch: (command) => {
+            commands.push(command);
+            return Effect.succeed({ sequence: 1 });
+          },
+        },
+        makeThread("owner"),
+        makeProject(),
+        supervisedTestLink(),
+        NOW,
+        "environment-a",
+        (input) => {
+          observedInputs.push(input);
+          return Effect.succeed({
+            schema: "firstmate-pr-supervision/v1" as const,
+            state: "revision_changed",
+            writerAuthorized: true,
+            headSha: "c".repeat(40),
+          });
+        },
+      );
+      expect(observedInputs).toEqual([expect.objectContaining({ headSha: "b".repeat(40) })]);
+      expect(commands).toHaveLength(1);
+      expect(commands[0]).toMatchObject({
+        action: "revised",
+        lockSha: "a".repeat(40),
+        headSha: "c".repeat(40),
+      });
+    }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("supervision never calls an adapter while a user approval is pending", () =>
+  Effect.gen(function* () {
+    let called = false;
+    yield* supervisePrLink(
+      {
+        dispatch: () => {
+          throw new Error("must not dispatch");
+        },
+      },
+      makeThread("owner", { hasPendingApprovals: true }),
+      makeProject(),
+      supervisedTestLink(),
+      NOW,
+      "environment-a",
+      () => {
+        called = true;
+        return Effect.succeed({ schema: "firstmate-pr-supervision/v1" as const });
+      },
+    );
+    expect(called).toBe(false);
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("reconciled gate IDs with identical evidence cannot spend another resume", () =>
+  Effect.gen(function* () {
+    const commands: Array<OrchestrationCommand> = [];
+    const link = supervisedTestLink();
+    let lastResumeKey: string | null = null;
+    for (const gateCheckId of [20, 21]) {
+      yield* supervisePrLink(
+        {
+          dispatch: (command) => {
+            commands.push(command);
+            if (command.type === "thread.pull-request.supervise")
+              lastResumeKey = command.resumeKey ?? null;
+            return Effect.succeed({ sequence: 1 });
+          },
+        },
+        makeThread("owner"),
+        makeProject(),
+        { ...link, supervision: { ...link.supervision, lastResumeKey } },
+        NOW,
+        "environment-a",
+        (input) =>
+          Effect.succeed(
+            input.operation === "enroll"
+              ? {
+                  schema: "firstmate-pr-supervision/v1" as const,
+                  enrolled: true,
+                  lockSha: "a".repeat(40),
+                  headSha: "b".repeat(40),
+                }
+              : {
+                  schema: "firstmate-pr-supervision/v1" as const,
+                  state: "needs_work",
+                  writerAuthorized: true,
+                  headSha: "a".repeat(40),
+                  baseSha: "b".repeat(40),
+                  reason: "Gate failed",
+                  gateSummary: "Unit test failure",
+                  gateCheckId,
+                },
+          ),
+      );
+    }
+    expect(commands).toHaveLength(1);
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("pending evidence and missing writer authority never wake a model", () =>
+  Effect.gen(function* () {
+    for (const receipt of [
+      { state: "waiting", writerAuthorized: true, headSha: "a".repeat(40) },
+      { state: "needs_work", writerAuthorized: false, headSha: "a".repeat(40) },
+    ]) {
+      const commands: Array<OrchestrationCommand> = [];
+      yield* supervisePrLink(
+        {
+          dispatch: (command) => {
+            commands.push(command);
+            return Effect.succeed({ sequence: 1 });
+          },
+        },
+        makeThread("owner"),
+        makeProject(),
+        supervisedTestLink(),
+        NOW,
+        "environment-a",
+        (input) =>
+          Effect.succeed(
+            input.operation === "enroll"
+              ? {
+                  schema: "firstmate-pr-supervision/v1" as const,
+                  enrolled: true,
+                  lockSha: "a".repeat(40),
+                  headSha: "b".repeat(40),
+                }
+              : { schema: "firstmate-pr-supervision/v1" as const, ...receipt },
+          ),
+      );
+      expect(commands).toEqual([]);
+    }
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("exhausted supervision releases ownership without another model call", () =>
+  Effect.gen(function* () {
+    const operations: string[] = [];
+    const commands: Array<OrchestrationCommand> = [];
+    const link = supervisedTestLink();
+    link.supervision.resumes = 3;
+    yield* supervisePrLink(
+      {
+        dispatch: (command) => {
+          commands.push(command);
+          return Effect.succeed({ sequence: 1 });
+        },
+      },
+      makeThread("owner"),
+      makeProject(),
+      link,
+      NOW,
+      "environment-a",
+      (input) => {
+        operations.push(input.operation);
+        return Effect.succeed({ schema: "firstmate-pr-supervision/v1" as const, released: true });
+      },
+    );
+    expect(operations).toEqual(["release"]);
+    expect(commands[0]).toMatchObject({
+      action: "released",
+      reason: "Three automatic resumptions exhausted.",
+    });
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("cleanup recovers a lost enrollment receipt without acquiring a new writer", () =>
+  Effect.gen(function* () {
+    const operations: string[] = [];
+    const commands: Array<OrchestrationCommand> = [];
+    const link = supervisedTestLink();
+    const { lockSha: _lost, ...pending } = link.supervision;
+    yield* supervisePrLink(
+      {
+        dispatch: (command) => {
+          commands.push(command);
+          return Effect.succeed({ sequence: 1 });
+        },
+      },
+      makeThread("owner"),
+      makeProject(),
+      { ...link, supervision: { ...pending, state: "stopping" } },
+      NOW,
+      "environment-a",
+      (input) => {
+        operations.push(input.operation);
+        if (input.operation === "inspect")
+          return Effect.succeed({
+            schema: "firstmate-pr-supervision/v1" as const,
+            lockSha: "b".repeat(40),
+          });
+        expect(input.lockSha).toBe("b".repeat(40));
+        return Effect.succeed({ schema: "firstmate-pr-supervision/v1" as const, released: true });
+      },
+    );
+    expect(operations).toEqual(["inspect", "release"]);
+    expect(commands).toHaveLength(1);
+    expect(commands[0]).toMatchObject({ action: "released" });
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("missing writer acquisition proof blocks observation and resumption", () =>
+  Effect.gen(function* () {
+    const commands: Array<OrchestrationCommand> = [];
+    const { lockSha: _missing, ...state } = supervisedTestLink().supervision;
+    yield* supervisePrLink(
+      {
+        dispatch: (command) => {
+          commands.push(command);
+          return Effect.succeed({ sequence: 1 });
+        },
+      },
+      makeThread("owner"),
+      makeProject(),
+      { ...supervisedTestLink(), supervision: state },
+      NOW,
+      "environment-a",
+      () => Effect.die("must not observe without acquisition proof"),
+    );
+    expect(commands).toHaveLength(1);
+    expect(commands[0]).toMatchObject({ action: "blocked" });
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("slow supervision does not hold up an explicit host refresh", () =>
+  Effect.gen(function* () {
+    const started = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    const fixture = yield* makeHarness({
+      snapshot: makeSnapshot([makeThread("refresh", { pullRequests: [makeLink(42)] })]),
+      archivedSnapshot: () =>
+        Deferred.succeed(started, undefined).pipe(
+          Effect.andThen(Deferred.await(release)),
+          Effect.as(makeSnapshot([])),
+        ),
+    });
+    yield* Effect.gen(function* () {
+      const reactor = yield* PullRequestSyncReactor.PullRequestSyncReactor;
+      yield* reactor.start();
+      yield* Deferred.succeed(fixture.activation, undefined);
+      yield* Deferred.await(started);
+      yield* reactor.requestSync({
+        host: "github.com",
+        repository: "owner/repository",
+        number: 42,
+      });
+      yield* reactor.drain;
+      expect((yield* Ref.get(fixture.summaryCalls)).length).toBeGreaterThan(0);
+      yield* Deferred.succeed(release, undefined);
+    }).pipe(Effect.provide(fixture.layer));
+  }).pipe(Effect.scoped),
+);
+
+it.effect("an archived supervised thread releases its exact writer without a model turn", () =>
+  Effect.gen(function* () {
+    const operations: string[] = [];
+    const commands: Array<OrchestrationCommand> = [];
+    yield* supervisePrLink(
+      {
+        dispatch: (command) => {
+          commands.push(command);
+          return Effect.succeed({ sequence: 1 });
+        },
+      },
+      makeThread("archived", { archivedAt: NOW }),
+      makeProject(),
+      supervisedTestLink(),
+      NOW,
+      "environment-a",
+      (input) => {
+        operations.push(input.operation);
+        expect(input.lockSha).toBe("a".repeat(40));
+        return Effect.succeed({ schema: "firstmate-pr-supervision/v1" as const, released: true });
+      },
+    );
+    expect(operations).toEqual(["release"]);
+    expect(commands[0]).toMatchObject({ action: "released", reason: "Thread archived." });
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("a rejected release retains ownership until inspection proves this owner is absent", () =>
+  Effect.gen(function* () {
+    for (const remaining of ["b".repeat(40), null]) {
+      const commands: Array<OrchestrationCommand> = [];
+      const link = supervisedTestLink();
+      yield* supervisePrLink(
+        {
+          dispatch: (command) => {
+            commands.push(command);
+            return Effect.succeed({ sequence: 1 });
+          },
+        },
+        makeThread("owner"),
+        makeProject(),
+        { ...link, supervision: { ...link.supervision, state: "stopping" } },
+        NOW,
+        "environment-a",
+        (input) =>
+          Effect.succeed(
+            input.operation === "release"
+              ? { schema: "firstmate-pr-supervision/v1" as const, released: false }
+              : { schema: "firstmate-pr-supervision/v1" as const, lockSha: remaining },
+          ),
+      );
+      expect(commands).toHaveLength(remaining === null ? 1 : 0);
+      if (remaining === null) expect(commands[0]).toMatchObject({ action: "released" });
+    }
+  }).pipe(Effect.provide(NodeServices.layer)),
+);

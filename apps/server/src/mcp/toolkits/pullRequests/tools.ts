@@ -1,11 +1,16 @@
+import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
+import { ServerConfig } from "../../../config.ts";
+import { ServerEnvironmentIdentity } from "../../../environment/ServerEnvironment.ts";
 import {
   McpCapabilityUnavailableError,
   PositiveInt,
   PullRequestState,
   ThreadPullRequestLinkSource,
+  ThreadPullRequestSupervision,
   TrimmedNonEmptyString,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
+import * as FileSystem from "effect/FileSystem";
 import * as Tool from "effect/unstable/ai/Tool";
 import * as Toolkit from "effect/unstable/ai/Toolkit";
 
@@ -155,6 +160,7 @@ export const UnlinkPullRequestResult = Schema.Struct({
 export type UnlinkPullRequestResult = typeof UnlinkPullRequestResult.Type;
 
 export const ThreadPullRequestEntry = Schema.Struct({
+  supervision: Schema.optional(Schema.NullOr(ThreadPullRequestSupervision)),
   ...PullRequestIdentity,
   source: ThreadPullRequestLinkSource,
   state: Schema.NullOr(PullRequestState),
@@ -224,7 +230,37 @@ const ListThreadPullRequestsTool = Tool.make("list_thread_pull_requests", {
   .annotate(Tool.Idempotent, true)
   .annotate(Tool.OpenWorld, false);
 
+const SupervisePullRequestTool = Tool.make("supervise_pull_request", {
+  description:
+    "Enroll this thread as the persistent owner of a linked GitHub PR, or stop its supervision. Start only for implementation work authorized by the user. Requires the reviewed next/scripts/ci/pr-supervisor.cjs repository adapter and enabled shared Coder coordination. Polling uses no model; up to three automatic resumptions and two hours of observation. A stopped or unavailable runtime does not grant another writer permission. Never merge or deploy through supervision.",
+  parameters: Schema.Struct({
+    ...PullRequestTargetInput.fields,
+    action: Schema.Literals(["start", "stop"]),
+    baseRef: TrimmedNonEmptyString,
+    headRef: TrimmedNonEmptyString,
+  }),
+  success: Schema.Struct({
+    owner: Schema.String,
+    state: Schema.String,
+    reason: Schema.NullOr(Schema.String),
+  }),
+  failure: PullRequestToolError,
+  dependencies: [
+    ...dependencies,
+    ChildProcessSpawner.ChildProcessSpawner,
+    FileSystem.FileSystem,
+    ServerConfig,
+    ServerEnvironmentIdentity,
+  ],
+})
+  .annotate(Tool.Title, "Supervise pull request in this thread")
+  .annotate(Tool.Readonly, false)
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, true)
+  .annotate(Tool.OpenWorld, true);
+
 export const PullRequestsToolkit = Toolkit.make(
+  SupervisePullRequestTool,
   LinkPullRequestTool,
   UnlinkPullRequestTool,
   ListThreadPullRequestsTool,

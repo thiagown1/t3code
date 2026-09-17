@@ -3,6 +3,7 @@ import * as NodeCrypto from "node:crypto";
 import * as NodePath from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodePathService from "@effect/platform-node/NodePath";
 import { assert, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as FileSystem from "effect/FileSystem";
@@ -557,6 +558,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     Effect.gen(function* () {
       let resolvedCandidate: string | undefined;
       const command = yield* resolveStageInstallCommand("C:\\repo").pipe(
+        Effect.provide(NodePathService.layerWin32),
         Effect.provideService(HostProcessPlatform, "win32"),
         Effect.provideService(HostProcessEnvironment, {
           PATH: "./node_modules/.bin",

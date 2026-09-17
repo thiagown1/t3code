@@ -89,7 +89,7 @@ function applyError(
   return new EnvironmentBundleApplyError({ reason, message });
 }
 
-export function environmentBundleApplyPlansMatch(
+function environmentBundleApplyPlansMatch(
   expected: EnvironmentBundleApplyPlan,
   current: EnvironmentBundleApplyPlan,
 ): boolean {

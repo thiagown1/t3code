@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { useMemo, useState } from "react";
 
+import { Tooltip, TooltipTrigger, TooltipPopup } from "~/components/ui/tooltip";
 import { cn } from "~/lib/utils";
 import {
   buildFirstMatePanelModel,
@@ -96,6 +97,10 @@ const PULL_REQUEST_STATUS_LABELS: Record<
   closed: "Closed",
   "checks-unavailable": "Checks unavailable",
 };
+
+function pullRequestDescription(pullRequest: FirstMatePanelItem["pullRequests"][number]): string {
+  return `${pullRequest.repository}#${pullRequest.number}${pullRequest.headSha === null ? "" : ` at ${pullRequest.headSha}`}: ${PULL_REQUEST_STATUS_LABELS[pullRequest.status]}`;
+}
 
 export function FirstMateTopicsPanel({
   projects,
@@ -203,23 +208,27 @@ export function FirstMateTopicsPanel({
                         {item.summary}
                       </span>
                       {item.pullRequests.map((pullRequest) => (
-                        <span
-                          key={pullRequest.key}
-                          className="flex min-w-0 items-center gap-1 text-[10px] leading-4 text-sidebar-muted-foreground"
-                          title={`${pullRequest.repository}#${pullRequest.number}${pullRequest.headSha === null ? "" : ` at ${pullRequest.headSha}`}: ${PULL_REQUEST_STATUS_LABELS[pullRequest.status]}`}
-                        >
-                          <GitPullRequestIcon aria-hidden className="size-2.5 shrink-0" />
-                          <span className="shrink-0">#{pullRequest.number}</span>
-                          {pullRequest.headSha === null ? null : (
-                            <span className="shrink-0 font-mono">
-                              {pullRequest.headSha.slice(0, 7)}
+                        <Tooltip key={pullRequest.key}>
+                          <TooltipTrigger
+                            aria-label={pullRequestDescription(pullRequest)}
+                            render={
+                              <span className="flex min-w-0 items-center gap-1 text-[10px] leading-4 text-sidebar-muted-foreground" />
+                            }
+                          >
+                            <GitPullRequestIcon aria-hidden className="size-2.5 shrink-0" />
+                            <span className="shrink-0">#{pullRequest.number}</span>
+                            {pullRequest.headSha === null ? null : (
+                              <span className="shrink-0 font-mono">
+                                {pullRequest.headSha.slice(0, 7)}
+                              </span>
+                            )}
+                            <span aria-hidden>·</span>
+                            <span className="truncate">
+                              {PULL_REQUEST_STATUS_LABELS[pullRequest.status]}
                             </span>
-                          )}
-                          <span aria-hidden>·</span>
-                          <span className="truncate">
-                            {PULL_REQUEST_STATUS_LABELS[pullRequest.status]}
-                          </span>
-                        </span>
+                          </TooltipTrigger>
+                          <TooltipPopup>{pullRequestDescription(pullRequest)}</TooltipPopup>
+                        </Tooltip>
                       ))}
                       <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[10px] leading-4 text-sidebar-muted-foreground">
                         <span className="truncate">{FIRST_MATE_STATUS_LABELS[item.status]}</span>

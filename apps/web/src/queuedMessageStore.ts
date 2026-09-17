@@ -18,7 +18,7 @@ import type { TerminalContextDraft } from "./lib/terminalContext";
 import { randomUUID } from "./lib/utils";
 import { ReviewCommentContextSchema, type ReviewCommentContext } from "./reviewCommentContext";
 
-export const QUEUED_MESSAGE_STORAGE_KEY = "t3code:queued-composer-messages:v1";
+const QUEUED_MESSAGE_STORAGE_KEY = "t3code:queued-composer-messages:v1";
 const QUEUED_MESSAGE_STORAGE_VERSION = 1;
 const MAX_PERSISTED_QUEUE_THREADS = 100;
 const MAX_PERSISTED_MESSAGES_PER_THREAD = 50;

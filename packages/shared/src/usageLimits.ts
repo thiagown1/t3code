@@ -24,7 +24,7 @@ const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
 /** Two default five-minute provider probes; older compact readings must not look live. */
-export const COMPACT_USAGE_LIMITS_STALE_AFTER_MS = 10 * MINUTE;
+const COMPACT_USAGE_LIMITS_STALE_AFTER_MS = 10 * MINUTE;
 
 /**
  * Providers that belong on the Limits view: enabled, installed, and one whose
