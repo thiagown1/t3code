@@ -38,6 +38,7 @@ import {
   branchMismatchKey,
   buildExpiredTerminalContextToastCopy,
   buildLoadingThreadFromShell,
+  buildProviderMigrationPrompt,
   buildRunningThreadTurnInterruptInput,
   buildThreadTurnInterruptInput,
   createLocalDispatchSnapshot,
@@ -2597,5 +2598,75 @@ describe("worktree setup visibility", () => {
       ...settledDone,
       sequence: 9,
     });
+  });
+});
+
+describe("buildProviderMigrationPrompt", () => {
+  const message = (
+    role: "user" | "assistant",
+    text: string,
+    streaming = false,
+  ): { role: "user" | "assistant"; text: string; streaming: boolean } => ({
+    role,
+    text,
+    streaming,
+  });
+
+  it("names both providers and reproduces the readable transcript", () => {
+    const prompt = buildProviderMigrationPrompt({
+      messages: [message("user", "add a retry to the uploader"), message("assistant", "done")],
+      sourceLabel: "Codex",
+      targetLabel: "Claude",
+    });
+
+    expect(prompt).toContain("moved from Codex to Claude");
+    expect(prompt).toContain("add a retry to the uploader");
+    expect(prompt).toContain("done");
+    expect(prompt).not.toContain("omitted");
+  });
+
+  it("drops streaming and empty messages so a half-written turn never travels", () => {
+    const prompt = buildProviderMigrationPrompt({
+      messages: [
+        message("user", "keep me"),
+        message("assistant", "half written", true),
+        message("assistant", "   "),
+      ],
+      sourceLabel: "Codex",
+      targetLabel: "Claude",
+    });
+
+    expect(prompt).toContain("keep me");
+    expect(prompt).not.toContain("half written");
+  });
+
+  it("keeps the opening ask and the tail when the budget forces truncation", () => {
+    const prompt = buildProviderMigrationPrompt({
+      messages: [
+        message("user", "ORIGINAL ASK"),
+        message("assistant", "x".repeat(400)),
+        message("assistant", "y".repeat(400)),
+        message("user", "LATEST ASK"),
+      ],
+      sourceLabel: "Codex",
+      targetLabel: "Claude",
+      maxChars: 500,
+    });
+
+    expect(prompt).toContain("ORIGINAL ASK");
+    expect(prompt).toContain("LATEST ASK");
+    expect(prompt).toContain("1 earlier message(s) omitted");
+    expect(prompt).not.toContain("x".repeat(400));
+  });
+
+  it("truncates a single oversized message instead of dropping the thread", () => {
+    const prompt = buildProviderMigrationPrompt({
+      messages: [message("user", "z".repeat(9000))],
+      sourceLabel: "Codex",
+      targetLabel: "Claude",
+    });
+
+    expect(prompt).toContain("message truncated");
+    expect(prompt.length).toBeLessThan(9000);
   });
 });

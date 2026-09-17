@@ -141,6 +141,24 @@ export function adjacentModelPickerProvider(input: {
   ]!;
 }
 
+/**
+ * Which instances a started thread may still choose. Leaving the locked driver
+ * is allowed only when the caller opted into migration and will confirm it.
+ * The continuation-group rule inside the locked driver is never relaxed: it is
+ * what keeps Antigravity history from crossing Google profiles.
+ */
+export function matchesModelPickerLock(input: {
+  readonly entry: Pick<ProviderInstanceEntry, "driverKind" | "continuationGroupKey">;
+  readonly lockedProvider: ProviderDriverKind | null;
+  readonly lockedContinuationGroupKey: string | null;
+  readonly allowDriverMigration: boolean;
+}): boolean {
+  if (input.lockedProvider === null) return true;
+  if (input.entry.driverKind !== input.lockedProvider) return input.allowDriverMigration;
+  if (!input.lockedContinuationGroupKey) return true;
+  return input.entry.continuationGroupKey === input.lockedContinuationGroupKey;
+}
+
 const EMPTY_MODEL_JUMP_LABELS = new Map<string, string>();
 
 function ModelListSeparator() {
@@ -160,6 +178,15 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
    */
   lockedProvider: ProviderDriverKind | null;
   lockedContinuationGroupKey?: string | null;
+  /**
+   * A started thread stays locked to the driver that served it, but the user
+   * can still leave that driver behind (a spent quota is the usual reason).
+   * When set, other drivers stay selectable as migration targets; the caller
+   * is responsible for confirming the switch. The continuation-group rule
+   * inside the locked driver is untouched, so Antigravity history cannot move
+   * between Google profiles by mistake.
+   */
+  allowDriverMigration?: boolean;
   /**
    * All configured provider instances in display order. Used to render
    * the sidebar (one button per instance) and to resolve display names
@@ -299,13 +326,14 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
     [instanceEntries],
   );
   const matchesLockedProvider = useCallback(
-    (entry: Pick<ProviderInstanceEntry, "driverKind" | "continuationGroupKey">): boolean => {
-      if (props.lockedProvider === null) return true;
-      if (entry.driverKind !== props.lockedProvider) return false;
-      if (!props.lockedContinuationGroupKey) return true;
-      return entry.continuationGroupKey === props.lockedContinuationGroupKey;
-    },
-    [props.lockedContinuationGroupKey, props.lockedProvider],
+    (entry: Pick<ProviderInstanceEntry, "driverKind" | "continuationGroupKey">): boolean =>
+      matchesModelPickerLock({
+        entry,
+        lockedProvider: props.lockedProvider,
+        lockedContinuationGroupKey: props.lockedContinuationGroupKey ?? null,
+        allowDriverMigration: props.allowDriverMigration === true,
+      }),
+    [props.allowDriverMigration, props.lockedContinuationGroupKey, props.lockedProvider],
   );
 
   const selectableUnavailableInstanceIds = useMemo(() => {

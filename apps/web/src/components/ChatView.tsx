@@ -451,6 +451,7 @@ import {
   type LocalDispatchSnapshot,
   PullRequestDialogState,
   cloneComposerImageForRetry,
+  buildProviderMigrationPrompt,
   deriveLockedProvider,
   readFileAsDataUrl,
   resolveFileAttachmentUrl,
@@ -9276,6 +9277,82 @@ export default function ChatView(props: ChatViewProps) {
     [activeThread, providerStatuses],
   );
 
+  const [providerMigrationRequest, setProviderMigrationRequest] = useState<{
+    instanceId: ProviderInstanceId;
+    model: string;
+    sourceLabel: string;
+    targetLabel: string;
+  } | null>(null);
+
+  const resolveProviderLabel = useCallback(
+    (instanceId: ProviderInstanceId | null | undefined): string => {
+      if (!instanceId) return "the current provider";
+      const snapshot = providerStatuses.find((entry) => entry.instanceId === instanceId);
+      return snapshot?.displayName ?? snapshot?.driver ?? String(instanceId);
+    },
+    [providerStatuses],
+  );
+
+  const confirmProviderMigration = useCallback(
+    (options: { carryTranscript: boolean }) => {
+      const request = providerMigrationRequest;
+      setProviderMigrationRequest(null);
+      if (!request || !activeThread) return;
+      const resolvedModel = resolveAppModelSelectionForInstance(
+        request.instanceId,
+        settings,
+        providerStatuses,
+        request.model,
+      );
+      if (!resolvedModel) {
+        scheduleComposerFocus();
+        return;
+      }
+      const nextModelSelection: ModelSelection = {
+        instanceId: request.instanceId,
+        model: resolvedModel,
+      };
+      if (options.carryTranscript) {
+        // The target driver starts cold, so the transcript is seeded as an
+        // ordinary editable draft: the user can read and trim exactly what
+        // leaves the old session before sending it.
+        const transcript = buildProviderMigrationPrompt({
+          messages: activeThread.messages,
+          sourceLabel: request.sourceLabel,
+          targetLabel: request.targetLabel,
+        });
+        const existingPrompt = (
+          useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)?.prompt ?? ""
+        ).trim();
+        setComposerDraftPrompt(
+          composerDraftTarget,
+          existingPrompt.length > 0
+            ? `${transcript}
+
+${existingPrompt}`
+            : transcript,
+        );
+      }
+      setComposerDraftModelSelection(
+        scopeThreadRef(activeThread.environmentId, activeThread.id),
+        nextModelSelection,
+        { explicit: true },
+      );
+      setStickyComposerModelSelection(nextModelSelection);
+      scheduleComposerFocus();
+    },
+    [
+      activeThread,
+      composerDraftTarget,
+      providerMigrationRequest,
+      providerStatuses,
+      setComposerDraftModelSelection,
+      setComposerDraftPrompt,
+      setStickyComposerModelSelection,
+      settings,
+    ],
+  );
+
   const onProviderModelSelect = useCallback(
     (instanceId: ProviderInstanceId, model: string) => {
       if (!activeThread) return;
@@ -9289,7 +9366,14 @@ export default function ChatView(props: ChatViewProps) {
         resolvedDriverKind !== null &&
         resolvedDriverKind !== lockedProvider
       ) {
-        scheduleComposerFocus();
+        // Leaving the driver ends the provider session that served this thread,
+        // so it is never a side effect of picking a model. Confirm first.
+        setProviderMigrationRequest({
+          instanceId,
+          model,
+          sourceLabel: resolveProviderLabel(activeThread.session?.providerInstanceId ?? null),
+          targetLabel: resolveProviderLabel(instanceId),
+        });
         return;
       }
       if (lockedProvider !== null && activeThread.session?.providerInstanceId) {
@@ -10148,6 +10232,7 @@ export default function ChatView(props: ChatViewProps) {
                             runtimeMode={runtimeMode}
                             interactionMode={interactionMode}
                             lockedProvider={lockedProvider}
+                            allowDriverMigration={lockedProvider !== null}
                             providerStatuses={providerStatuses as ServerProvider[]}
                             providerCatalogKnown={serverConfig !== null}
                             activeProjectDefaultModelSelection={activeProjectDefaultModelSelection}
@@ -10284,6 +10369,43 @@ export default function ChatView(props: ChatViewProps) {
                 composerOverlayElement={isDraftHeroState ? null : composerOverlayElement}
               />
             ) : null}
+
+            <AlertDialog
+              open={providerMigrationRequest !== null}
+              onOpenChange={(open) => {
+                if (!open) setProviderMigrationRequest(null);
+              }}
+            >
+              <AlertDialogPopup>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>
+                    Move this thread to{" "}
+                    {providerMigrationRequest?.targetLabel ?? "another provider"}?
+                  </AlertDialogTitle>
+                  <AlertDialogDescription>
+                    The {providerMigrationRequest?.sourceLabel ?? "current provider"} session ends
+                    here and {providerMigrationRequest?.targetLabel ?? "the new provider"} starts
+                    with no memory of it. Carry the transcript over to drop it in the composer,
+                    where you can read and trim it before sending.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogClose render={<Button variant="outline" />}>Cancel</AlertDialogClose>
+                  <Button
+                    variant="outline"
+                    onClick={() => confirmProviderMigration({ carryTranscript: false })}
+                  >
+                    Move without transcript
+                  </Button>
+                  <Button
+                    variant="default"
+                    onClick={() => confirmProviderMigration({ carryTranscript: true })}
+                  >
+                    Carry the transcript
+                  </Button>
+                </AlertDialogFooter>
+              </AlertDialogPopup>
+            </AlertDialog>
 
             <AlertDialog open={branchRestoreConfirmOpen} onOpenChange={setBranchRestoreConfirmOpen}>
               <AlertDialogPopup>
