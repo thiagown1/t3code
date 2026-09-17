@@ -115,7 +115,10 @@ const snapshot: ThreadPullRequestSnapshot = {
 };
 
 const supervisorOwner = "firstmate:00000000-0000-4000-8000-000000000001";
-const superviseCommand = (action: "start" | "wake" | "stop" | "enrolled", overrides = {}) => ({
+const superviseCommand = (
+  action: "start" | "wake" | "stop" | "enrolled" | "revised",
+  overrides = {},
+) => ({
   type: "thread.pull-request.supervise" as const,
   commandId: CommandId.make(`supervise-${action}`),
   threadId: THREAD_ID,
@@ -134,6 +137,7 @@ const supervisedLink = () =>
     supervision: {
       owner: supervisorOwner,
       environmentKey: "environment-a",
+      headSha: "b".repeat(40),
       state: "watching",
       baseRef: "main",
       headRef: "feature",
@@ -211,27 +215,67 @@ it.layer(NodeServices.layer)("PR owner supervision", (it) => {
       expect(missing._tag).toBe("Failure");
       const events = yield* decideOrchestrationCommand({
         readModel: model,
-        command: superviseCommand("enrolled", { lockSha: "a".repeat(40) }),
+        command: superviseCommand("enrolled", {
+          lockSha: "a".repeat(40),
+          headSha: "b".repeat(40),
+        }),
       });
       const event = expectSingleEvent(events, "thread.pull-request-linked");
       const replayed = yield* projectEvent(model, { ...event, sequence: 1 });
       expect(replayed.threads[0]?.pullRequests[0]?.supervision).toMatchObject({
         state: "watching",
         lockSha: "a".repeat(40),
+        headSha: "b".repeat(40),
       });
       expect(
         yield* decideOrchestrationCommand({
           readModel: replayed,
-          command: superviseCommand("enrolled", { lockSha: "a".repeat(40) }),
+          command: superviseCommand("enrolled", {
+            lockSha: "a".repeat(40),
+            headSha: "b".repeat(40),
+          }),
         }),
       ).toEqual([]);
       expect(
         (yield* decideOrchestrationCommand({
           readModel: replayed,
-          command: superviseCommand("enrolled", { lockSha: "b".repeat(40) }),
+          command: superviseCommand("enrolled", {
+            lockSha: "b".repeat(40),
+            headSha: "b".repeat(40),
+          }),
         }).pipe(Effect.result))._tag,
       ).toBe("Failure");
     }),
+  );
+
+  it.effect(
+    "an authenticated revision change advances the enrolled head without a model turn",
+    () =>
+      Effect.gen(function* () {
+        const link = supervisedLink();
+        const model = makeReadModel([
+          { ...link, supervision: { ...link.supervision!, lockSha: "a".repeat(40) } },
+        ]);
+        const events = yield* decideOrchestrationCommand({
+          readModel: model,
+          command: superviseCommand("revised", {
+            lockSha: "a".repeat(40),
+            headSha: "c".repeat(40),
+          }),
+        });
+        expect(
+          expectSingleEvent(events, "thread.pull-request-linked").payload.link.supervision,
+        ).toMatchObject({ headSha: "c".repeat(40), resumes: 0 });
+        expect(
+          (yield* decideOrchestrationCommand({
+            readModel: model,
+            command: superviseCommand("revised", {
+              lockSha: "d".repeat(40),
+              headSha: "c".repeat(40),
+            }),
+          }).pipe(Effect.result))._tag,
+        ).toBe("Failure");
+      }),
   );
 
   it.effect("rejects a resume from a copied environment or pending enrollment", () =>

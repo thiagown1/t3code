@@ -40,6 +40,7 @@ it.layer(NodeSqliteClient.layerMemory())("PR supervision migration", (it) => {
           owner: "firstmate:00000000-0000-4000-8000-000000000001",
           environmentKey: "environment-a",
           state: "watching" as const,
+          headSha: "a".repeat(40),
           baseRef: "main",
           headRef: "feature",
           resumes: 2,

@@ -24,6 +24,7 @@ export interface PrSupervisionAdapterInput {
   readonly cwd: string;
   readonly operation: "enroll" | "observe" | "release" | "inspect";
   readonly lockSha?: string;
+  readonly headSha?: string;
   readonly repository: string;
   readonly pullRequest: number;
   readonly owner: string;

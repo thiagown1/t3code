@@ -47,18 +47,20 @@ export const supervisePrLink = Effect.fn("supervisePrLink")(function* (
     pullRequest: link.number,
     owner: state.owner,
     ...(state.lockSha ? { lockSha: state.lockSha } : {}),
+    ...(state.headSha ? { headSha: state.headSha } : {}),
     baseRef: state.baseRef,
     headRef: state.headRef,
   };
   const dispatch = (
-    action: "wake" | "blocked" | "released" | "enrolled",
+    action: "wake" | "blocked" | "released" | "enrolled" | "revised",
     reason: string,
     resumeKey?: string,
     message?: string,
     lockSha?: string,
+    headSha?: string,
   ) => {
     const key = NodeCrypto.createHash("sha256")
-      .update(JSON.stringify([state.owner, action, resumeKey ?? reason]))
+      .update(JSON.stringify([state.owner, action, headSha, resumeKey ?? reason]))
       .digest("hex");
     return engine.dispatch({
       type: "thread.pull-request.supervise",
@@ -74,6 +76,7 @@ export const supervisePrLink = Effect.fn("supervisePrLink")(function* (
       action,
       reason,
       ...(lockSha ? { lockSha } : {}),
+      ...(headSha ? { headSha } : {}),
       ...(resumeKey ? { resumeKey } : {}),
       ...(message ? { message } : {}),
     });
@@ -135,7 +138,7 @@ export const supervisePrLink = Effect.fn("supervisePrLink")(function* (
   if (state.state === "pending") {
     const enrolled = yield* runAdapter("enroll");
     if (!enrolled) return;
-    if (!enrolled.enrolled || !enrolled.lockSha) {
+    if (!enrolled.enrolled || !enrolled.lockSha || !enrolled.headSha) {
       yield* dispatch("blocked", enrolled.reason ?? "Writer coordination unavailable.");
       return;
     }
@@ -145,17 +148,33 @@ export const supervisePrLink = Effect.fn("supervisePrLink")(function* (
       undefined,
       undefined,
       enrolled.lockSha,
+      enrolled.headSha,
     );
     return;
   }
-  if (!state.lockSha) {
-    yield* dispatch("blocked", "Writer acquisition proof missing; refusing to resume.");
+  if (!state.lockSha || !state.headSha) {
+    yield* dispatch("blocked", "Writer or enrolled revision proof missing; refusing to resume.");
     return;
   }
   const receipt = yield* runAdapter("observe");
   if (!receipt) return;
   if (receipt.state === "unavailable") {
     yield* dispatch("blocked", receipt.reason ?? "PR evidence unavailable.");
+    return;
+  }
+  if (receipt.state === "revision_changed") {
+    if (!receipt.writerAuthorized || !receipt.headSha || receipt.headSha === state.headSha) {
+      yield* dispatch("blocked", "PR revision change could not be authenticated.");
+      return;
+    }
+    yield* dispatch(
+      "revised",
+      "PR head advanced under the same exclusive writer; waiting for exact-head checks.",
+      undefined,
+      undefined,
+      state.lockSha,
+      receipt.headSha,
+    );
     return;
   }
   if (

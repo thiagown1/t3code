@@ -765,6 +765,7 @@ const supervisedTestLink = () => ({
     owner: "firstmate:00000000-0000-4000-8000-000000000001",
     environmentKey: "environment-a",
     lockSha: "a".repeat(40),
+    headSha: "b".repeat(40),
     state: "watching" as const,
     baseRef: "main",
     headRef: "feature",
@@ -815,6 +816,7 @@ it.effect("pending enrollment is recovered before any automatic model turn", () 
           schema: "firstmate-pr-supervision/v1" as const,
           enrolled: true,
           lockSha: "a".repeat(40),
+          headSha: "b".repeat(40),
         });
       },
     );
@@ -848,6 +850,7 @@ it.effect("supervision resumes the linked original thread only after writer auth
                 schema: "firstmate-pr-supervision/v1" as const,
                 enrolled: true,
                 lockSha: "a".repeat(40),
+                headSha: "b".repeat(40),
               }
             : {
                 schema: "firstmate-pr-supervision/v1" as const,
@@ -867,6 +870,44 @@ it.effect("supervision resumes the linked original thread only after writer auth
       threadId: "original-owner",
     });
   }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect(
+  "a same-branch push advances the enrolled revision before any gate can wake the model",
+  () =>
+    Effect.gen(function* () {
+      const commands: Array<OrchestrationCommand> = [];
+      const observedInputs: Array<{ headSha?: string }> = [];
+      yield* supervisePrLink(
+        {
+          dispatch: (command) => {
+            commands.push(command);
+            return Effect.succeed({ sequence: 1 });
+          },
+        },
+        makeThread("owner"),
+        makeProject(),
+        supervisedTestLink(),
+        NOW,
+        "environment-a",
+        (input) => {
+          observedInputs.push(input);
+          return Effect.succeed({
+            schema: "firstmate-pr-supervision/v1" as const,
+            state: "revision_changed",
+            writerAuthorized: true,
+            headSha: "c".repeat(40),
+          });
+        },
+      );
+      expect(observedInputs).toEqual([expect.objectContaining({ headSha: "b".repeat(40) })]);
+      expect(commands).toHaveLength(1);
+      expect(commands[0]).toMatchObject({
+        action: "revised",
+        lockSha: "a".repeat(40),
+        headSha: "c".repeat(40),
+      });
+    }).pipe(Effect.provide(NodeServices.layer)),
 );
 
 it.effect("supervision never calls an adapter while a user approval is pending", () =>
@@ -919,6 +960,7 @@ it.effect("reconciled gate IDs with identical evidence cannot spend another resu
                   schema: "firstmate-pr-supervision/v1" as const,
                   enrolled: true,
                   lockSha: "a".repeat(40),
+                  headSha: "b".repeat(40),
                 }
               : {
                   schema: "firstmate-pr-supervision/v1" as const,
@@ -963,6 +1005,7 @@ it.effect("pending evidence and missing writer authority never wake a model", ()
                   schema: "firstmate-pr-supervision/v1" as const,
                   enrolled: true,
                   lockSha: "a".repeat(40),
+                  headSha: "b".repeat(40),
                 }
               : { schema: "firstmate-pr-supervision/v1" as const, ...receipt },
           ),

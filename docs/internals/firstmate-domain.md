@@ -113,7 +113,7 @@ writer. Enrollment is off until the repository operator enables
 `FIRSTMATE_PR_SUPERVISION_ENABLED`; installing T3 alone does not activate it.
 
 No clock-based lock stealing is allowed. Restarted T3 reuses the persisted
-owner and acquisition SHA, bound to its environment identity and database path. Every new enrollment creates a fresh owner UUID; it is not a reusable thread ID. Inspection without a saved acquisition SHA only recovers a lost response for that one registration. A copied database
+owner, acquisition SHA, and enrolled PR head, bound to its environment identity and database path. A same-branch push is first recorded as a revision change under that writer; only a later observation may evaluate gates for the new head. Every new enrollment creates a fresh owner UUID; it is not a reusable thread ID. Inspection without a saved acquisition SHA only recovers a lost response for that one registration. A copied database
 cannot acquire, resume or release that owner from a different home. If T3 is unavailable, Coder cannot assume its writer died. Stop/archive,
 closed PRs or exhausted supervision release ownership only after the thread is
 idle. Deletion and unlinking are refused until release has been persisted.

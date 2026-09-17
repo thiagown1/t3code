@@ -1141,17 +1141,38 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           if (
             previous.state === "watching" &&
             previous.lockSha === command.lockSha &&
-            command.lockSha
+            previous.headSha === command.headSha &&
+            command.lockSha &&
+            command.headSha
           )
             return [];
           if (previous.state !== "pending")
             return yield* reject("Enrollment is no longer pending.");
           if (!command.lockSha || !/^[a-f0-9]{40}$/.test(command.lockSha))
             return yield* reject("Enrollment requires the exact writer acquisition SHA.");
+          if (!command.headSha || !/^[a-f0-9]{40}$/.test(command.headSha))
+            return yield* reject("Enrollment requires the exact PR head SHA.");
           supervision = {
             ...previous,
             lockSha: command.lockSha,
+            headSha: command.headSha,
             state: "watching",
+            lastReason: null,
+          };
+        } else if (command.action === "revised") {
+          if (
+            previous.state !== "watching" ||
+            !previous.lockSha ||
+            previous.lockSha !== command.lockSha ||
+            !command.headSha ||
+            !/^[a-f0-9]{40}$/.test(command.headSha) ||
+            previous.headSha === command.headSha
+          )
+            return yield* reject("Revision change does not match the current writer.");
+          supervision = {
+            ...previous,
+            headSha: command.headSha,
+            lastResumeKey: null,
             lastReason: null,
           };
         } else if (command.action === "wake") {
