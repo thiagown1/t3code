@@ -3,8 +3,10 @@ import {
   MAX_SCRIPT_ID_LENGTH,
   SCRIPT_RUN_COMMAND_PATTERN,
   MessageId,
+  THREAD_QUEUED_MESSAGE_ACTIVITY_KINDS,
   ThreadLinkedPullRequest,
   UserInputRequestedPayload,
+  foldThreadQueuedMessages,
   isImportedAgentSessionMessageId,
   type OrchestrationCommand,
   type OrchestrationEvent,
@@ -1755,6 +1757,105 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         ...(userMessageEvent ? [userMessageEvent] : []),
         turnStartRequestedEvent,
       ];
+    }
+
+    case "thread.queued-message.enqueue": {
+      if (isImportedAgentSessionMessageId(command.message.messageId)) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Message id '${command.message.messageId}' uses the reserved imported-session namespace.`,
+        });
+      }
+      const thread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      // Best effort: the bootstrap read model carries no activities, so a
+      // duplicate can only be caught while the entry is still in view. The
+      // fold below and the queue reactor both tolerate a replayed enqueue.
+      if (
+        foldThreadQueuedMessages(thread.activities).some(
+          (entry) => entry.queuedMessageId === command.queuedMessageId,
+        )
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Queued message '${command.queuedMessageId}' is already queued on thread '${command.threadId}'.`,
+        });
+      }
+      const base = yield* withEventBase({
+        aggregateKind: "thread",
+        aggregateId: command.threadId,
+        occurredAt: command.createdAt,
+        commandId: command.commandId,
+      });
+      return {
+        ...base,
+        type: "thread.activity-appended",
+        payload: {
+          threadId: command.threadId,
+          activity: {
+            id: base.eventId,
+            tone: "info",
+            kind: THREAD_QUEUED_MESSAGE_ACTIVITY_KINDS.enqueued,
+            summary: "Message queued",
+            payload: {
+              threadId: command.threadId,
+              queuedMessageId: command.queuedMessageId,
+              message: command.message,
+              dispatchTiming: command.dispatchTiming,
+              queuedAfterActivityId: command.queuedAfterActivityId,
+              ...(command.modelSelection !== undefined
+                ? { modelSelection: command.modelSelection }
+                : {}),
+              ...(command.titleSeed !== undefined ? { titleSeed: command.titleSeed } : {}),
+              createdAt: command.createdAt,
+            },
+            turnId: null,
+            createdAt: command.createdAt,
+          },
+        },
+      };
+    }
+
+    case "thread.queued-message.update": {
+      yield* requireThread({ readModel, command, threadId: command.threadId });
+      const base = yield* withEventBase({
+        aggregateKind: "thread",
+        aggregateId: command.threadId,
+        occurredAt: command.createdAt,
+        commandId: command.commandId,
+      });
+      // No existence check: an entry the caller can see may already have been
+      // dispatched by the reactor, and the fold ignores a mutation whose entry
+      // is gone. Racing a cancel with a dispatch must not fail the command.
+      const activity =
+        command.action === "cancel"
+          ? {
+              kind: THREAD_QUEUED_MESSAGE_ACTIVITY_KINDS.closed,
+              summary: "Queued message canceled",
+              payload: { queuedMessageId: command.queuedMessageId, reason: "canceled" as const },
+            }
+          : {
+              kind: THREAD_QUEUED_MESSAGE_ACTIVITY_KINDS.released,
+              summary: "Queued message released",
+              payload: { queuedMessageId: command.queuedMessageId },
+            };
+      return {
+        ...base,
+        type: "thread.activity-appended",
+        payload: {
+          threadId: command.threadId,
+          activity: {
+            id: base.eventId,
+            tone: "info",
+            ...activity,
+            turnId: null,
+            createdAt: command.createdAt,
+          },
+        },
+      };
     }
 
     case "thread.message.user.append": {

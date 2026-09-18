@@ -1,9 +1,17 @@
-import { PreviewAnnotationPayloadSchema, type PreviewAnnotationPayload } from "@t3tools/contracts";
+import {
+  PreviewAnnotationPayloadSchema,
+  THREAD_QUEUED_MESSAGE_ACTIVITY_KINDS,
+  ThreadQueuedMessageClosedActivityPayload,
+  foldThreadQueuedMessages,
+  type OrchestrationThreadActivity,
+  type PreviewAnnotationPayload,
+  type ThreadQueuedMessageDispatchTiming,
+} from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import { create } from "zustand";
 import { persist, type PersistStorage, type StorageValue } from "zustand/middleware";
 
-import type { ComposerQueueTiming, ComposerSubmissionIntent } from "./composer-logic";
+import type { ComposerQueueTiming } from "./composer-logic";
 import {
   hydrateComposerFileAttachment,
   hydrateImagesFromPersisted,
@@ -15,13 +23,17 @@ import {
 } from "./composerDraftStore";
 import { createMemoryStorage, type StateStorage } from "./lib/storage";
 import type { TerminalContextDraft } from "./lib/terminalContext";
-import { randomUUID } from "./lib/utils";
 import { ReviewCommentContextSchema, type ReviewCommentContext } from "./reviewCommentContext";
 
-const QUEUED_MESSAGE_STORAGE_KEY = "t3code:queued-composer-messages:v1";
+const QUEUED_MESSAGE_STORAGE_KEY = "t3code:queued-composer-restore:v1";
 const QUEUED_MESSAGE_STORAGE_VERSION = 1;
-const MAX_PERSISTED_QUEUE_THREADS = 100;
-const MAX_PERSISTED_MESSAGES_PER_THREAD = 50;
+/**
+ * Where the queue itself used to live. The server owns the queue now, so this
+ * key is only read once, to hand any message a previous build was still holding
+ * back to the composer. See `takeLegacyQueuedMessages`.
+ */
+const LEGACY_QUEUE_STORAGE_KEY = "t3code:queued-composer-messages:v1";
+const MAX_RESTORE_SNAPSHOTS = 200;
 
 /** An explicit wait-until-finished send overrides the client's default steer preference. */
 export function shouldQueueRunningFollowUp(
@@ -35,14 +47,34 @@ const isPersistedImage = Schema.is(PersistedComposerImageAttachment);
 const isPersistedFile = Schema.is(PersistedComposerDraftFileAttachment);
 const isPreviewAnnotation = Schema.is(PreviewAnnotationPayloadSchema);
 const isReviewComment = Schema.is(ReviewCommentContextSchema);
+const decodeClosedActivity = Schema.decodeUnknownOption(ThreadQueuedMessageClosedActivityPayload);
 
 /**
- * A composer submission held back while the thread's turn is running. It
- * carries the full draft snapshot so the send path can dispatch it later with
- * the same text, attachments, and contexts the user pressed Enter on.
+ * One row of the thread's server-owned queue, flattened for the timeline.
+ *
+ * The wire model is the enqueue activity the server already streams, so nothing
+ * extra crosses the socket for this. Only counts are kept: the row shows "2
+ * attachments", never the attachments themselves.
  */
 export interface QueuedComposerMessage {
   id: string;
+  prompt: string;
+  attachmentCount: number;
+  contextItemCount: number;
+  dispatchTiming: ThreadQueuedMessageDispatchTiming;
+  /** Parked after a failed dispatch: it waits for Send now instead of leaving on its own. */
+  holdUntilUserAction: boolean;
+  createdAt: string;
+}
+
+/**
+ * What the composer had when the message was queued, kept locally so Cancel and
+ * Stop can hand the whole draft back — attachments included. The server's copy
+ * of the message is authoritative for sending; this is only for restoring, and
+ * a device that never saw the queueing simply restores the text.
+ */
+export interface QueuedComposerRestoreSnapshot {
+  /** The prompt as typed, before provider formatting. */
   prompt: string;
   images: ComposerImageAttachment[];
   files: ComposerFileAttachment[];
@@ -50,67 +82,31 @@ export interface QueuedComposerMessage {
   terminalContexts: TerminalContextDraft[];
   previewAnnotations: PreviewAnnotationPayload[];
   reviewComments: ReviewCommentContext[];
-  submissionIntent: ComposerSubmissionIntent;
-  dispatchTiming: ComposerQueueTiming;
-  /**
-   * The newest completed tool activity at queue time. A different id later
-   * means a tool call finished after the user queued, which is the boundary
-   * the message goes out on.
-   */
-  queuedAfterToolActivityId: string | null;
-  /**
-   * Set when the message was created by Stop or a failed restore, not by the
-   * user pressing send. It waits for Send now instead of leaving on its own.
-   */
-  holdUntilUserAction?: boolean;
-  createdAt: string;
 }
 
-interface QueuedMessageStoreState {
-  queuesByThreadKey: Record<string, QueuedComposerMessage[]>;
-  /**
-   * Bumped by `drain`. A send that took a message before a drain and finishes
-   * its upload after it compares this to the value it captured and gives up,
-   * so Stop cannot be followed by a queued message starting a new turn.
-   */
-  drainGeneration: number;
-  enqueue: (threadKey: string, message: Omit<QueuedComposerMessage, "id">) => QueuedComposerMessage;
-  /**
-   * Removes one message and returns it, or null when another caller already
-   * took it. The remaining messages are re-anchored to `toolActivityId` so
-   * only one queued message leaves per tool boundary.
-   */
-  take: (
-    threadKey: string,
-    id: string,
-    toolActivityId: string | null,
-  ) => QueuedComposerMessage | null;
-  /** Removes one message without touching the others' anchors. Null when already gone. */
-  remove: (threadKey: string, id: string) => QueuedComposerMessage | null;
-  /**
-   * Puts a message back at the head, held for user action. Used when its
-   * send failed: the queue keeps its order and nothing behind it overtakes.
-   */
-  holdAtFront: (threadKey: string, message: QueuedComposerMessage) => void;
-  /** Removes and returns every queued message for the thread, oldest first. */
-  drain: (threadKey: string) => QueuedComposerMessage[];
+interface QueuedMessageRestoreStoreState {
+  snapshotsByQueuedMessageId: Record<string, QueuedComposerRestoreSnapshot>;
+  remember: (queuedMessageId: string, snapshot: QueuedComposerRestoreSnapshot) => void;
+  /** Reads and forgets one snapshot. Null when this client never held it. */
+  take: (queuedMessageId: string) => QueuedComposerRestoreSnapshot | null;
+  forget: (queuedMessageIds: ReadonlyArray<string>) => void;
 }
 
-interface PersistedQueuedComposerMessage extends Omit<
-  QueuedComposerMessage,
+interface PersistedRestoreSnapshot extends Omit<
+  QueuedComposerRestoreSnapshot,
   "files" | "images" | "persistedImages"
 > {
   images: PersistedComposerImageAttachment[];
   files: PersistedComposerDraftFileAttachment[];
 }
 
-interface PersistedQueuedMessageStoreState {
-  queuesByThreadKey: Record<string, PersistedQueuedComposerMessage[]>;
+interface PersistedRestoreStoreState {
+  snapshotsByQueuedMessageId: Record<string, PersistedRestoreSnapshot>;
 }
 
-type QueuedMessagePersistState =
-  | { capturedState: QueuedMessageStoreState }
-  | PersistedQueuedMessageStoreState;
+type RestorePersistState =
+  | { capturedState: QueuedMessageRestoreStoreState }
+  | PersistedRestoreStoreState;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -130,21 +126,9 @@ function isTerminalContext(value: unknown): value is TerminalContextDraft {
   );
 }
 
-function normalizePersistedMessage(value: unknown): PersistedQueuedComposerMessage | null {
-  if (!isRecord(value)) return null;
-  if (
-    typeof value.id !== "string" ||
-    typeof value.prompt !== "string" ||
-    (value.submissionIntent !== "foreground" && value.submissionIntent !== "background") ||
-    (value.dispatchTiming !== "next-boundary" && value.dispatchTiming !== "after-current-turn") ||
-    (value.queuedAfterToolActivityId !== null &&
-      typeof value.queuedAfterToolActivityId !== "string") ||
-    typeof value.createdAt !== "string"
-  ) {
-    return null;
-  }
+function normalizePersistedSnapshot(value: unknown): PersistedRestoreSnapshot | null {
+  if (!isRecord(value) || typeof value.prompt !== "string") return null;
   return {
-    id: value.id,
     prompt: value.prompt,
     images: Array.isArray(value.images) ? value.images.filter(isPersistedImage) : [],
     files: Array.isArray(value.files) ? value.files.filter(isPersistedFile) : [],
@@ -157,67 +141,55 @@ function normalizePersistedMessage(value: unknown): PersistedQueuedComposerMessa
     reviewComments: Array.isArray(value.reviewComments)
       ? value.reviewComments.filter(isReviewComment)
       : [],
-    submissionIntent: value.submissionIntent,
-    dispatchTiming: value.dispatchTiming,
-    queuedAfterToolActivityId: value.queuedAfterToolActivityId,
-    ...(typeof value.holdUntilUserAction === "boolean"
-      ? { holdUntilUserAction: value.holdUntilUserAction }
-      : {}),
-    createdAt: value.createdAt,
   };
 }
 
-export function normalizePersistedQueuedMessageStoreState(
-  value: unknown,
-): PersistedQueuedMessageStoreState {
-  if (!isRecord(value) || !isRecord(value.queuesByThreadKey)) {
-    return { queuesByThreadKey: {} };
+export function normalizePersistedRestoreStoreState(value: unknown): PersistedRestoreStoreState {
+  if (!isRecord(value) || !isRecord(value.snapshotsByQueuedMessageId)) {
+    return { snapshotsByQueuedMessageId: {} };
   }
-  const entries = Object.entries(value.queuesByThreadKey)
-    .slice(-MAX_PERSISTED_QUEUE_THREADS)
-    .flatMap(([threadKey, queue]) => {
-      if (threadKey.length === 0 || !Array.isArray(queue)) return [];
-      const messages = queue
-        .slice(0, MAX_PERSISTED_MESSAGES_PER_THREAD)
-        .map(normalizePersistedMessage)
-        .filter((message): message is PersistedQueuedComposerMessage => message !== null);
-      return messages.length > 0 ? [[threadKey, messages] as const] : [];
+  const entries = Object.entries(value.snapshotsByQueuedMessageId)
+    .slice(-MAX_RESTORE_SNAPSHOTS)
+    .flatMap(([queuedMessageId, snapshot]) => {
+      if (queuedMessageId.length === 0) return [];
+      const normalized = normalizePersistedSnapshot(snapshot);
+      return normalized ? [[queuedMessageId, normalized] as const] : [];
     });
-  return { queuesByThreadKey: Object.fromEntries(entries) };
+  return { snapshotsByQueuedMessageId: Object.fromEntries(entries) };
 }
 
-export function partializeQueuedMessageStoreState(
-  state: QueuedMessageStoreState,
-): PersistedQueuedMessageStoreState {
-  return normalizePersistedQueuedMessageStoreState({
-    queuesByThreadKey: Object.fromEntries(
-      Object.entries(state.queuesByThreadKey).map(([threadKey, queue]) => [
-        threadKey,
-        queue.map((message) => ({
-          ...message,
-          images: message.persistedImages,
-          files: message.files.map(persistComposerFileAttachment),
+export function partializeRestoreStoreState(
+  state: QueuedMessageRestoreStoreState,
+): PersistedRestoreStoreState {
+  return normalizePersistedRestoreStoreState({
+    snapshotsByQueuedMessageId: Object.fromEntries(
+      Object.entries(state.snapshotsByQueuedMessageId).map(([queuedMessageId, snapshot]) => [
+        queuedMessageId,
+        {
+          ...snapshot,
+          images: snapshot.persistedImages,
+          files: snapshot.files.map(persistComposerFileAttachment),
           persistedImages: undefined,
-        })),
+        },
       ]),
     ),
   });
 }
 
-export function hydratePersistedQueuedMessageStoreState(
+export function hydratePersistedRestoreStoreState(
   value: unknown,
-): Pick<QueuedMessageStoreState, "queuesByThreadKey"> {
-  const persisted = normalizePersistedQueuedMessageStoreState(value);
+): Pick<QueuedMessageRestoreStoreState, "snapshotsByQueuedMessageId"> {
+  const persisted = normalizePersistedRestoreStoreState(value);
   return {
-    queuesByThreadKey: Object.fromEntries(
-      Object.entries(persisted.queuesByThreadKey).map(([threadKey, queue]) => [
-        threadKey,
-        queue.map((message) => ({
-          ...message,
-          images: hydrateImagesFromPersisted(message.images),
-          persistedImages: [...message.images],
-          files: message.files.map(hydrateComposerFileAttachment),
-        })),
+    snapshotsByQueuedMessageId: Object.fromEntries(
+      Object.entries(persisted.snapshotsByQueuedMessageId).map(([queuedMessageId, snapshot]) => [
+        queuedMessageId,
+        {
+          ...snapshot,
+          images: hydrateImagesFromPersisted(snapshot.images),
+          persistedImages: [...snapshot.images],
+          files: snapshot.files.map(hydrateComposerFileAttachment),
+        },
       ]),
     ),
   };
@@ -232,12 +204,12 @@ function resolveQueuedMessageStorage(): StateStorage {
 }
 
 const queuedMessageBaseStorage = resolveQueuedMessageStorage();
-const queuedMessagePersistStorage: PersistStorage<QueuedMessagePersistState> = {
+const queuedMessagePersistStorage: PersistStorage<RestorePersistState> = {
   getItem: (name) => {
     const raw = queuedMessageBaseStorage.getItem(name);
     if (typeof raw !== "string") return null;
     try {
-      return JSON.parse(raw) as StorageValue<QueuedMessagePersistState>;
+      return JSON.parse(raw) as StorageValue<RestorePersistState>;
     } catch {
       return null;
     }
@@ -248,7 +220,7 @@ const queuedMessagePersistStorage: PersistStorage<QueuedMessagePersistState> = {
       JSON.stringify({
         state:
           "capturedState" in value.state
-            ? partializeQueuedMessageStoreState(value.state.capturedState)
+            ? partializeRestoreStoreState(value.state.capturedState)
             : value.state,
         version: value.version,
       }),
@@ -256,105 +228,112 @@ const queuedMessagePersistStorage: PersistStorage<QueuedMessagePersistState> = {
   removeItem: (name) => queuedMessageBaseStorage.removeItem(name),
 };
 
-const EMPTY_QUEUE: QueuedComposerMessage[] = [];
-
-export const useQueuedMessageStore = create<QueuedMessageStoreState>()(
+export const useQueuedMessageRestoreStore = create<QueuedMessageRestoreStoreState>()(
   persist(
     (set, get) => ({
-      queuesByThreadKey: {},
-      drainGeneration: 0,
-      enqueue: (threadKey, message) => {
-        const entry: QueuedComposerMessage = { ...message, id: randomUUID() };
+      snapshotsByQueuedMessageId: {},
+      remember: (queuedMessageId, snapshot) => {
         set((state) => ({
-          queuesByThreadKey: {
-            ...state.queuesByThreadKey,
-            [threadKey]: [...(state.queuesByThreadKey[threadKey] ?? EMPTY_QUEUE), entry],
+          snapshotsByQueuedMessageId: {
+            ...state.snapshotsByQueuedMessageId,
+            [queuedMessageId]: snapshot,
           },
         }));
-        return entry;
       },
-      take: (threadKey, id, toolActivityId) => {
-        const queue = get().queuesByThreadKey[threadKey];
-        const entry = queue?.find((message) => message.id === id);
-        if (!queue || !entry) {
-          return null;
-        }
+      take: (queuedMessageId) => {
+        const snapshot = get().snapshotsByQueuedMessageId[queuedMessageId];
+        if (!snapshot) return null;
         set((state) => {
-          const remaining = (state.queuesByThreadKey[threadKey] ?? EMPTY_QUEUE)
-            .filter((message) => message.id !== id)
-            .map((message) =>
-              message.queuedAfterToolActivityId === toolActivityId
-                ? message
-                : { ...message, queuedAfterToolActivityId: toolActivityId },
-            );
-          const queuesByThreadKey = { ...state.queuesByThreadKey };
-          if (remaining.length === 0) {
-            delete queuesByThreadKey[threadKey];
-          } else {
-            queuesByThreadKey[threadKey] = remaining;
+          const next = { ...state.snapshotsByQueuedMessageId };
+          delete next[queuedMessageId];
+          return { snapshotsByQueuedMessageId: next };
+        });
+        return snapshot;
+      },
+      forget: (queuedMessageIds) => {
+        if (queuedMessageIds.length === 0) return;
+        set((state) => {
+          let changed = false;
+          const next = { ...state.snapshotsByQueuedMessageId };
+          for (const id of queuedMessageIds) {
+            if (id in next) {
+              delete next[id];
+              changed = true;
+            }
           }
-          return { queuesByThreadKey };
+          return changed ? { snapshotsByQueuedMessageId: next } : state;
         });
-        return entry;
-      },
-      remove: (threadKey, id) => {
-        const queue = get().queuesByThreadKey[threadKey];
-        const entry = queue?.find((message) => message.id === id);
-        if (!queue || !entry) {
-          return null;
-        }
-        set((state) => {
-          const remaining = (state.queuesByThreadKey[threadKey] ?? EMPTY_QUEUE).filter(
-            (message) => message.id !== id,
-          );
-          const queuesByThreadKey = { ...state.queuesByThreadKey };
-          if (remaining.length === 0) {
-            delete queuesByThreadKey[threadKey];
-          } else {
-            queuesByThreadKey[threadKey] = remaining;
-          }
-          return { queuesByThreadKey };
-        });
-        return entry;
-      },
-      holdAtFront: (threadKey, message) => {
-        set((state) => {
-          const rest = (state.queuesByThreadKey[threadKey] ?? EMPTY_QUEUE).filter(
-            (entry) => entry.id !== message.id,
-          );
-          return {
-            queuesByThreadKey: {
-              ...state.queuesByThreadKey,
-              [threadKey]: [{ ...message, holdUntilUserAction: true }, ...rest],
-            },
-          };
-        });
-      },
-      drain: (threadKey) => {
-        const queue = get().queuesByThreadKey[threadKey];
-        if (!queue || queue.length === 0) {
-          return EMPTY_QUEUE;
-        }
-        set((state) => {
-          const queuesByThreadKey = { ...state.queuesByThreadKey };
-          delete queuesByThreadKey[threadKey];
-          return { queuesByThreadKey, drainGeneration: state.drainGeneration + 1 };
-        });
-        return queue;
       },
     }),
     {
       name: QUEUED_MESSAGE_STORAGE_KEY,
       version: QUEUED_MESSAGE_STORAGE_VERSION,
       storage: queuedMessagePersistStorage,
-      partialize: (state): QueuedMessagePersistState => ({ capturedState: state }),
+      partialize: (state): RestorePersistState => ({ capturedState: state }),
       merge: (persistedState, currentState) => ({
         ...currentState,
-        ...hydratePersistedQueuedMessageStoreState(persistedState),
+        ...hydratePersistedRestoreStoreState(persistedState),
       }),
     },
   ),
 );
+
+/**
+ * Read and delete whatever the pre-server build left queued in this browser.
+ *
+ * Those messages were never sent and the server has no record of them, so they
+ * are handed straight back to the composer of the thread that owned them rather
+ * than replayed: replaying would start turns the user queued in a session that
+ * may be hours old. Called once per thread, keyed by the same thread key the
+ * old store used.
+ */
+export function takeLegacyQueuedMessages(
+  threadKey: string,
+  /** Injectable so the migration can be tested outside a browser. */
+  storage: StateStorage = queuedMessageBaseStorage,
+): QueuedComposerRestoreSnapshot[] {
+  let parsed: unknown;
+  try {
+    const raw = storage.getItem(LEGACY_QUEUE_STORAGE_KEY);
+    if (typeof raw !== "string") return [];
+    parsed = JSON.parse(raw);
+  } catch {
+    return [];
+  }
+  const state = isRecord(parsed) && isRecord(parsed.state) ? parsed.state : null;
+  const queues = state && isRecord(state.queuesByThreadKey) ? state.queuesByThreadKey : null;
+  if (!queues) return [];
+  const queue = queues[threadKey];
+  const messages = Array.isArray(queue)
+    ? queue.flatMap((entry) => {
+        const snapshot = normalizePersistedSnapshot(entry);
+        return snapshot ? [snapshot] : [];
+      })
+    : [];
+  const remaining = { ...queues };
+  delete remaining[threadKey];
+  try {
+    if (Object.keys(remaining).length === 0) {
+      storage.removeItem(LEGACY_QUEUE_STORAGE_KEY);
+    } else {
+      storage.setItem(
+        LEGACY_QUEUE_STORAGE_KEY,
+        JSON.stringify({
+          ...(parsed as Record<string, unknown>),
+          state: { ...state, queuesByThreadKey: remaining },
+        }),
+      );
+    }
+  } catch {
+    // A full or unavailable store must not swallow the messages we just read.
+  }
+  return messages.map((message) => ({
+    ...message,
+    images: hydrateImagesFromPersisted(message.images),
+    persistedImages: [...message.images],
+    files: message.files.map(hydrateComposerFileAttachment),
+  }));
+}
 
 /**
  * The newest finished tool call. Its id changing is the boundary a queued
@@ -384,26 +363,39 @@ export function latestCompletedToolActivityId(
   return latest?.id ?? null;
 }
 
-/**
- * A queued message is due mid-turn once a tool call finished after it was
- * queued, and as soon as the turn is over otherwise. "connecting" is the gap
- * between a send and the provider picking it up, so nothing is due there.
- */
-export function isQueuedMessageDue(input: {
-  message: Pick<
-    QueuedComposerMessage,
-    "dispatchTiming" | "queuedAfterToolActivityId" | "holdUntilUserAction"
-  >;
-  phase: "connecting" | "running" | "ready" | "disconnected";
-  latestToolActivityId: string | null;
-}): boolean {
-  if (input.message.holdUntilUserAction) return false;
-  if (input.phase === "connecting") return false;
-  if (input.phase !== "running") return true;
-  if (input.message.dispatchTiming === "after-current-turn") return false;
-  return input.latestToolActivityId !== input.message.queuedAfterToolActivityId;
+/** Flatten the thread's pending queue into timeline rows, oldest first. */
+export function deriveQueuedMessages(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+): QueuedComposerMessage[] {
+  return foldThreadQueuedMessages(activities).map((entry) => ({
+    id: entry.queuedMessageId,
+    prompt: entry.enqueued.message.text,
+    attachmentCount: entry.enqueued.message.attachments.length,
+    contextItemCount: entry.enqueued.message.context?.records.length ?? 0,
+    dispatchTiming: entry.enqueued.dispatchTiming,
+    holdUntilUserAction: entry.held,
+    createdAt: entry.enqueued.createdAt,
+  }));
 }
 
-export function useQueuedMessages(threadKey: string): QueuedComposerMessage[] {
-  return useQueuedMessageStore((state) => state.queuesByThreadKey[threadKey] ?? EMPTY_QUEUE);
+/**
+ * Ids the server took out of the queue because the user pressed Stop.
+ *
+ * Stop cancels the queue so nothing starts a new turn the moment the
+ * interrupted one settles; the composer takes those drafts back instead. Cancel
+ * is deliberately not included: the client that pressed it restores the draft
+ * itself, and a cancel from another device must not push text into this
+ * composer.
+ */
+export function deriveInterruptedQueuedMessages(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+): string[] {
+  const interrupted: string[] = [];
+  for (const activity of activities) {
+    if (activity.kind !== THREAD_QUEUED_MESSAGE_ACTIVITY_KINDS.closed) continue;
+    const payload = decodeClosedActivity(activity.payload);
+    if (payload._tag === "None" || payload.value.reason !== "interrupted") continue;
+    interrupted.push(payload.value.queuedMessageId);
+  }
+  return interrupted;
 }

@@ -2,117 +2,230 @@ import { EnvironmentId } from "@t3tools/contracts";
 import { beforeEach, describe, expect, it } from "vite-plus/test";
 
 import {
-  hydratePersistedQueuedMessageStoreState,
-  isQueuedMessageDue,
-  shouldQueueRunningFollowUp,
+  deriveInterruptedQueuedMessages,
+  deriveQueuedMessages,
+  hydratePersistedRestoreStoreState,
   latestCompletedToolActivityId,
-  normalizePersistedQueuedMessageStoreState,
-  partializeQueuedMessageStoreState,
-  useQueuedMessageStore,
-  type QueuedComposerMessage,
+  normalizePersistedRestoreStoreState,
+  partializeRestoreStoreState,
+  shouldQueueRunningFollowUp,
+  takeLegacyQueuedMessages,
+  useQueuedMessageRestoreStore,
 } from "./queuedMessageStore";
+import { createMemoryStorage } from "./lib/storage";
 
-function makeMessage(prompt: string): Omit<QueuedComposerMessage, "id"> {
+const QUEUED_MESSAGE_ID = "queued-1";
+
+function enqueuedActivity(input: {
+  id: string;
+  queuedMessageId: string;
+  text: string;
+  sequence: number;
+  attachments?: number;
+  contextRecords?: number;
+  dispatchTiming?: "next-boundary" | "after-current-turn";
+}) {
   return {
-    prompt,
-    images: [],
-    files: [],
-    persistedImages: [],
-    terminalContexts: [],
-    previewAnnotations: [],
-    reviewComments: [],
-    submissionIntent: "foreground",
-    dispatchTiming: "next-boundary",
-    queuedAfterToolActivityId: null,
-    createdAt: "2026-09-11T00:00:00.000Z",
+    id: input.id,
+    tone: "info" as const,
+    kind: "thread.queued-message.enqueued",
+    summary: "Message queued",
+    payload: {
+      threadId: "thread-1",
+      queuedMessageId: input.queuedMessageId,
+      message: {
+        messageId: `message-${input.queuedMessageId}`,
+        role: "user",
+        text: input.text,
+        attachments: Array.from({ length: input.attachments ?? 0 }, (_unused, index) => ({
+          type: "image",
+          id: `attachment-${index}`,
+          name: "pixel.png",
+          mimeType: "image/png",
+          sizeBytes: 1,
+        })),
+        ...(input.contextRecords
+          ? {
+              context: {
+                version: 1,
+                records: Array.from({ length: input.contextRecords }, (_unused, index) => ({
+                  version: 1,
+                  kind: "terminal",
+                  contextId: `ctx${index}`,
+                  label: "terminal",
+                  terminalId: "term-1",
+                  terminalLabel: "bash",
+                  lineStart: 1,
+                  lineEnd: 2,
+                  text: "log line",
+                })),
+              },
+            }
+          : {}),
+      },
+      dispatchTiming: input.dispatchTiming ?? "next-boundary",
+      queuedAfterActivityId: null,
+      createdAt: "2026-01-01T00:00:01.000Z",
+    },
+    turnId: null,
+    sequence: input.sequence,
+    createdAt: "2026-01-01T00:00:01.000Z",
   };
 }
 
-describe("queuedMessageStore", () => {
+function queueLifecycleActivity(input: {
+  id: string;
+  kind: string;
+  sequence: number;
+  payload: Record<string, unknown>;
+}) {
+  return {
+    id: input.id,
+    tone: "info" as const,
+    kind: input.kind,
+    summary: "Queue update",
+    payload: input.payload,
+    turnId: null,
+    sequence: input.sequence,
+    createdAt: "2026-01-01T00:00:02.000Z",
+  };
+}
+
+describe("queue preference", () => {
   it("keeps Alt+Enter queued even when ordinary follow-ups steer immediately", () => {
     expect(shouldQueueRunningFollowUp("steer", "after-current-turn")).toBe(true);
     expect(shouldQueueRunningFollowUp("steer", undefined)).toBe(false);
     expect(shouldQueueRunningFollowUp("queue", undefined)).toBe(true);
   });
+});
 
+describe("deriveQueuedMessages", () => {
+  it("keeps the server's order and reports only counts to the row", () => {
+    const rows = deriveQueuedMessages([
+      enqueuedActivity({
+        id: "act-1",
+        queuedMessageId: "q1",
+        text: "first",
+        sequence: 1,
+        attachments: 2,
+        contextRecords: 3,
+      }),
+      enqueuedActivity({ id: "act-2", queuedMessageId: "q2", text: "second", sequence: 2 }),
+    ] as never);
+
+    expect(rows.map((row) => row.id)).toEqual(["q1", "q2"]);
+    expect(rows[0]).toMatchObject({
+      prompt: "first",
+      attachmentCount: 2,
+      contextItemCount: 3,
+      holdUntilUserAction: false,
+    });
+  });
+
+  it("drops an entry the server closed and holds one it could not send", () => {
+    const rows = deriveQueuedMessages([
+      enqueuedActivity({ id: "act-1", queuedMessageId: "q1", text: "first", sequence: 1 }),
+      enqueuedActivity({ id: "act-2", queuedMessageId: "q2", text: "second", sequence: 2 }),
+      queueLifecycleActivity({
+        id: "act-3",
+        kind: "thread.queued-message.closed",
+        sequence: 3,
+        payload: { queuedMessageId: "q1", reason: "dispatched" },
+      }),
+      queueLifecycleActivity({
+        id: "act-4",
+        kind: "thread.queued-message.held",
+        sequence: 4,
+        payload: { queuedMessageId: "q2", detail: "provider rejected the turn" },
+      }),
+    ] as never);
+
+    expect(rows.map((row) => row.id)).toEqual(["q2"]);
+    expect(rows[0]?.holdUntilUserAction).toBe(true);
+  });
+
+  it("clears a hold when the user releases the entry", () => {
+    const rows = deriveQueuedMessages([
+      enqueuedActivity({ id: "act-1", queuedMessageId: "q1", text: "first", sequence: 1 }),
+      queueLifecycleActivity({
+        id: "act-2",
+        kind: "thread.queued-message.held",
+        sequence: 2,
+        payload: { queuedMessageId: "q1", detail: "nope" },
+      }),
+      queueLifecycleActivity({
+        id: "act-3",
+        kind: "thread.queued-message.released",
+        sequence: 3,
+        payload: { queuedMessageId: "q1" },
+      }),
+    ] as never);
+
+    expect(rows[0]?.holdUntilUserAction).toBe(false);
+  });
+});
+
+describe("deriveInterruptedQueuedMessages", () => {
+  it("reports only what Stop took out of the queue, with its text", () => {
+    const interrupted = deriveInterruptedQueuedMessages([
+      enqueuedActivity({ id: "act-1", queuedMessageId: "q1", text: "stopped", sequence: 1 }),
+      enqueuedActivity({ id: "act-2", queuedMessageId: "q2", text: "sent", sequence: 2 }),
+      queueLifecycleActivity({
+        id: "act-3",
+        kind: "thread.queued-message.closed",
+        sequence: 3,
+        payload: { queuedMessageId: "q2", reason: "dispatched" },
+      }),
+      queueLifecycleActivity({
+        id: "act-4",
+        kind: "thread.queued-message.closed",
+        sequence: 4,
+        payload: { queuedMessageId: "q1", reason: "interrupted" },
+      }),
+    ] as never);
+
+    expect(interrupted).toEqual(["q1"]);
+  });
+
+  it("ignores a cancel, which the client that pressed it restores itself", () => {
+    expect(
+      deriveInterruptedQueuedMessages([
+        enqueuedActivity({ id: "act-1", queuedMessageId: "q1", text: "canceled", sequence: 1 }),
+        queueLifecycleActivity({
+          id: "act-2",
+          kind: "thread.queued-message.closed",
+          sequence: 2,
+          payload: { queuedMessageId: "q1", reason: "canceled" },
+        }),
+      ] as never),
+    ).toEqual([]);
+  });
+});
+
+describe("restore snapshots", () => {
   beforeEach(() => {
-    useQueuedMessageStore.setState({ queuesByThreadKey: {}, drainGeneration: 0 });
+    useQueuedMessageRestoreStore.setState({ snapshotsByQueuedMessageId: {} });
   });
 
-  it("keeps messages in submission order per thread", () => {
-    const { enqueue } = useQueuedMessageStore.getState();
-    enqueue("thread-a", makeMessage("first"));
-    enqueue("thread-a", makeMessage("second"));
-    enqueue("thread-b", makeMessage("other"));
+  it("hands a snapshot to exactly one caller", () => {
+    const store = useQueuedMessageRestoreStore.getState();
+    store.remember(QUEUED_MESSAGE_ID, {
+      prompt: "held draft",
+      images: [],
+      files: [],
+      persistedImages: [],
+      terminalContexts: [],
+      previewAnnotations: [],
+      reviewComments: [],
+    });
 
-    const queues = useQueuedMessageStore.getState().queuesByThreadKey;
-    expect(queues["thread-a"]?.map((message) => message.prompt)).toEqual(["first", "second"]);
-    expect(queues["thread-b"]?.map((message) => message.prompt)).toEqual(["other"]);
+    expect(useQueuedMessageRestoreStore.getState().take(QUEUED_MESSAGE_ID)?.prompt).toBe(
+      "held draft",
+    );
+    expect(useQueuedMessageRestoreStore.getState().take(QUEUED_MESSAGE_ID)).toBeNull();
   });
 
-  it("take hands the message to exactly one caller", () => {
-    const { enqueue, take } = useQueuedMessageStore.getState();
-    const entry = enqueue("thread-a", makeMessage("first"));
-
-    expect(take("thread-a", entry.id, null)?.prompt).toBe("first");
-    expect(take("thread-a", entry.id, null)).toBeNull();
-    expect(useQueuedMessageStore.getState().queuesByThreadKey["thread-a"]).toBeUndefined();
-  });
-
-  it("take re-anchors the remaining messages to the current tool boundary", () => {
-    const { enqueue, take } = useQueuedMessageStore.getState();
-    const first = enqueue("thread-a", makeMessage("first"));
-    enqueue("thread-a", makeMessage("second"));
-
-    take("thread-a", first.id, "tool-2");
-
-    const [second] = useQueuedMessageStore.getState().queuesByThreadKey["thread-a"] ?? [];
-    expect(second?.queuedAfterToolActivityId).toBe("tool-2");
-    expect(
-      isQueuedMessageDue({ message: second!, phase: "running", latestToolActivityId: "tool-2" }),
-    ).toBe(false);
-  });
-
-  it("remove keeps the other messages' anchors", () => {
-    const { enqueue, remove } = useQueuedMessageStore.getState();
-    const first = enqueue("thread-a", { ...makeMessage("first"), queuedAfterToolActivityId: "t1" });
-    const second = enqueue("thread-a", makeMessage("second"));
-
-    expect(remove("thread-a", second.id)?.prompt).toBe("second");
-    expect(remove("thread-a", second.id)).toBeNull();
-    expect(useQueuedMessageStore.getState().queuesByThreadKey["thread-a"]).toEqual([first]);
-  });
-
-  it("holdAtFront returns a failed message to the head, held", () => {
-    const { enqueue, take, holdAtFront } = useQueuedMessageStore.getState();
-    const first = enqueue("thread-a", makeMessage("first"));
-    enqueue("thread-a", makeMessage("second"));
-    const taken = take("thread-a", first.id, "t1")!;
-
-    holdAtFront("thread-a", taken);
-
-    const queue = useQueuedMessageStore.getState().queuesByThreadKey["thread-a"] ?? [];
-    expect(queue.map((message) => message.prompt)).toEqual(["first", "second"]);
-    expect(queue[0]?.holdUntilUserAction).toBe(true);
-    expect(
-      isQueuedMessageDue({ message: queue[0]!, phase: "ready", latestToolActivityId: null }),
-    ).toBe(false);
-  });
-
-  it("drain empties one thread's queue in order", () => {
-    const { enqueue, drain } = useQueuedMessageStore.getState();
-    enqueue("thread-a", makeMessage("first"));
-    enqueue("thread-a", makeMessage("second"));
-    enqueue("thread-b", makeMessage("other"));
-
-    expect(drain("thread-a").map((message) => message.prompt)).toEqual(["first", "second"]);
-    expect(useQueuedMessageStore.getState().drainGeneration).toBe(1);
-    expect(drain("thread-a")).toEqual([]);
-    expect(useQueuedMessageStore.getState().drainGeneration).toBe(1);
-    expect(useQueuedMessageStore.getState().queuesByThreadKey["thread-b"]).toHaveLength(1);
-  });
-
-  it("persists and hydrates text, timing, images, and uploaded files", () => {
+  it("persists and hydrates text, images, and uploaded files", () => {
     const persistedImage = {
       id: "image-1",
       name: "pixel.png",
@@ -120,9 +233,9 @@ describe("queuedMessageStore", () => {
       sizeBytes: 1,
       dataUrl: "data:image/png;base64,AA==",
     };
-    useQueuedMessageStore.getState().enqueue("thread-a", {
-      ...makeMessage("after this turn"),
-      dispatchTiming: "after-current-turn",
+    useQueuedMessageRestoreStore.getState().remember(QUEUED_MESSAGE_ID, {
+      prompt: "after this turn",
+      images: [],
       persistedImages: [persistedImage],
       files: [
         {
@@ -136,15 +249,17 @@ describe("queuedMessageStore", () => {
           uploadEnvironmentId: EnvironmentId.make("environment-1"),
         },
       ],
+      terminalContexts: [],
+      previewAnnotations: [],
+      reviewComments: [],
     });
 
-    const persisted = partializeQueuedMessageStoreState(useQueuedMessageStore.getState());
-    const hydrated = hydratePersistedQueuedMessageStoreState(persisted);
-    const [message] = hydrated.queuesByThreadKey["thread-a"] ?? [];
+    const persisted = partializeRestoreStoreState(useQueuedMessageRestoreStore.getState());
+    const hydrated = hydratePersistedRestoreStoreState(persisted);
+    const snapshot = hydrated.snapshotsByQueuedMessageId[QUEUED_MESSAGE_ID];
 
-    expect(message).toMatchObject({
+    expect(snapshot).toMatchObject({
       prompt: "after this turn",
-      dispatchTiming: "after-current-turn",
       images: [{ id: "image-1", previewUrl: persistedImage.dataUrl }],
       files: [
         {
@@ -155,21 +270,57 @@ describe("queuedMessageStore", () => {
         },
       ],
     });
-    expect(message?.persistedImages).toEqual([persistedImage]);
+    expect(snapshot?.persistedImages).toEqual([persistedImage]);
   });
 
-  it("drops malformed persisted messages instead of hydrating unsafe state", () => {
+  it("drops malformed persisted snapshots instead of hydrating unsafe state", () => {
     expect(
-      normalizePersistedQueuedMessageStoreState({
-        queuesByThreadKey: {
-          "thread-a": [{ id: "broken", prompt: 42 }],
-        },
+      normalizePersistedRestoreStoreState({
+        snapshotsByQueuedMessageId: { "queued-1": { prompt: 42 } },
       }),
-    ).toEqual({ queuesByThreadKey: {} });
+    ).toEqual({ snapshotsByQueuedMessageId: {} });
   });
 });
 
-describe("queued message dispatch timing", () => {
+describe("legacy localStorage queue", () => {
+  let storage = createMemoryStorage();
+  beforeEach(() => {
+    storage = createMemoryStorage();
+  });
+
+  it("hands a pre-server queue back once and forgets it", () => {
+    storage.setItem(
+      "t3code:queued-composer-messages:v1",
+      JSON.stringify({
+        version: 1,
+        state: {
+          queuesByThreadKey: {
+            "thread-a": [{ id: "old-1", prompt: "never sent" }],
+            "thread-b": [{ id: "old-2", prompt: "other thread" }],
+          },
+        },
+      }),
+    );
+
+    expect(takeLegacyQueuedMessages("thread-a", storage).map((entry) => entry.prompt)).toEqual([
+      "never sent",
+    ]);
+    expect(takeLegacyQueuedMessages("thread-a", storage)).toEqual([]);
+    // Another thread's queue survives until that thread is opened.
+    expect(takeLegacyQueuedMessages("thread-b", storage).map((entry) => entry.prompt)).toEqual([
+      "other thread",
+    ]);
+    expect(storage.getItem("t3code:queued-composer-messages:v1")).toBeNull();
+  });
+
+  it("tolerates a missing or unparseable key", () => {
+    expect(takeLegacyQueuedMessages("thread-a", storage)).toEqual([]);
+    storage.setItem("t3code:queued-composer-messages:v1", "{not json");
+    expect(takeLegacyQueuedMessages("thread-a", storage)).toEqual([]);
+  });
+});
+
+describe("queued message boundary anchor", () => {
   const activities = [
     { id: "a1", kind: "tool.started", sequence: 1, createdAt: "2026-01-01T00:00:01Z" },
     { id: "a2", kind: "tool.completed", sequence: 2, createdAt: "2026-01-01T00:00:02Z" },
@@ -185,43 +336,5 @@ describe("queued message dispatch timing", () => {
         { id: "early", kind: "tool.completed", sequence: 4, createdAt: "2026-01-01T00:00:04Z" },
       ]),
     ).toBe("late");
-  });
-
-  it("waits mid-turn until a tool call finishes after the message was queued", () => {
-    const message = { dispatchTiming: "next-boundary" as const, queuedAfterToolActivityId: "a2" };
-    expect(isQueuedMessageDue({ message, phase: "running", latestToolActivityId: "a2" })).toBe(
-      false,
-    );
-    expect(isQueuedMessageDue({ message, phase: "running", latestToolActivityId: "a4" })).toBe(
-      true,
-    );
-  });
-
-  it("never auto-sends a message held for user action", () => {
-    const message = {
-      dispatchTiming: "next-boundary" as const,
-      queuedAfterToolActivityId: null,
-      holdUntilUserAction: true,
-    };
-    expect(isQueuedMessageDue({ message, phase: "ready", latestToolActivityId: "a4" })).toBe(false);
-  });
-
-  it("is due as soon as the turn is over, but not while a send is connecting", () => {
-    const message = { dispatchTiming: "next-boundary" as const, queuedAfterToolActivityId: "a2" };
-    expect(isQueuedMessageDue({ message, phase: "ready", latestToolActivityId: "a2" })).toBe(true);
-    expect(isQueuedMessageDue({ message, phase: "connecting", latestToolActivityId: "a4" })).toBe(
-      false,
-    );
-  });
-
-  it("keeps an after-current-turn message queued across tool boundaries", () => {
-    const message = {
-      dispatchTiming: "after-current-turn" as const,
-      queuedAfterToolActivityId: "a2",
-    };
-    expect(isQueuedMessageDue({ message, phase: "running", latestToolActivityId: "a4" })).toBe(
-      false,
-    );
-    expect(isQueuedMessageDue({ message, phase: "ready", latestToolActivityId: "a4" })).toBe(true);
   });
 });
