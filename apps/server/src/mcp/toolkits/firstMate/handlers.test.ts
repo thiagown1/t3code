@@ -496,4 +496,79 @@ describe("FirstMate toolkit handlers", () => {
       });
     }),
   );
+
+  it.effect("queues a supervisor message on the thread the topic is delegated to", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({
+        firstMate: makeWorkspace({ topics: [makeTopic({ threadId: WORKER_THREAD_ID })] }),
+      });
+      const result = yield* harness.call("firstmate_send_to_topic", {
+        topicId: TOPIC_ID,
+        text: "Use the account-scoped limiter.",
+      });
+      expect(result).toMatchObject({ topicId: TOPIC_ID, threadId: WORKER_THREAD_ID });
+      expect(yield* Ref.get(harness.commands)).toMatchObject([
+        {
+          type: "thread.queued-message.enqueue",
+          threadId: WORKER_THREAD_ID,
+          queuedMessageId: result.queuedMessageId,
+          dispatchTiming: "after-current-turn",
+          message: { role: "user", text: "Use the account-scoped limiter." },
+        },
+      ]);
+    }),
+  );
+
+  it.effect("refuses to send to a topic nobody is working on", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness();
+      const error = yield* harness
+        .call("firstmate_send_to_topic", { topicId: TOPIC_ID, text: "Anything." })
+        .pipe(Effect.flip);
+      expect(error._tag).toBe("FirstMateCommandRejectedError");
+      expect(yield* Ref.get(harness.commands)).toEqual([]);
+    }),
+  );
+
+  it.effect("refuses to send to a delegated thread that is archived or gone", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({
+        firstMate: makeWorkspace({
+          topics: [makeTopic({ threadId: ThreadId.make("thread-archived") })],
+        }),
+      });
+      const error = yield* harness
+        .call("firstmate_send_to_topic", { topicId: TOPIC_ID, text: "Anything." })
+        .pipe(Effect.flip);
+      expect(error).toMatchObject({ _tag: "FirstMateCommandRejectedError" });
+      expect(yield* Ref.get(harness.commands)).toEqual([]);
+    }),
+  );
+
+  it.effect("refuses to send to an unknown topic rather than to a named thread", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness();
+      const error = yield* harness
+        .call("firstmate_send_to_topic", { topicId: "topic-unknown", text: "Anything." })
+        .pipe(Effect.flip);
+      expect(error).toMatchObject({ _tag: "FirstMateCommandRejectedError" });
+      expect(yield* Ref.get(harness.commands)).toEqual([]);
+    }),
+  );
+
+  it.effect("refuses to send outside the supervisor thread", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({
+        firstMate: makeWorkspace({ topics: [makeTopic({ threadId: WORKER_THREAD_ID })] }),
+      });
+      const error = yield* harness
+        .call("firstmate_send_to_topic", { topicId: TOPIC_ID, text: "Anything." }, WORKER_THREAD_ID)
+        .pipe(Effect.flip);
+      expect(error).toMatchObject({
+        _tag: "FirstMateSupervisorOnlyError",
+        threadId: WORKER_THREAD_ID,
+      });
+      expect(yield* Ref.get(harness.commands)).toEqual([]);
+    }),
+  );
 });

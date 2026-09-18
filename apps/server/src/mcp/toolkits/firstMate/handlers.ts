@@ -2,7 +2,9 @@ import {
   CommandId,
   FirstMateDecisionId,
   FirstMateTopicId,
+  MessageId,
   ThreadId,
+  ThreadQueuedMessageId,
   type FirstMateDecisionOption,
   type FirstMateTopic,
   type FirstMateWorkspaceState,
@@ -171,6 +173,46 @@ const make = Effect.gen(function* () {
     return topic;
   });
 
+  /**
+   * Where a message for a topic is allowed to land.
+   *
+   * The destination is always the topic's own delegation, so a supervisor can
+   * only reach threads the user's topics already point at, never an arbitrary
+   * thread it names. Every way the lookup can come up short is a refusal:
+   * `getThreadShellById` returns nothing for a deleted or archived thread, and
+   * guessing a neighbour would put the supervisor's instructions in front of
+   * the wrong agent.
+   */
+  const requireDelegatedThread = Effect.fn("FirstMateToolkit.requireDelegatedThread")(function* (
+    scope: SupervisorScope,
+    topic: FirstMateTopic,
+  ) {
+    if (topic.threadId === null) {
+      return yield* new FirstMateCommandRejectedError({
+        detail: `FirstMate topic ${topic.id} has no delegated thread. Call firstmate_delegate_topic before sending to it.`,
+      });
+    }
+    if (topic.threadId === scope.workspace.supervisorThreadId) {
+      return yield* new FirstMateCommandRejectedError({
+        detail: `FirstMate topic ${topic.id} is delegated to the supervisor thread itself, which cannot be sent to.`,
+      });
+    }
+    const thread = yield* snapshots
+      .getThreadShellById(topic.threadId)
+      .pipe(Effect.mapError((cause) => new FirstMateCommandFailedError({ cause })));
+    if (Option.isNone(thread)) {
+      return yield* new FirstMateCommandRejectedError({
+        detail: `Thread ${topic.threadId} delegated to FirstMate topic ${topic.id} is archived or no longer exists. Delegate the topic to a live thread first.`,
+      });
+    }
+    if (thread.value.projectId !== scope.project.id) {
+      return yield* new FirstMateCommandRejectedError({
+        detail: `Thread ${topic.threadId} delegated to FirstMate topic ${topic.id} belongs to another project.`,
+      });
+    }
+    return thread.value;
+  });
+
   const dispatchFailure = <E>(
     cause: Cause.Cause<E>,
   ): Effect.Effect<never, FirstMateCommandFailedError> =>
@@ -307,6 +349,33 @@ const make = Effect.gen(function* () {
           optionIds: input.options.map((option) => option.id),
           blocking: input.blocking,
         };
+      }),
+
+    firstmate_send_to_topic: (input) =>
+      Effect.gen(function* () {
+        const scope = yield* requireSupervisor();
+        const topic = yield* requireTopic(scope, input.topicId);
+        const destination = yield* requireDelegatedThread(scope, topic);
+        const queuedMessageId = ThreadQueuedMessageId.make(`firstmate-topic:${yield* uuid}`);
+        yield* dispatch({
+          type: "thread.queued-message.enqueue",
+          commandId: yield* commandId("mcp-fm-topic-send", scope.thread.id),
+          threadId: destination.id,
+          queuedMessageId,
+          message: {
+            messageId: MessageId.make(`firstmate-topic:${yield* uuid}`),
+            role: "user",
+            text: input.text,
+            attachments: [],
+          },
+          // A supervisor instruction is never an interrupt. On an idle thread
+          // the queue releases it immediately; mid-turn it waits for the turn
+          // rather than cutting into the worker's current thought.
+          dispatchTiming: "after-current-turn",
+          queuedAfterActivityId: null,
+          createdAt: DateTime.formatIso(yield* DateTime.now),
+        });
+        return { topicId: topic.id, threadId: destination.id, queuedMessageId };
       }),
   });
 });

@@ -81,10 +81,19 @@ generic resolved flag. Existing stored decisions and events decode with a null
 selection for backward compatibility. After a successful resolve or cancel
 receipt, the web client refreshes the authoritative environment shell once. This
 keeps the inbox consistent with older or reconnecting shell subscriptions
-without adding a polling loop. The inbox intentionally does not invent provider
-replies: delivering the recorded answer into a provider approval, user-input
-request, or a new agent turn belongs to deterministic routing and must be
-fail-closed when the source cannot be mapped exactly.
+without adding a polling loop.
+
+Delivering that answer is a separate, fail-closed step owned by
+`FirstMateDecisionDeliveryReactor`. A decision a supervisor opened names the
+asking thread in its source, so the answer is queued back on that thread as an
+ordinary message and drains with or without a connected client. A decision whose
+source is a native `user-input` or `approval` request is never answered this way:
+the source carries a provider request id and no thread, and its options are free
+text rather than `ProviderApprovalDecision` values, so no exact mapping exists.
+Approximating one could authorize work the user did not authorize, so those
+requests stay pending on their own thread for a native answer. Every other
+unmappable source — an imported decision, a deleted or archived asker, an option
+id that is not in the decision — is refused and logged rather than guessed.
 
 ## Deterministic topic routing
 
@@ -108,8 +117,11 @@ is no separate unlink command.
 
 ## Supervisor tools over MCP
 
-The supervisor creates topics, updates and delegates them, and opens decisions
-through the `firstMate` MCP toolkit. Effect's MCP server registers toolkits once
+The supervisor creates topics, updates and delegates them, opens decisions, and
+sends messages to a delegated topic's thread through the `firstMate` MCP
+toolkit. A sent message is addressed by topic, never by a thread id the agent
+supplies, so the toolkit cannot reach a thread the user's own topics do not
+point at. Effect's MCP server registers toolkits once
 for the whole process, so these tools are listed on every thread and cannot be
 filtered per session. They are instead gated inside each handler on the live
 `supervisorThreadId` of the invoking thread's project, which is deliberately not
