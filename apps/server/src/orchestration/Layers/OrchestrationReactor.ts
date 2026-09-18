@@ -14,6 +14,7 @@ import { ThreadQueuedMessageReactor } from "../Services/ThreadQueuedMessageReact
 import * as ThreadSettlementReactor from "../ThreadSettlementReactor.ts";
 import * as PullRequestSyncReactor from "../PullRequestSyncReactor.ts";
 import * as ThreadPullRequestReactor from "../ThreadPullRequestReactor.ts";
+import * as FirstMateRoundSummaryReactor from "../FirstMateRoundSummaryReactor.ts";
 import * as AgentAwarenessRelay from "../../relay/AgentAwarenessRelay.ts";
 
 export const makeOrchestrationReactor = Effect.gen(function* () {
@@ -26,6 +27,8 @@ export const makeOrchestrationReactor = Effect.gen(function* () {
   const threadSettlementReactor = yield* ThreadSettlementReactor.ThreadSettlementReactor;
   const pullRequestSyncReactor = yield* PullRequestSyncReactor.PullRequestSyncReactor;
   const threadPullRequestReactor = yield* ThreadPullRequestReactor.ThreadPullRequestReactor;
+  const firstMateRoundSummaryReactor =
+    yield* FirstMateRoundSummaryReactor.FirstMateRoundSummaryReactor;
   const agentAwarenessRelay = yield* AgentAwarenessRelay.AgentAwarenessRelay;
 
   const start: OrchestrationReactorShape["start"] = Effect.fn("start")(function* () {
@@ -38,6 +41,7 @@ export const makeOrchestrationReactor = Effect.gen(function* () {
     yield* threadPullRequestReactor.start();
     yield* threadSettlementReactor.start();
     yield* pullRequestSyncReactor.start();
+    yield* firstMateRoundSummaryReactor.start();
     yield* agentAwarenessRelay.start();
   });
 

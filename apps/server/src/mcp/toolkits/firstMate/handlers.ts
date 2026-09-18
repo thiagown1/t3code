@@ -82,6 +82,7 @@ function listTopics(
     topics: matching.slice(0, FIRST_MATE_TOPIC_LIST_LIMIT).map((topic) => ({
       ...topicResult(topic),
       pendingDecisionCount: pendingCountByTopic.get(topic.id) ?? 0,
+      lastRoundSummary: topic.latestRoundSummary?.text ?? null,
     })),
     pendingDecisions: pending.slice(0, FIRST_MATE_TOPIC_LIST_LIMIT).map((decision) => ({
       decisionId: decision.id,

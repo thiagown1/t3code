@@ -384,6 +384,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     case "firstmate.topic.select":
     case "firstmate.topic.update":
     case "firstmate.topic.delegate":
+    case "firstmate.topic.record-round-summary":
     case "firstmate.routing-evaluation-mode.set":
     case "firstmate.routing.record":
     case "firstmate.decision.open":

@@ -77,6 +77,23 @@ export interface ThreadTitleGenerationResult {
   needsRefinement?: boolean | undefined;
 }
 
+export interface RoundSummaryGenerationInput {
+  cwd: string;
+  /** What the topic must achieve, as its author described it. */
+  topicTitle: string;
+  topicSummary: string;
+  /** Bounded transcript of the single round being summarized. */
+  transcript: string;
+  policy?: TextGenerationPolicy | undefined;
+  /** What model and provider to use for generation. */
+  modelSelection: ModelSelection;
+}
+
+export interface RoundSummaryGenerationResult {
+  /** Empty when the model returned nothing usable. */
+  summary: string;
+}
+
 /**
  * TextGeneration - Service tag for commit and change request text generation.
  */
@@ -108,6 +125,14 @@ export class TextGeneration extends Context.Service<
     readonly generateThreadTitle: (
       input: ThreadTitleGenerationInput,
     ) => Effect.Effect<ThreadTitleGenerationResult, TextGenerationError>;
+
+    /**
+     * Summarize one finished round of a delegated thread for an orchestrator.
+     * Runs on the project's text generation model, not the thread's.
+     */
+    readonly generateRoundSummary: (
+      input: RoundSummaryGenerationInput,
+    ) => Effect.Effect<RoundSummaryGenerationResult, TextGenerationError>;
   }
 >()("t3/textGeneration/TextGeneration") {}
 
@@ -115,7 +140,8 @@ type TextGenerationOp =
   | "generateCommitMessage"
   | "generatePrContent"
   | "generateBranchName"
-  | "generateThreadTitle";
+  | "generateThreadTitle"
+  | "generateRoundSummary";
 
 const resolveInstance = (
   registry: ProviderInstanceRegistry.ProviderInstanceRegistry["Service"],
@@ -167,6 +193,10 @@ export const make = Effect.gen(function* () {
             return yield* textGeneration.generateThreadTitle({ ...input, linkedContext });
           }),
         ),
+      ),
+    generateRoundSummary: (input) =>
+      resolveInstance(registry, "generateRoundSummary", input.modelSelection.instanceId).pipe(
+        Effect.flatMap((textGeneration) => textGeneration.generateRoundSummary(input)),
       ),
   });
 });

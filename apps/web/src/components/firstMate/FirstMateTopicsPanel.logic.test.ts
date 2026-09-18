@@ -108,6 +108,7 @@ const workspace: NonNullable<EnvironmentProject["firstMate"]> = {
       stage: "completed",
       threadId,
       responsibleAgentId: "firstmate",
+      latestRoundSummary: null,
       createdAt: now,
       updatedAt: now,
       completedAt: now,

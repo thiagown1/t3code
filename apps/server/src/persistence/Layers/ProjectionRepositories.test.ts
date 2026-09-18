@@ -356,6 +356,7 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
             stage: "testing" as const,
             threadId: null,
             responsibleAgentId: null,
+            latestRoundSummary: null,
             createdAt: now,
             updatedAt: now,
             completedAt: null,

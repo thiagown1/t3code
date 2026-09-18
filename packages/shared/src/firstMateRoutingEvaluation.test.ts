@@ -39,6 +39,7 @@ function topic(input: {
     stage: "implementation",
     threadId: input.threadId === undefined ? ThreadId.make(`worker-${input.id}`) : input.threadId,
     responsibleAgentId: "firstmate",
+    latestRoundSummary: null,
     createdAt: now,
     updatedAt: now,
     completedAt: null,

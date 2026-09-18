@@ -5,6 +5,7 @@ import {
   ProjectId,
   ProviderInstanceId,
   ThreadId,
+  TurnId,
   type FirstMateDecision,
   type FirstMateTopic,
   type FirstMateWorkspaceState,
@@ -60,6 +61,7 @@ function makeTopic(overrides: Partial<FirstMateTopic> = {}): FirstMateTopic {
     stage: "research",
     threadId: null,
     responsibleAgentId: null,
+    latestRoundSummary: null,
     createdAt: NOW,
     updatedAt: NOW,
     completedAt: null,
@@ -375,7 +377,16 @@ describe("FirstMate toolkit handlers", () => {
           // Selected work often finishes before the user picks the next topic.
           selectedTopicId: doneTopicId,
           topics: [
-            makeTopic({ responsibleAgentId: "codex", threadId: WORKER_THREAD_ID }),
+            makeTopic({
+              responsibleAgentId: "codex",
+              threadId: WORKER_THREAD_ID,
+              latestRoundSummary: {
+                threadId: WORKER_THREAD_ID,
+                turnId: TurnId.make("turn-3"),
+                text: "Added the limiter; the Windows integration test still fails.",
+                generatedAt: NOW,
+              },
+            }),
             makeTopic({
               id: laterTopicId,
               title: "Session limits",
@@ -405,8 +416,13 @@ describe("FirstMate toolkit handlers", () => {
         threadId: WORKER_THREAD_ID,
         responsibleAgentId: "codex",
         pendingDecisionCount: 1,
+        // The authored description and the last round's outcome are separate
+        // facts; the supervisor reads both without opening the thread.
+        summary: "Decide how auth rate limits behave.",
+        lastRoundSummary: "Added the limiter; the Windows integration test still fails.",
       });
       expect(result.topics[0]?.pendingDecisionCount).toBe(1);
+      expect(result.topics[0]?.lastRoundSummary).toBeNull();
       // Resolved decisions are gone and the blocking one is reported first.
       expect(result.pendingDecisions).toEqual([
         {

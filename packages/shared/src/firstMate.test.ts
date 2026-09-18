@@ -5,6 +5,7 @@ import {
   MessageId,
   ProjectId,
   ThreadId,
+  TurnId,
   type FirstMateCommand,
   type FirstMateTopic,
   type FirstMateTopicRuntimeFacts,
@@ -195,6 +196,77 @@ describe("FirstMate domain", () => {
         }),
       ),
     ).toEqual({ accepted: false, reason: "decision-option-not-found" });
+  });
+
+  it("records one round summary per turn without touching the authored summary", () => {
+    let state = createEmptyFirstMateWorkspace(projectId, "2026-09-14T19:00:00.000Z");
+    state = accept(state, topicCreate());
+
+    const record = (turn: string, text: string, createdAt: string): FirstMateCommand =>
+      command({
+        type: "firstmate.topic.record-round-summary",
+        topicId,
+        threadId: ThreadId.make("thread-1"),
+        turnId: TurnId.make(turn),
+        text,
+        createdAt,
+      });
+
+    state = accept(
+      state,
+      record("turn-1", "Added the capacity probe; no tests run.", "2026-09-14T21:00:00.000Z"),
+    );
+    const topic = state.topics[0]!;
+    expect(topic.latestRoundSummary).toEqual({
+      threadId: ThreadId.make("thread-1"),
+      turnId: TurnId.make("turn-1"),
+      text: "Added the capacity probe; no tests run.",
+      generatedAt: "2026-09-14T21:00:00.000Z",
+    });
+    // The authored description is what the topic must achieve and is never
+    // overwritten by what a round happened to produce.
+    expect(topic.summary).toBe("Show capacity across connected environments.");
+    expect(topic.updatedAt).toBe("2026-09-14T21:00:00.000Z");
+
+    expect(
+      decideFirstMateCommand(
+        state,
+        record("turn-1", "Re-summarized the same round.", "2026-09-14T22:00:00.000Z"),
+      ),
+    ).toEqual({ accepted: false, reason: "round-summary-already-recorded" });
+
+    state = accept(
+      state,
+      record("turn-2", "Probe still fails on Windows.", "2026-09-14T22:00:00.000Z"),
+    );
+    expect(state.topics[0]?.latestRoundSummary?.text).toBe("Probe still fails on Windows.");
+  });
+
+  it("rejects a summary for a thread the topic no longer owns", () => {
+    let state = createEmptyFirstMateWorkspace(projectId, "2026-09-14T19:00:00.000Z");
+    state = accept(state, topicCreate());
+    state = accept(
+      state,
+      command({
+        type: "firstmate.topic.delegate",
+        topicId,
+        threadId: ThreadId.make("thread-2"),
+        responsibleAgentId: "agent-1",
+      }),
+    );
+
+    expect(
+      decideFirstMateCommand(
+        state,
+        command({
+          type: "firstmate.topic.record-round-summary",
+          topicId,
+          threadId: ThreadId.make("thread-1"),
+          turnId: TurnId.make("turn-1"),
+          text: "Stale round from the previous thread.",
+        }),
+      ),
+    ).toEqual({ accepted: false, reason: "round-summary-thread-mismatch" });
   });
 });
 
@@ -481,6 +553,7 @@ const baseTopic: FirstMateTopic = {
   stage: "completed",
   threadId: ThreadId.make("thread-1"),
   responsibleAgentId: "agent-1",
+  latestRoundSummary: null,
   createdAt: "2026-09-14T19:00:00.000Z",
   updatedAt: "2026-09-14T20:00:00.000Z",
   completedAt: "2026-09-14T20:00:00.000Z",
