@@ -221,6 +221,10 @@ export const FIRST_MATE_TOPIC_LIST_LIMIT = 50;
 export const FirstMateTopicListEntry = Schema.Struct({
   ...FirstMateTopicResult.fields,
   pendingDecisionCount: Schema.Int,
+  lastRoundSummary: Schema.NullOr(Schema.String).annotate({
+    description:
+      "What the delegated thread's last finished round produced, written by the summary model. Null until a round finishes, and never a substitute for summary, which is what the topic must achieve.",
+  }),
 });
 export type FirstMateTopicListEntry = typeof FirstMateTopicListEntry.Type;
 

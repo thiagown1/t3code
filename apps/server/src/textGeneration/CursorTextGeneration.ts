@@ -15,11 +15,13 @@ import {
   buildBranchNamePrompt,
   buildCommitMessagePrompt,
   buildPrContentPrompt,
+  buildRoundSummaryPrompt,
   buildThreadTitlePrompt,
 } from "./TextGenerationPrompts.ts";
 import {
   sanitizeCommitSubject,
   sanitizePrTitle,
+  sanitizeRoundSummary,
   sanitizeThreadTitle,
 } from "./TextGenerationUtils.ts";
 import {
@@ -54,7 +56,8 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
       | "generateCommitMessage"
       | "generatePrContent"
       | "generateBranchName"
-      | "generateThreadTitle";
+      | "generateThreadTitle"
+      | "generateRoundSummary";
     cwd: string;
     prompt: string;
     outputSchemaJson: S;
@@ -261,10 +264,33 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
       } satisfies TextGeneration.ThreadTitleGenerationResult;
     });
 
+  const generateRoundSummary: TextGeneration.TextGeneration["Service"]["generateRoundSummary"] =
+    Effect.fn("CursorTextGeneration.generateRoundSummary")(function* (input) {
+      const { prompt, outputSchema } = buildRoundSummaryPrompt({
+        topicTitle: input.topicTitle,
+        topicSummary: input.topicSummary,
+        transcript: input.transcript,
+        policy: input.policy,
+      });
+
+      const generated = yield* runCursorJson({
+        operation: "generateRoundSummary",
+        cwd: input.cwd,
+        prompt,
+        outputSchemaJson: outputSchema,
+        modelSelection: input.modelSelection,
+      });
+
+      return {
+        summary: sanitizeRoundSummary(generated.summary),
+      } satisfies TextGeneration.RoundSummaryGenerationResult;
+    });
+
   return {
     generateCommitMessage,
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
+    generateRoundSummary,
   } satisfies TextGeneration.TextGeneration["Service"];
 });

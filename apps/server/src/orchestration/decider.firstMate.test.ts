@@ -74,6 +74,7 @@ it.layer(NodeServices.layer)("FirstMate orchestration decider", (it) => {
           stage: "implementation",
           threadId: null,
           responsibleAgentId: "firstmate",
+          latestRoundSummary: null,
           createdAt: now,
           updatedAt: now,
           completedAt: null,

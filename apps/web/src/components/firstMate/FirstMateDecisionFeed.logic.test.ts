@@ -68,6 +68,7 @@ function project(supervisor: ThreadId | null): EnvironmentProject {
           stage: "planning",
           threadId: workerThreadId,
           responsibleAgentId: "codex",
+          latestRoundSummary: null,
           createdAt: now,
           updatedAt: now,
           completedAt: null,

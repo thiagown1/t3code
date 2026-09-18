@@ -33,6 +33,7 @@ const project: EnvironmentProject = {
         stage: "implementation",
         threadId: ThreadId.make("worker"),
         responsibleAgentId: "firstmate",
+        latestRoundSummary: null,
         createdAt: now,
         updatedAt: now,
         completedAt: null,

@@ -48,6 +48,7 @@ function project(
           stage: "implementation",
           threadId,
           responsibleAgentId: "firstmate",
+          latestRoundSummary: null,
           createdAt: now,
           updatedAt: now,
           completedAt: null,

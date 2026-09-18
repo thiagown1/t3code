@@ -355,6 +355,7 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-firstmate-pipel
               stage: "completed",
               threadId: null,
               responsibleAgentId: null,
+              latestRoundSummary: null,
               createdAt,
               updatedAt: createdAt,
               completedAt: createdAt,

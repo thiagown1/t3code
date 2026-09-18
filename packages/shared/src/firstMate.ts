@@ -22,7 +22,9 @@ export type FirstMateCommandRejection =
   | "decision-option-not-found"
   | "routing-already-recorded"
   | "routing-source-not-supervisor"
-  | "routing-destination-mismatch";
+  | "routing-destination-mismatch"
+  | "round-summary-already-recorded"
+  | "round-summary-thread-mismatch";
 
 const FIRST_MATE_ROUTING_RECEIPT_LIMIT = 50;
 
@@ -92,6 +94,7 @@ export function decideFirstMateCommand(
               stage: command.stage,
               threadId: command.threadId,
               responsibleAgentId: command.responsibleAgentId,
+              latestRoundSummary: null,
               createdAt: command.createdAt,
               updatedAt: command.createdAt,
               completedAt: command.stage === "completed" ? command.createdAt : null,
@@ -143,6 +146,33 @@ export function decideFirstMateCommand(
             topicId: command.topicId,
             threadId: command.threadId,
             responsibleAgentId: command.responsibleAgentId,
+            occurredAt: command.createdAt,
+          },
+        ],
+      };
+
+    case "firstmate.topic.record-round-summary":
+      if (!topic) return reject("topic-not-found");
+      // A round summary is evidence about one thread. Once the topic is
+      // delegated elsewhere, a summary still in flight for the old thread
+      // describes work this topic no longer owns.
+      if (topic.threadId !== command.threadId) return reject("round-summary-thread-mismatch");
+      if (topic.latestRoundSummary?.turnId === command.turnId) {
+        return reject("round-summary-already-recorded");
+      }
+      return {
+        accepted: true,
+        events: [
+          {
+            type: "firstmate.topic-round-summary-recorded",
+            projectId: command.projectId,
+            topicId: command.topicId,
+            summary: {
+              threadId: command.threadId,
+              turnId: command.turnId,
+              text: command.text,
+              generatedAt: command.createdAt,
+            },
             occurredAt: command.createdAt,
           },
         ],
@@ -317,6 +347,19 @@ export function projectFirstMateEvent(
           ...topic,
           threadId: event.threadId,
           responsibleAgentId: event.responsibleAgentId,
+          updatedAt: event.occurredAt,
+        })),
+        updatedAt: event.occurredAt,
+      };
+
+    // A finished round is activity on the topic, so the bumped `updatedAt`
+    // keeps recently worked topics at the top of the supervisor's listing.
+    case "firstmate.topic-round-summary-recorded":
+      return {
+        ...state,
+        topics: updateTopic(state.topics, event.topicId, (topic) => ({
+          ...topic,
+          latestRoundSummary: event.summary,
           updatedAt: event.occurredAt,
         })),
         updatedAt: event.occurredAt,

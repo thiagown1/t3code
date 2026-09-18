@@ -69,6 +69,7 @@ const project: EnvironmentProject = {
         stage: "implementation",
         threadId: delegatedThreadId,
         responsibleAgentId: "firstmate",
+        latestRoundSummary: null,
         createdAt: now,
         updatedAt: now,
         completedAt: null,

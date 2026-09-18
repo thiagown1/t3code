@@ -74,6 +74,23 @@ export function sanitizeThreadTitle(raw: string): string {
   return `${normalized.slice(0, MAX_THREAD_TITLE_CHARS - 3).trimEnd()}...`;
 }
 
+// The prompt asks for under 600 characters. This cap only stops a runaway
+// model from pushing a transcript into the supervisor's topic listing.
+const MAX_ROUND_SUMMARY_CHARS = 1_000;
+
+/**
+ * Normalise a generated round summary to one bounded paragraph. Returns an
+ * empty string when the model produced nothing; callers treat that as "no
+ * summary" rather than recording a blank one.
+ */
+export function sanitizeRoundSummary(raw: string): string {
+  const normalized = raw.trim().replace(/\s+/g, " ");
+  if (normalized.length <= MAX_ROUND_SUMMARY_CHARS) {
+    return normalized;
+  }
+  return `${normalized.slice(0, MAX_ROUND_SUMMARY_CHARS - 3).trimEnd()}...`;
+}
+
 /** CLI name to human-readable label, e.g. "codex" → "Codex CLI (`codex`)" */
 function cliLabel(cliName: string): string {
   const capitalized = cliName.charAt(0).toUpperCase() + cliName.slice(1);
