@@ -4,13 +4,13 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 
 import { runMigrations } from "../Migrations.ts";
-import migrateFirstMate from "./053_ProjectionProjectsFirstMate.ts";
+import migrateFirstMate from "./901_ProjectionProjectsFirstMate.ts";
 
-it.layer(NodeSqliteClient.layerMemory())("053_ProjectionProjectsFirstMate", (it) => {
+it.layer(NodeSqliteClient.layerMemory())("901_ProjectionProjectsFirstMate", (it) => {
   it.effect("adds nullable FirstMate state without inventing data for existing projects", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations({ toMigrationInclusive: 52 });
+      yield* runMigrations({ toMigrationInclusive: 900 });
       const now = "2026-09-14T00:00:00.000Z";
       yield* sql`
         INSERT INTO projection_projects (
@@ -18,7 +18,7 @@ it.layer(NodeSqliteClient.layerMemory())("053_ProjectionProjectsFirstMate", (it)
         ) VALUES ('project-1', 'Existing project', 'C:/workspace', '[]', ${now}, ${now})
       `;
 
-      yield* runMigrations({ toMigrationInclusive: 53 });
+      yield* runMigrations({ toMigrationInclusive: 901 });
       const migrated = yield* sql<{ readonly firstMate: string | null }>`
         SELECT firstmate_json AS "firstMate"
         FROM projection_projects WHERE project_id = 'project-1'

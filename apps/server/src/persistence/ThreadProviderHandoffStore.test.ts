@@ -17,7 +17,7 @@ import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
-import migration from "./Migrations/056_ThreadProviderHandoffs.ts";
+import migration from "./Migrations/903_ThreadProviderHandoffs.ts";
 import {
   layer as ThreadProviderHandoffStoreLive,
   ThreadProviderHandoffStore,

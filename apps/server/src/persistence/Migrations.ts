@@ -1,15 +1,24 @@
 /**
- * Migration runner with an inline loader.
+ * Migration manifest.
  *
- * Uses Migrator.make with fromRecord to define migrations inline.
  * All migrations are statically imported - no dynamic file system loading.
  *
  * `runMigrations` is called by the SQLite persistence layer at startup, so the
  * schema is always up to date before the application starts.
+ *
+ * Ids below `FORK_MIGRATION_ID_FLOOR` are upstream's and must keep upstream's
+ * numbering; migrations that only exist in this fork are numbered from that
+ * floor up. `MigrationLedger.ts` explains why, and owns the runner that makes
+ * the split work.
  */
 
-import * as Migrator from "effect/unstable/sql/Migrator";
 import * as Effect from "effect/Effect";
+
+import {
+  FORK_MIGRATION_ID_FLOOR,
+  runPendingMigrations,
+  type MigrationEntry,
+} from "./MigrationLedger.ts";
 
 // Import all migrations statically
 import Migration0001 from "./Migrations/001_OrchestrationEvents.ts";
@@ -63,24 +72,18 @@ import Migration0048 from "./Migrations/048_ProjectionThreadBranchPullRequest.ts
 import Migration0049 from "./Migrations/049_ProjectionThreadsActiveOrderKey.ts";
 import Migration0050 from "./Migrations/050_ProjectionThreadPullRequests.ts";
 import Migration0051 from "./Migrations/051_ProjectionThreadMessageContext.ts";
-import Migration0052 from "./Migrations/052_ProjectionThreadsDeliveryStatus.ts";
-import Migration0053 from "./Migrations/053_ProjectionProjectsFirstMate.ts";
-import Migration0054 from "./Migrations/054_ProjectionThreadTitleState.ts";
-import Migration0055 from "./Migrations/055_ProjectionThreadsDeliveryStatusReconciliation.ts";
-import Migration0057 from "./Migrations/057_PullRequestSupervision.ts";
-import Migration0056 from "./Migrations/056_ThreadProviderHandoffs.ts";
+import Migration0052 from "./Migrations/052_ProjectionThreadTitleState.ts";
+import Migration0900 from "./Migrations/900_ProjectionThreadsDeliveryStatus.ts";
+import Migration0901 from "./Migrations/901_ProjectionProjectsFirstMate.ts";
+import Migration0902 from "./Migrations/902_ProjectionThreadsDeliveryStatusReconciliation.ts";
+import Migration0903 from "./Migrations/903_ThreadProviderHandoffs.ts";
+import Migration0904 from "./Migrations/904_PullRequestSupervision.ts";
 
 /**
- * Migration loader with all migrations defined inline.
- *
- * Key format: "{id}_{name}" where:
- * - id: numeric migration ID (determines execution order)
- * - name: descriptive name for the migration
- *
- * Uses Migrator.fromRecord which parses the key format and
- * returns migrations sorted by ID.
+ * Every migration, in execution order. The id is what the ledger records; the
+ * name identifies it when an old ledger row has to be recognised.
  */
-const migrationEntries = [
+const migrationEntries: ReadonlyArray<MigrationEntry> = [
   [1, "OrchestrationEvents", Migration0001],
   [2, "OrchestrationCommandReceipts", Migration0002],
   [3, "CheckpointDiffBlobs", Migration0003],
@@ -132,40 +135,31 @@ const migrationEntries = [
   [49, "ProjectionThreadsActiveOrderKey", Migration0049],
   [50, "ProjectionThreadPullRequests", Migration0050],
   [51, "ProjectionThreadMessageContext", Migration0051],
-  [52, "ProjectionThreadsDeliveryStatus", Migration0052],
-  [53, "ProjectionProjectsFirstMate", Migration0053],
-  [54, "ProjectionThreadTitleState", Migration0054],
-  [55, "ProjectionThreadsDeliveryStatusReconciliation", Migration0055],
-  [56, "ThreadProviderHandoffs", Migration0056],
-  [57, "PullRequestSupervision", Migration0057],
-] as const;
+  [52, "ProjectionThreadTitleState", Migration0052],
+  // Fork-only migrations. Reserved range - see MigrationLedger.ts.
+  [900, "ProjectionThreadsDeliveryStatus", Migration0900],
+  [901, "ProjectionProjectsFirstMate", Migration0901],
+  [902, "ProjectionThreadsDeliveryStatusReconciliation", Migration0902],
+  [903, "ThreadProviderHandoffs", Migration0903],
+  [904, "PullRequestSupervision", Migration0904],
+];
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
 
-const makeMigrationLoader = (throughId?: number) =>
-  Migrator.fromRecord(
-    Object.fromEntries(
-      migrationEntries
-        .filter(([id]) => throughId === undefined || id <= throughId)
-        .map(([id, name, migration]) => [`${id}_${name}`, migration]),
-    ),
-  );
-
-/**
- * Migrator run function - no schema dumping needed
- * Uses the base Migrator.make without platform dependencies
- */
-const run = Migrator.make({});
-
 export interface RunMigrationsOptions {
+  /**
+   * Stop after this id. Tests use it to stage a database at an older schema;
+   * `FORK_MIGRATION_ID_FLOOR - 1` means "all of upstream, none of the fork".
+   */
   readonly toMigrationInclusive?: number | undefined;
 }
 
 /**
  * Run all pending migrations.
  *
- * Creates the migrations tracking table (effect_sql_migrations) if it doesn't exist,
- * then runs any migrations with ID greater than the latest recorded migration.
+ * Creates the migrations tracking table (effect_sql_migrations) if it doesn't
+ * exist, reconciles legacy ids, then runs everything its lane's watermark has
+ * not passed.
  *
  * Returns array of [id, name] tuples for migrations that were run.
  *
@@ -174,10 +168,16 @@ export interface RunMigrationsOptions {
 export const runMigrations = Effect.fn("runMigrations")(function* ({
   toMigrationInclusive,
 }: RunMigrationsOptions = {}) {
-  const executedMigrations = yield* run({ loader: makeMigrationLoader(toMigrationInclusive) });
+  const executedMigrations = yield* runPendingMigrations(
+    migrationEntries.filter(
+      ([id]) => toMigrationInclusive === undefined || id <= toMigrationInclusive,
+    ),
+  );
   const migrations = executedMigrations.map(([id, name]) => `${id}_${name}`);
   yield* migrations.length === 0
     ? Effect.logDebug("Database schema is current")
     : Effect.log("Migrations ran successfully").pipe(Effect.annotateLogs({ migrations }));
   return executedMigrations;
 });
+
+export { FORK_MIGRATION_ID_FLOOR };

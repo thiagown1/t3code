@@ -3,14 +3,14 @@ import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 
-import { runMigrations } from "../Migrations.ts";
-import migrateDeliveryStatus from "./052_ProjectionThreadsDeliveryStatus.ts";
+import { FORK_MIGRATION_ID_FLOOR, runMigrations } from "../Migrations.ts";
+import migrateDeliveryStatus from "./900_ProjectionThreadsDeliveryStatus.ts";
 
-it.layer(NodeSqliteClient.layerMemory())("052_ProjectionThreadsDeliveryStatus", (it) => {
+it.layer(NodeSqliteClient.layerMemory())("900_ProjectionThreadsDeliveryStatus", (it) => {
   it.effect("adds an empty delivery gate without changing existing thread timestamps", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations({ toMigrationInclusive: 51 });
+      yield* runMigrations({ toMigrationInclusive: FORK_MIGRATION_ID_FLOOR - 1 });
       const now = "2026-09-14T00:00:00.000Z";
       yield* sql`
         INSERT INTO projection_threads (
@@ -22,7 +22,7 @@ it.layer(NodeSqliteClient.layerMemory())("052_ProjectionThreadsDeliveryStatus", 
         )
       `;
 
-      yield* runMigrations({ toMigrationInclusive: 52 });
+      yield* runMigrations({ toMigrationInclusive: 900 });
       const migrated = yield* sql<{
         readonly deliveryStatus: string | null;
         readonly createdAt: string;

@@ -7,18 +7,18 @@ import { runMigrations } from "../Migrations.ts";
 
 const HASH = "a".repeat(64);
 
-it.layer(NodeSqliteClient.layerMemory())("056_ThreadProviderHandoffs", (it) => {
+it.layer(NodeSqliteClient.layerMemory())("903_ThreadProviderHandoffs", (it) => {
   it.effect("creates durable handoff tables with active-thread and envelope constraints", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
       yield* sql`PRAGMA foreign_keys = ON`;
-      yield* runMigrations({ toMigrationInclusive: 55 });
-      const migrated = yield* runMigrations({ toMigrationInclusive: 56 });
+      yield* runMigrations({ toMigrationInclusive: 902 });
+      const migrated = yield* runMigrations({ toMigrationInclusive: 903 });
       assert.deepEqual(
         migrated.map(([id]) => id),
-        [56],
+        [903],
       );
-      assert.deepEqual(yield* runMigrations({ toMigrationInclusive: 56 }), []);
+      assert.deepEqual(yield* runMigrations({ toMigrationInclusive: 903 }), []);
 
       const tables = yield* sql<{ readonly name: string }>`
         SELECT name

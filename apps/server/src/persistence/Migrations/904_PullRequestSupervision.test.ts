@@ -3,7 +3,7 @@ import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import { runMigrations } from "../Migrations.ts";
-import migration from "./057_PullRequestSupervision.ts";
+import migration from "./904_PullRequestSupervision.ts";
 import { ThreadId } from "@t3tools/contracts";
 import { make as makeRepository } from "../ProjectionThreadPullRequests.ts";
 
@@ -11,7 +11,7 @@ it.layer(NodeSqliteClient.layerMemory())("PR supervision migration", (it) => {
   it.effect("adds nullable state and preserves it on repeated migration", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations({ toMigrationInclusive: 56 });
+      yield* runMigrations({ toMigrationInclusive: 903 });
       const before = yield* sql<{
         name: string;
       }>`PRAGMA table_info(projection_thread_pull_requests)`;

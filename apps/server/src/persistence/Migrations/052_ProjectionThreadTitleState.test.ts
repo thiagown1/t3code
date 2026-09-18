@@ -5,11 +5,11 @@ import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 
 import { runMigrations } from "../Migrations.ts";
 
-it.layer(NodeSqliteClient.layerMemory())("054_ProjectionThreadTitleState", (it) => {
-  it.effect("adds nullable title state after the fork migrations", () =>
+it.layer(NodeSqliteClient.layerMemory())("052_ProjectionThreadTitleState", (it) => {
+  it.effect("adds nullable title state", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations({ toMigrationInclusive: 53 });
+      yield* runMigrations({ toMigrationInclusive: 51 });
       const now = "2026-09-15T00:00:00.000Z";
       yield* sql`
         INSERT INTO projection_threads (
@@ -21,7 +21,7 @@ it.layer(NodeSqliteClient.layerMemory())("054_ProjectionThreadTitleState", (it) 
         )
       `;
 
-      yield* runMigrations({ toMigrationInclusive: 54 });
+      yield* runMigrations({ toMigrationInclusive: 52 });
       const migrated = yield* sql<{ readonly titleState: string | null }>`
         SELECT title_state_json AS "titleState"
         FROM projection_threads WHERE thread_id = 'thread-1'
