@@ -10,6 +10,7 @@ import { ProviderCommandReactor } from "../Services/ProviderCommandReactor.ts";
 import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeIngestion.ts";
 import { ThreadDeletionReactor } from "../Services/ThreadDeletionReactor.ts";
 import { ThreadArchiveReactor } from "../Services/ThreadArchiveReactor.ts";
+import { ThreadQueuedMessageReactor } from "../Services/ThreadQueuedMessageReactor.ts";
 import * as ThreadSettlementReactor from "../ThreadSettlementReactor.ts";
 import * as PullRequestSyncReactor from "../PullRequestSyncReactor.ts";
 import * as ThreadPullRequestReactor from "../ThreadPullRequestReactor.ts";
@@ -32,6 +33,15 @@ describe("OrchestrationReactor", () => {
 
     runtime = ManagedRuntime.make(
       Layer.effect(OrchestrationReactor, makeOrchestrationReactor).pipe(
+        Layer.provideMerge(
+          Layer.succeed(ThreadQueuedMessageReactor, {
+            start: () => {
+              started.push("thread-queued-message-reactor");
+              return Effect.void;
+            },
+            drain: Effect.void,
+          }),
+        ),
         Layer.provideMerge(
           Layer.succeed(ProviderRuntimeIngestionService, {
             start: () => {
@@ -126,6 +136,7 @@ describe("OrchestrationReactor", () => {
       "checkpoint-reactor",
       "thread-deletion-reactor",
       "thread-archive-reactor",
+      "thread-queued-message-reactor",
       "thread-pull-request-reactor",
       "thread-settlement-reactor",
       "pull-request-sync-reactor",

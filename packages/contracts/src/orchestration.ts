@@ -27,6 +27,7 @@ import {
   ProjectId,
   ProviderItemId,
   ThreadId,
+  ThreadQueuedMessageId,
   TrimmedNonEmptyString,
   TrimmedString,
   TurnId,
@@ -1453,6 +1454,132 @@ const ClientThreadTurnStartCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+/**
+ * Composer messages the user sent while a turn was running. The server owns
+ * the queue so it drains whether or not the client that queued it is still
+ * looking at the thread — or connected at all. Entries are recorded as thread
+ * activities and folded back into pending state the same way approval and
+ * user-input requests are (see `foldThreadQueuedMessages`).
+ */
+export const THREAD_QUEUED_MESSAGE_ACTIVITY_KINDS = {
+  enqueued: "thread.queued-message.enqueued",
+  closed: "thread.queued-message.closed",
+  held: "thread.queued-message.held",
+  released: "thread.queued-message.released",
+} as const;
+
+/**
+ * `next-boundary` leaves on the first tool call that finishes after queueing,
+ * so a steer lands at a natural pause. `after-current-turn` waits for the turn.
+ */
+export const ThreadQueuedMessageDispatchTiming = Schema.Literals([
+  "next-boundary",
+  "after-current-turn",
+]);
+export type ThreadQueuedMessageDispatchTiming = typeof ThreadQueuedMessageDispatchTiming.Type;
+
+export const ThreadQueuedMessageCloseReason = Schema.Literals([
+  "dispatched",
+  "canceled",
+  "interrupted",
+  "undeliverable",
+]);
+export type ThreadQueuedMessageCloseReason = typeof ThreadQueuedMessageCloseReason.Type;
+
+const ThreadQueuedMessageBody = Schema.Struct({
+  messageId: MessageId,
+  role: Schema.Literal("user"),
+  text: Schema.String,
+  attachments: Schema.Array(ChatAttachment),
+  context: Schema.optional(OrchestrationMessageContext),
+});
+
+export const ThreadQueuedMessageEnqueuedActivityPayload = Schema.Struct({
+  /**
+   * Carried in the payload so the queue reactor can rebuild every thread's
+   * queue at startup from one activity-by-kind read, without hydrating threads.
+   */
+  threadId: ThreadId,
+  queuedMessageId: ThreadQueuedMessageId,
+  message: ThreadQueuedMessageBody,
+  dispatchTiming: ThreadQueuedMessageDispatchTiming,
+  /**
+   * Newest completed tool activity when the message was queued. A different
+   * newest id later is the boundary the message goes out on.
+   */
+  queuedAfterActivityId: Schema.NullOr(EventId),
+  modelSelection: Schema.optional(ModelSelection),
+  titleSeed: Schema.optional(TrimmedNonEmptyString),
+  createdAt: IsoDateTime,
+});
+export type ThreadQueuedMessageEnqueuedActivityPayload =
+  typeof ThreadQueuedMessageEnqueuedActivityPayload.Type;
+
+export const ThreadQueuedMessageClosedActivityPayload = Schema.Struct({
+  queuedMessageId: ThreadQueuedMessageId,
+  reason: ThreadQueuedMessageCloseReason,
+});
+export type ThreadQueuedMessageClosedActivityPayload =
+  typeof ThreadQueuedMessageClosedActivityPayload.Type;
+
+/** A queued message whose dispatch failed. It keeps its place but waits for Send now. */
+export const ThreadQueuedMessageHeldActivityPayload = Schema.Struct({
+  queuedMessageId: ThreadQueuedMessageId,
+  detail: Schema.String,
+});
+export type ThreadQueuedMessageHeldActivityPayload =
+  typeof ThreadQueuedMessageHeldActivityPayload.Type;
+
+/** Send now: clears a hold and makes the entry due on the next evaluation. */
+export const ThreadQueuedMessageReleasedActivityPayload = Schema.Struct({
+  queuedMessageId: ThreadQueuedMessageId,
+});
+export type ThreadQueuedMessageReleasedActivityPayload =
+  typeof ThreadQueuedMessageReleasedActivityPayload.Type;
+
+const ThreadQueuedMessageEnqueueCommand = Schema.Struct({
+  type: Schema.Literal("thread.queued-message.enqueue"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  /** Client-generated, so a retried enqueue cannot double-queue the message. */
+  queuedMessageId: ThreadQueuedMessageId,
+  message: ThreadQueuedMessageBody,
+  dispatchTiming: ThreadQueuedMessageDispatchTiming,
+  queuedAfterActivityId: Schema.NullOr(EventId),
+  modelSelection: Schema.optional(ModelSelection),
+  titleSeed: Schema.optional(TrimmedNonEmptyString),
+  createdAt: IsoDateTime,
+});
+
+const ClientThreadQueuedMessageEnqueueCommand = Schema.Struct({
+  type: Schema.Literal("thread.queued-message.enqueue"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  queuedMessageId: ThreadQueuedMessageId,
+  message: Schema.Struct({
+    messageId: MessageId,
+    role: Schema.Literal("user"),
+    text: Schema.String,
+    attachments: Schema.Array(Schema.Union([UploadChatAttachment, ChatAttachment])),
+    context: Schema.optional(OrchestrationMessageContext),
+  }),
+  dispatchTiming: ThreadQueuedMessageDispatchTiming,
+  queuedAfterActivityId: Schema.NullOr(EventId),
+  modelSelection: Schema.optional(ModelSelection),
+  titleSeed: Schema.optional(TrimmedNonEmptyString),
+  createdAt: IsoDateTime,
+});
+
+const ThreadQueuedMessageUpdateCommand = Schema.Struct({
+  type: Schema.Literal("thread.queued-message.update"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  queuedMessageId: ThreadQueuedMessageId,
+  /** cancel removes the entry and hands it back; release is Send now. */
+  action: Schema.Literals(["cancel", "release"]),
+  createdAt: IsoDateTime,
+});
+
 const ThreadTurnInterruptCommand = Schema.Struct({
   type: Schema.Literal("thread.turn.interrupt"),
   commandId: CommandId,
@@ -1541,6 +1668,8 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadRuntimeModeSetCommand,
   ThreadInteractionModeSetCommand,
   ThreadTurnStartCommand,
+  ThreadQueuedMessageEnqueueCommand,
+  ThreadQueuedMessageUpdateCommand,
   ThreadTurnInterruptCommand,
   ThreadApprovalRespondCommand,
   ThreadUserInputRespondCommand,
@@ -1575,6 +1704,8 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadRuntimeModeSetCommand,
   ThreadInteractionModeSetCommand,
   ClientThreadTurnStartCommand,
+  ClientThreadQueuedMessageEnqueueCommand,
+  ThreadQueuedMessageUpdateCommand,
   ThreadTurnInterruptCommand,
   ThreadApprovalRespondCommand,
   ThreadUserInputRespondCommand,

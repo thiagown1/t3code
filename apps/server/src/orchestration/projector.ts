@@ -10,6 +10,7 @@ import type {
 import {
   isImportedAgentSessionMessageId,
   OrchestrationCheckpointSummary,
+  THREAD_QUEUED_MESSAGE_ACTIVITY_KINDS,
   OrchestrationMessage,
   OrchestrationSession,
   OrchestrationThread,
@@ -77,6 +78,20 @@ function retainThreadActivities(activities: OrchestrationThread["activities"]) {
       pending.delete(requestId);
     }
   }
+  // A queued message is pending work, not history: pruning its enqueue record
+  // would take the message out of the thread's queue by accident.
+  const queued = new Map<string, OrchestrationThread["activities"][number]>();
+  for (const activity of activities) {
+    if (!Predicate.isObject(activity.payload)) continue;
+    const queuedMessageId = activity.payload.queuedMessageId;
+    if (typeof queuedMessageId !== "string") continue;
+    if (activity.kind === THREAD_QUEUED_MESSAGE_ACTIVITY_KINDS.enqueued) {
+      queued.set(queuedMessageId, activity);
+    } else if (activity.kind === THREAD_QUEUED_MESSAGE_ACTIVITY_KINDS.closed) {
+      queued.delete(queuedMessageId);
+    }
+  }
+  for (const activity of queued.values()) pending.set(activity.id, activity);
   const pendingActivities = new Set(pending.values());
   return activities.filter(
     (activity, index) =>

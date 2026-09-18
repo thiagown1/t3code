@@ -49,6 +49,8 @@ export type UnlinkThreadPullRequestInput = CommandInput<"thread.pull-request.unl
 export type SetThreadRuntimeModeInput = CommandInput<"thread.runtime-mode.set">;
 export type SetThreadInteractionModeInput = CommandInput<"thread.interaction-mode.set">;
 export type StartThreadTurnInput = CommandInput<"thread.turn.start">;
+export type EnqueueThreadMessageInput = CommandInput<"thread.queued-message.enqueue">;
+export type UpdateThreadQueuedMessageInput = CommandInput<"thread.queued-message.update">;
 export type InterruptThreadTurnInput = CommandInput<"thread.turn.interrupt">;
 export type RespondToThreadApprovalInput = CommandInput<"thread.approval.respond">;
 export type RespondToThreadUserInputInput = CommandInput<"thread.user-input.respond">;
@@ -410,6 +412,34 @@ export const startThreadTurn: (input: StartThreadTurnInput) => CommandEffect = E
     createdAt: metadata.createdAt,
   });
 });
+
+/**
+ * Hold a message on the server until the thread reaches a boundary. Unlike a
+ * turn start it does not run anything now, and unlike a client-side queue it
+ * keeps moving after the sender navigates away or disconnects.
+ */
+export const enqueueThreadMessage: (input: EnqueueThreadMessageInput) => CommandEffect = Effect.fn(
+  "EnvironmentCommands.enqueueThreadMessage",
+)(function* (input) {
+  const metadata = yield* timestampedCommandMetadata(input);
+  return yield* dispatch({
+    ...input,
+    type: "thread.queued-message.enqueue",
+    commandId: metadata.commandId,
+    createdAt: metadata.createdAt,
+  });
+});
+
+export const updateThreadQueuedMessage: (input: UpdateThreadQueuedMessageInput) => CommandEffect =
+  Effect.fn("EnvironmentCommands.updateThreadQueuedMessage")(function* (input) {
+    const metadata = yield* timestampedCommandMetadata(input);
+    return yield* dispatch({
+      ...input,
+      type: "thread.queued-message.update",
+      commandId: metadata.commandId,
+      createdAt: metadata.createdAt,
+    });
+  });
 
 export const interruptThreadTurn: (input: InterruptThreadTurnInput) => CommandEffect = Effect.fn(
   "EnvironmentCommands.interruptThreadTurn",

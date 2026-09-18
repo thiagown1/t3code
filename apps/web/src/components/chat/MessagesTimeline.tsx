@@ -1531,11 +1531,8 @@ function QueuedMessageTimelineRow({
 }) {
   const ctx = use(TimelineRowCtx);
   const { queuedMessage } = row;
-  const attachmentCount = queuedMessage.images.length + queuedMessage.files.length;
-  const contextCount =
-    queuedMessage.terminalContexts.length +
-    queuedMessage.previewAnnotations.length +
-    queuedMessage.reviewComments.length;
+  const attachmentCount = queuedMessage.attachmentCount;
+  const contextCount = queuedMessage.contextItemCount;
   const text = queuedMessage.prompt.trim();
   const statusLabel = queuedMessage.holdUntilUserAction
     ? "Waits for Send now"

@@ -1095,15 +1095,10 @@ describe("deriveMessagesTimelineRows", () => {
   const queuedMessage = (id: string, prompt: string) => ({
     id,
     prompt,
-    images: [],
-    files: [],
-    persistedImages: [],
-    terminalContexts: [],
-    previewAnnotations: [],
-    reviewComments: [],
-    submissionIntent: "foreground" as const,
+    attachmentCount: 0,
+    contextItemCount: 0,
     dispatchTiming: "next-boundary" as const,
-    queuedAfterToolActivityId: null,
+    holdUntilUserAction: false,
     createdAt: "2026-01-01T00:00:01Z",
   });
 
