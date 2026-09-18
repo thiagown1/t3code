@@ -211,9 +211,65 @@ const OpenDecisionTool = Tool.make("firstmate_open_decision", {
   .annotate(Tool.Idempotent, false)
   .annotate(Tool.OpenWorld, false);
 
+/**
+ * A workspace accumulates topics forever, so the listing is bounded: completed
+ * topics are history rather than orientation and are omitted unless asked for
+ * by stage, and the rest are capped newest-first.
+ */
+export const FIRST_MATE_TOPIC_LIST_LIMIT = 50;
+
+export const FirstMateTopicListEntry = Schema.Struct({
+  ...FirstMateTopicResult.fields,
+  pendingDecisionCount: Schema.Int,
+});
+export type FirstMateTopicListEntry = typeof FirstMateTopicListEntry.Type;
+
+/** Deliberately without option text: this only has to stop a duplicate question. */
+export const FirstMatePendingDecisionEntry = Schema.Struct({
+  decisionId: Schema.String,
+  topicId: Schema.String,
+  question: Schema.String,
+  blocking: Schema.Boolean,
+});
+export type FirstMatePendingDecisionEntry = typeof FirstMatePendingDecisionEntry.Type;
+
+export const ListTopicsResult = Schema.Struct({
+  selectedTopicId: Schema.NullOr(Schema.String).annotate({
+    description:
+      "Topic the user's next supervisor message routes to, or null when they will be asked to pick one. Reported even when that topic is filtered out of topics below.",
+  }),
+  topics: Schema.Array(FirstMateTopicListEntry),
+  pendingDecisions: Schema.Array(FirstMatePendingDecisionEntry),
+  truncated: Schema.Boolean.annotate({
+    description: "True when older topics were dropped to bound the response.",
+  }),
+});
+export type ListTopicsResult = typeof ListTopicsResult.Type;
+
+const ListTopicsTool = Tool.make("firstmate_list_topics", {
+  description: `Read this project's FirstMate topics with the id each other FirstMate tool takes, plus the questions already waiting on the user. Call it when you have lost track of the topic ids, when resuming a conversation, or before opening a decision, so you extend existing topics and do not ask the user something they are already being asked. Completed topics are omitted unless you pass stage. ${SUPERVISOR_ONLY}`,
+  parameters: Schema.Struct({
+    stage: Schema.optional(
+      FirstMateTopicStage.annotate({
+        description:
+          "Return only topics at this stage. Omit for every topic that is not completed.",
+      }),
+    ),
+  }),
+  success: ListTopicsResult,
+  failure: FirstMateToolError,
+  dependencies,
+})
+  .annotate(Tool.Title, "List FirstMate topics")
+  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, true)
+  .annotate(Tool.OpenWorld, false);
+
 export const FirstMateToolkit = Toolkit.make(
   CreateTopicTool,
   UpdateTopicTool,
   DelegateTopicTool,
   OpenDecisionTool,
+  ListTopicsTool,
 );

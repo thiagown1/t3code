@@ -1,9 +1,11 @@
 import {
   EnvironmentId,
+  FirstMateDecisionId,
   FirstMateTopicId,
   ProjectId,
   ProviderInstanceId,
   ThreadId,
+  type FirstMateDecision,
   type FirstMateTopic,
   type FirstMateWorkspaceState,
   type OrchestrationCommand,
@@ -27,7 +29,7 @@ import {
 import { ProjectionSnapshotQuery } from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import { FirstMateToolkitHandlersLive } from "./handlers.ts";
-import { FirstMateToolkit } from "./tools.ts";
+import { FIRST_MATE_TOPIC_LIST_LIMIT, FirstMateToolkit } from "./tools.ts";
 
 const PROJECT_ID = ProjectId.make("project-1");
 const SUPERVISOR_THREAD_ID = ThreadId.make("thread-supervisor");
@@ -62,6 +64,31 @@ function makeTopic(overrides: Partial<FirstMateTopic> = {}): FirstMateTopic {
     updatedAt: NOW,
     completedAt: null,
     ...overrides,
+  };
+}
+
+function makePendingDecision(
+  id: string,
+  topicId: FirstMateTopic["id"],
+  blocking = false,
+): FirstMateDecision {
+  return {
+    id: FirstMateDecisionId.make(id),
+    projectId: PROJECT_ID,
+    topicId,
+    source: { kind: "firstmate", sourceId: SUPERVISOR_THREAD_ID },
+    question: `Question ${id}`,
+    options: [
+      { id: "a", label: "A", description: "First." },
+      { id: "b", label: "B", description: "Second." },
+    ],
+    recommendedOptionId: "a",
+    selectedOptionId: null,
+    blocking,
+    status: "pending",
+    createdAt: NOW,
+    updatedAt: NOW,
+    resolvedAt: null,
   };
 }
 
@@ -336,6 +363,118 @@ describe("FirstMate toolkit handlers", () => {
         .pipe(Effect.flip);
       expect(strayRecommendation).toMatchObject({ _tag: "FirstMateCommandRejectedError" });
       expect(yield* Ref.get(harness.commands)).toEqual([]);
+    }),
+  );
+
+  it.effect("lists live topics with what is already waiting on the user", () =>
+    Effect.gen(function* () {
+      const laterTopicId = FirstMateTopicId.make("topic-2");
+      const doneTopicId = FirstMateTopicId.make("topic-done");
+      const harness = yield* makeHarness({
+        firstMate: makeWorkspace({
+          // Selected work often finishes before the user picks the next topic.
+          selectedTopicId: doneTopicId,
+          topics: [
+            makeTopic({ responsibleAgentId: "codex", threadId: WORKER_THREAD_ID }),
+            makeTopic({
+              id: laterTopicId,
+              title: "Session limits",
+              stage: "implementation",
+              updatedAt: "2026-08-02T00:00:00.000Z",
+            }),
+            makeTopic({ id: doneTopicId, title: "Shipped", stage: "completed" }),
+          ],
+          decisions: [
+            makePendingDecision("decision-advisory", laterTopicId),
+            makePendingDecision("decision-1", TOPIC_ID, true),
+            { ...makePendingDecision("decision-resolved", TOPIC_ID), status: "resolved" },
+          ],
+        }),
+      });
+
+      const result = yield* harness.call("firstmate_list_topics", {});
+
+      // Completed topics are history, and the newest live topic comes first.
+      expect(result.topics.map((topic) => topic.topicId)).toEqual([laterTopicId, TOPIC_ID]);
+      // Routing destination is reported even though that topic is filtered out.
+      expect(result.selectedTopicId).toBe(doneTopicId);
+      expect(result.topics[1]).toMatchObject({
+        topicId: TOPIC_ID,
+        title: "Rate limits",
+        stage: "research",
+        threadId: WORKER_THREAD_ID,
+        responsibleAgentId: "codex",
+        pendingDecisionCount: 1,
+      });
+      expect(result.topics[0]?.pendingDecisionCount).toBe(1);
+      // Resolved decisions are gone and the blocking one is reported first.
+      expect(result.pendingDecisions).toEqual([
+        {
+          decisionId: "decision-1",
+          topicId: TOPIC_ID,
+          question: "Question decision-1",
+          blocking: true,
+        },
+        {
+          decisionId: "decision-advisory",
+          topicId: laterTopicId,
+          question: "Question decision-advisory",
+          blocking: false,
+        },
+      ]);
+      expect(result.truncated).toBe(false);
+      expect(yield* Ref.get(harness.commands)).toEqual([]);
+    }),
+  );
+
+  it.effect("returns completed topics only when that stage is asked for", () =>
+    Effect.gen(function* () {
+      const doneTopicId = FirstMateTopicId.make("topic-done");
+      const harness = yield* makeHarness({
+        firstMate: makeWorkspace({
+          topics: [makeTopic(), makeTopic({ id: doneTopicId, stage: "completed" })],
+        }),
+      });
+
+      const completed = yield* harness.call("firstmate_list_topics", { stage: "completed" });
+      expect(completed.topics.map((topic) => topic.topicId)).toEqual([doneTopicId]);
+
+      const research = yield* harness.call("firstmate_list_topics", { stage: "research" });
+      expect(research.topics.map((topic) => topic.topicId)).toEqual([TOPIC_ID]);
+    }),
+  );
+
+  it.effect("caps a large workspace and says so", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({
+        firstMate: makeWorkspace({
+          topics: Array.from({ length: FIRST_MATE_TOPIC_LIST_LIMIT + 5 }, (_unused, index) =>
+            makeTopic({
+              id: FirstMateTopicId.make(`topic-${index}`),
+              // Ascending timestamps, so the newest ids must survive the cap.
+              updatedAt: `2026-08-${String(index + 1).padStart(2, "0")}T00:00:00.000Z`,
+            }),
+          ),
+        }),
+      });
+
+      const result = yield* harness.call("firstmate_list_topics", {});
+      expect(result.topics).toHaveLength(FIRST_MATE_TOPIC_LIST_LIMIT);
+      expect(result.truncated).toBe(true);
+      expect(result.topics[0]?.topicId).toBe(`topic-${FIRST_MATE_TOPIC_LIST_LIMIT + 4}`);
+    }),
+  );
+
+  it.effect("refuses to read topics outside the supervisor thread", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness();
+      const error = yield* harness
+        .call("firstmate_list_topics", {}, WORKER_THREAD_ID)
+        .pipe(Effect.flip);
+      expect(error).toMatchObject({
+        _tag: "FirstMateSupervisorOnlyError",
+        threadId: WORKER_THREAD_ID,
+      });
     }),
   );
 

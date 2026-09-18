@@ -19,12 +19,14 @@ import * as OrchestrationEngine from "../../../orchestration/Services/Orchestrat
 import * as ProjectionSnapshotQuery from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import {
+  FIRST_MATE_TOPIC_LIST_LIMIT,
   FirstMateCommandFailedError,
   FirstMateCommandRejectedError,
   FirstMateSupervisorOnlyError,
   FirstMateThreadNotFoundError,
   FirstMateToolkit,
   type FirstMateTopicResult,
+  type ListTopicsResult,
 } from "./tools.ts";
 
 interface SupervisorScope {
@@ -48,6 +50,47 @@ function topicResult(topic: {
     stage: topic.stage,
     threadId: topic.threadId,
     responsibleAgentId: topic.responsibleAgentId,
+  };
+}
+
+/**
+ * Newest work first, so the cap drops the stalest topics rather than an
+ * arbitrary slice. Pending decisions stay unfiltered by stage: the point of
+ * reporting them is to stop the supervisor asking a question that is already
+ * in front of the user, and that holds whatever stage its topic is at.
+ */
+function listTopics(
+  workspace: FirstMateWorkspaceState,
+  stage: FirstMateTopic["stage"] | undefined,
+): ListTopicsResult {
+  // Blocking first, so the cap below drops advisory questions rather than the
+  // ones stalling a topic, and the order matches the user's decision feed.
+  const pending = workspace.decisions
+    .filter((decision) => decision.status === "pending")
+    .toSorted((left, right) => Number(right.blocking) - Number(left.blocking));
+  const pendingCountByTopic = new Map<string, number>();
+  for (const decision of pending) {
+    pendingCountByTopic.set(decision.topicId, (pendingCountByTopic.get(decision.topicId) ?? 0) + 1);
+  }
+  const matching = workspace.topics
+    .filter((topic) => (stage === undefined ? topic.stage !== "completed" : topic.stage === stage))
+    .toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+  return {
+    // Independent of the stage filter and the cap: where the user's next
+    // message lands is not something the supervisor may be blind to.
+    selectedTopicId: workspace.selectedTopicId,
+    topics: matching.slice(0, FIRST_MATE_TOPIC_LIST_LIMIT).map((topic) => ({
+      ...topicResult(topic),
+      pendingDecisionCount: pendingCountByTopic.get(topic.id) ?? 0,
+    })),
+    pendingDecisions: pending.slice(0, FIRST_MATE_TOPIC_LIST_LIMIT).map((decision) => ({
+      decisionId: decision.id,
+      topicId: decision.topicId,
+      question: decision.question,
+      blocking: decision.blocking,
+    })),
+    truncated:
+      matching.length > FIRST_MATE_TOPIC_LIST_LIMIT || pending.length > FIRST_MATE_TOPIC_LIST_LIMIT,
   };
 }
 
@@ -232,6 +275,9 @@ const make = Effect.gen(function* () {
         });
         return topicResult({ ...topic, threadId, responsibleAgentId });
       }),
+
+    firstmate_list_topics: (input) =>
+      requireSupervisor().pipe(Effect.map((scope) => listTopics(scope.workspace, input.stage))),
 
     firstmate_open_decision: (input) =>
       Effect.gen(function* () {
