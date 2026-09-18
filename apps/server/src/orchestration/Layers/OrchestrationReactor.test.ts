@@ -11,6 +11,7 @@ import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeInge
 import { ThreadDeletionReactor } from "../Services/ThreadDeletionReactor.ts";
 import { ThreadArchiveReactor } from "../Services/ThreadArchiveReactor.ts";
 import { ThreadQueuedMessageReactor } from "../Services/ThreadQueuedMessageReactor.ts";
+import * as FirstMateDecisionDeliveryReactor from "../FirstMateDecisionDeliveryReactor.ts";
 import * as ThreadSettlementReactor from "../ThreadSettlementReactor.ts";
 import * as PullRequestSyncReactor from "../PullRequestSyncReactor.ts";
 import * as ThreadPullRequestReactor from "../ThreadPullRequestReactor.ts";
@@ -105,6 +106,15 @@ describe("OrchestrationReactor", () => {
           }),
         ),
         Layer.provideMerge(
+          Layer.succeed(FirstMateDecisionDeliveryReactor.FirstMateDecisionDeliveryReactor, {
+            start: () => {
+              started.push("firstmate-decision-delivery-reactor");
+              return Effect.void;
+            },
+            drain: Effect.void,
+          }),
+        ),
+        Layer.provideMerge(
           Layer.succeed(PullRequestSyncReactor.PullRequestSyncReactor, {
             start: () => {
               started.push("pull-request-sync-reactor");
@@ -139,6 +149,7 @@ describe("OrchestrationReactor", () => {
       "thread-queued-message-reactor",
       "thread-pull-request-reactor",
       "thread-settlement-reactor",
+      "firstmate-decision-delivery-reactor",
       "pull-request-sync-reactor",
       "agent-awareness-relay",
     ]);

@@ -266,10 +266,39 @@ const ListTopicsTool = Tool.make("firstmate_list_topics", {
   .annotate(Tool.Idempotent, true)
   .annotate(Tool.OpenWorld, false);
 
+export const SendToTopicResult = Schema.Struct({
+  topicId: Schema.String,
+  threadId: Schema.String,
+  queuedMessageId: Schema.String,
+});
+export type SendToTopicResult = typeof SendToTopicResult.Type;
+
+const SendToTopicTool = Tool.make("firstmate_send_to_topic", {
+  description: `Queue a message for the thread a FirstMate topic is delegated to, so the agent working on that topic reads it at its next turn boundary. Use it to hand a delegated topic new instructions, an answer the user gave you, or a correction. The destination comes from the topic's delegation, so delegate the topic first; you cannot name a thread yourself. The call returns once the message is queued and never waits for a reply. ${SUPERVISOR_ONLY}`,
+  parameters: Schema.Struct({
+    topicId: TrimmedNonEmptyString.annotate({
+      description: "Topic whose delegated thread receives the message.",
+    }),
+    text: TrimmedNonEmptyString.annotate({
+      description:
+        "What the delegated agent should read, written for that agent rather than for the user.",
+    }),
+  }),
+  success: SendToTopicResult,
+  failure: FirstMateToolError,
+  dependencies,
+})
+  .annotate(Tool.Title, "Send a message to a FirstMate topic's thread")
+  .annotate(Tool.Readonly, false)
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, false)
+  .annotate(Tool.OpenWorld, false);
+
 export const FirstMateToolkit = Toolkit.make(
   CreateTopicTool,
   UpdateTopicTool,
   DelegateTopicTool,
   OpenDecisionTool,
   ListTopicsTool,
+  SendToTopicTool,
 );

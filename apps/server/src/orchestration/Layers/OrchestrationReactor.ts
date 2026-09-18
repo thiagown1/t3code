@@ -11,6 +11,7 @@ import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeInge
 import { ThreadDeletionReactor } from "../Services/ThreadDeletionReactor.ts";
 import { ThreadArchiveReactor } from "../Services/ThreadArchiveReactor.ts";
 import { ThreadQueuedMessageReactor } from "../Services/ThreadQueuedMessageReactor.ts";
+import * as FirstMateDecisionDeliveryReactor from "../FirstMateDecisionDeliveryReactor.ts";
 import * as ThreadSettlementReactor from "../ThreadSettlementReactor.ts";
 import * as PullRequestSyncReactor from "../PullRequestSyncReactor.ts";
 import * as ThreadPullRequestReactor from "../ThreadPullRequestReactor.ts";
@@ -24,6 +25,8 @@ export const makeOrchestrationReactor = Effect.gen(function* () {
   const threadArchiveReactor = yield* ThreadArchiveReactor;
   const threadQueuedMessageReactor = yield* ThreadQueuedMessageReactor;
   const threadSettlementReactor = yield* ThreadSettlementReactor.ThreadSettlementReactor;
+  const firstMateDecisionDeliveryReactor =
+    yield* FirstMateDecisionDeliveryReactor.FirstMateDecisionDeliveryReactor;
   const pullRequestSyncReactor = yield* PullRequestSyncReactor.PullRequestSyncReactor;
   const threadPullRequestReactor = yield* ThreadPullRequestReactor.ThreadPullRequestReactor;
   const agentAwarenessRelay = yield* AgentAwarenessRelay.AgentAwarenessRelay;
@@ -37,6 +40,7 @@ export const makeOrchestrationReactor = Effect.gen(function* () {
     yield* threadQueuedMessageReactor.start();
     yield* threadPullRequestReactor.start();
     yield* threadSettlementReactor.start();
+    yield* firstMateDecisionDeliveryReactor.start();
     yield* pullRequestSyncReactor.start();
     yield* agentAwarenessRelay.start();
   });
