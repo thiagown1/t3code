@@ -33,6 +33,7 @@ import {
   sanitizePrTitle,
   sanitizeRoundSummary,
   sanitizeThreadTitle,
+  summarizeCliFailure,
   toJsonSchemaObject,
 } from "./TextGenerationUtils.ts";
 import {
@@ -254,13 +255,11 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
       );
 
       if (exitCode !== 0) {
-        const stderrDetail = stderr.trim();
-        const stdoutDetail = stdout.trim();
-        const detail = stderrDetail.length > 0 ? stderrDetail : stdoutDetail;
+        const detail = summarizeCliFailure({ stdout, stderr });
         return yield* new TextGenerationError({
           operation,
           detail:
-            detail.length > 0
+            detail !== undefined
               ? `Claude CLI command failed: ${detail}`
               : `Claude CLI command failed with code ${exitCode}.`,
         });
