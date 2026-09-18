@@ -35,6 +35,7 @@ import {
   type SourceControlDiscoveryResult,
   type SourceControlProviderKind,
   type SourceControlRepositoryInfo,
+  type ThreadId,
   PRIMARY_LOCAL_ENVIRONMENT_ID,
   resolveEnvironmentMachineKind,
 } from "@t3tools/contracts";
@@ -42,6 +43,7 @@ import { useLocation, useNavigate, useParams } from "@tanstack/react-router";
 import * as Option from "effect/Option";
 import {
   ArrowLeftIcon,
+  CompassIcon,
   CornerLeftUpIcon,
   FileSearchIcon,
   FolderIcon,
@@ -80,6 +82,10 @@ import { desktopLocalBackendId } from "../connection/desktopLocal";
 import { filesystemEnvironment } from "../state/filesystem";
 import { projectEnvironment } from "../state/projects";
 import { useEnvironmentQuery } from "../state/query";
+import { orchestrationEnvironment } from "../state/orchestration";
+import { environmentShell } from "../state/shell";
+import { appAtomRegistry } from "../rpc/atomRegistry";
+import { finalizeFirstMateShellCommand } from "./firstMate/firstMateShellCommand";
 import { sourceControlEnvironment } from "../state/sourceControl";
 import { useAtomCommand } from "../state/use-atom-command";
 import { useAtomQueryRunner } from "../state/use-atom-query-runner";
@@ -646,6 +652,10 @@ function OpenCommandPaletteDialog(props: {
   const startProjectClone = useAtomCommand(sourceControlEnvironment.startProjectClone, {
     reportFailure: false,
   });
+  const linkFirstMateSupervisor = useAtomCommand(
+    orchestrationEnvironment.linkFirstMateSupervisor,
+    "link FirstMate supervisor thread",
+  );
   const { environments } = useEnvironments();
   const desktopLocalBootstraps = useDesktopLocalBootstraps();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
@@ -1729,6 +1739,63 @@ function OpenCommandPaletteDialog(props: {
           useRightPanelStore.getState().open(threadRef, "pull-requests");
         },
       });
+    }
+  }
+
+  // FirstMate only becomes conversational once a project points at the thread
+  // the user plans in, so both directions of that link live here as well as in
+  // the sidebar panel.
+  if (activeThread !== null) {
+    const supervisorProject = projects.find(
+      (project) =>
+        project.environmentId === activeThread.environmentId &&
+        project.id === activeThread.projectId &&
+        project.firstMate !== undefined,
+    );
+    if (supervisorProject !== undefined) {
+      const isSupervisor = supervisorProject.firstMate?.supervisorThreadId === activeThread.id;
+      const applyLink = async (threadId: ThreadId | null) => {
+        const result = await linkFirstMateSupervisor({
+          environmentId: supervisorProject.environmentId,
+          input: { projectId: supervisorProject.id, threadId },
+        });
+        const linked = finalizeFirstMateShellCommand({
+          result,
+          environmentId: supervisorProject.environmentId,
+          refreshEnvironmentShell: (environmentId) =>
+            appAtomRegistry.refresh(environmentShell.stateAtom(environmentId)),
+        });
+        if (!linked) return;
+        toastManager.add({
+          type: "success",
+          title: threadId === null ? "FirstMate supervisor cleared" : "FirstMate supervisor set",
+          description:
+            threadId === null
+              ? `${supervisorProject.title} no longer routes messages through a supervisor.`
+              : "Messages in this thread are now planned and routed by FirstMate.",
+        });
+      };
+      actionItems.push(
+        isSupervisor
+          ? {
+              kind: "action",
+              value: "action:firstmate-unlink-supervisor",
+              searchTerms: ["firstmate", "supervisor", "unlink", "stop", "orchestrator"],
+              title: "Stop using this thread as FirstMate supervisor",
+              description: supervisorProject.title,
+              icon: <CompassIcon className={ITEM_ICON_CLASS} />,
+              run: () => applyLink(null),
+            }
+          : {
+              kind: "action",
+              value: "action:firstmate-link-supervisor",
+              searchTerms: ["firstmate", "supervisor", "orchestrator", "plan", "topics"],
+              title: "Use this thread as FirstMate supervisor",
+              description: supervisorProject.title,
+              icon: <CompassIcon className={ITEM_ICON_CLASS} />,
+              run: () => applyLink(activeThread.id),
+            },
+      );
     }
   }
 

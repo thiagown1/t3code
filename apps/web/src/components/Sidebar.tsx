@@ -249,6 +249,7 @@ import {
   FirstMateTopicsPanel,
   type SelectFirstMateTopicRequest,
   type SetFirstMateRoutingEvaluationModeRequest,
+  type UnlinkFirstMateSupervisorRequest,
 } from "./firstMate/FirstMateTopicsPanel";
 import { finalizeFirstMateShellCommand } from "./firstMate/firstMateShellCommand";
 import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
@@ -2200,6 +2201,10 @@ export default function Sidebar() {
     orchestrationEnvironment.selectFirstMateTopic,
     "select FirstMate topic",
   );
+  const linkFirstMateSupervisor = useAtomCommand(
+    orchestrationEnvironment.linkFirstMateSupervisor,
+    "unlink FirstMate supervisor",
+  );
   const setFirstMateRoutingEvaluationMode = useAtomCommand(
     orchestrationEnvironment.setFirstMateRoutingEvaluationMode,
     "set FirstMate routing evaluation mode",
@@ -2918,6 +2923,21 @@ export default function Sidebar() {
       });
     },
     [cancelFirstMateDecision],
+  );
+  const handleUnlinkFirstMateSupervisor = useCallback(
+    async (request: UnlinkFirstMateSupervisorRequest) => {
+      const result = await linkFirstMateSupervisor({
+        environmentId: request.environmentId,
+        input: { projectId: request.projectId, threadId: null },
+      });
+      return finalizeFirstMateShellCommand({
+        result,
+        environmentId: request.environmentId,
+        refreshEnvironmentShell: (environmentId) =>
+          appAtomRegistry.refresh(environmentShell.stateAtom(environmentId)),
+      });
+    },
+    [linkFirstMateSupervisor],
   );
   const handleSelectFirstMateTopic = useCallback(
     async (request: SelectFirstMateTopicRequest) => {
@@ -4758,6 +4778,7 @@ export default function Sidebar() {
           threads={threads}
           scopedProjectKeys={scopedProjectKeys}
           hidden={isSearchingThreads}
+          onUnlinkSupervisor={handleUnlinkFirstMateSupervisor}
           onSelectTopic={handleSelectFirstMateTopic}
           onSetRoutingEvaluationMode={handleSetFirstMateRoutingEvaluationMode}
           onSetWaitingDeploy={handleFirstMateSetWaitingDeploy}

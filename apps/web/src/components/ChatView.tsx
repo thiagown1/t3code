@@ -510,6 +510,9 @@ import {
   FirstMateRouteConfirmation,
   type FirstMateRouteConfirmationRequest,
 } from "./firstMate/FirstMateRouteConfirmation";
+import { FirstMateDecisionFeed } from "./firstMate/FirstMateDecisionFeed";
+import { buildFirstMateChatDecisionFeed } from "./firstMate/FirstMateDecisionFeed.logic";
+import type { ResolveFirstMateDecisionRequest } from "./firstMate/FirstMateDecisionInbox";
 import { planFirstMateSupervisorSubmission } from "./firstMate/FirstMateSupervisorRouting.logic";
 import { finalizeFirstMateShellCommand } from "./firstMate/firstMateShellCommand";
 import { evaluateFirstMateAutomaticRouting } from "@t3tools/shared/firstMate";
@@ -1523,6 +1526,14 @@ export default function ChatView(props: ChatViewProps) {
   const recordFirstMateRouting = useAtomCommand(orchestrationEnvironment.recordFirstMateRouting, {
     reportFailure: false,
   });
+  const resolveFirstMateDecision = useAtomCommand(
+    orchestrationEnvironment.resolveFirstMateDecision,
+    "resolve FirstMate decision",
+  );
+  const cancelFirstMateDecision = useAtomCommand(
+    orchestrationEnvironment.cancelFirstMateDecision,
+    "cancel FirstMate decision",
+  );
   const createAttachmentAssetUrl = useAtomQueryRunner(assetEnvironment.createUrl, {
     reportFailure: false,
     refresh: true,
@@ -2331,6 +2342,51 @@ export default function ChatView(props: ChatViewProps) {
       : null;
   const setPendingFirstMateRoute = (request: FirstMateRouteConfirmationRequest | null) =>
     setPendingFirstMateRouteState(request === null ? null : { threadKey: routeThreadKey, request });
+  // Decisions land in the supervisor chat itself; the sidebar inbox keeps the
+  // cross-project view.
+  const firstMateDecisionFeed = useMemo(
+    () =>
+      buildFirstMateChatDecisionFeed({
+        project: activeProject,
+        threads: allThreadShells,
+        activeThreadId: activeThread?.id,
+      }),
+    [activeProject, activeThread?.id, allThreadShells],
+  );
+  const resolveFirstMateDecisionFromFeed = useCallback(
+    async (request: ResolveFirstMateDecisionRequest) => {
+      const result = await resolveFirstMateDecision({
+        environmentId: request.environmentId,
+        input: {
+          projectId: request.projectId,
+          decisionId: request.decisionId,
+          selectedOptionId: request.selectedOptionId,
+        },
+      });
+      return finalizeFirstMateShellCommand({
+        result,
+        environmentId: request.environmentId,
+        refreshEnvironmentShell: (environmentId) =>
+          appAtomRegistry.refresh(environmentShell.stateAtom(environmentId)),
+      });
+    },
+    [resolveFirstMateDecision],
+  );
+  const cancelFirstMateDecisionFromFeed = useCallback(
+    async (request: Omit<ResolveFirstMateDecisionRequest, "selectedOptionId">) => {
+      const result = await cancelFirstMateDecision({
+        environmentId: request.environmentId,
+        input: { projectId: request.projectId, decisionId: request.decisionId },
+      });
+      return finalizeFirstMateShellCommand({
+        result,
+        environmentId: request.environmentId,
+        refreshEnvironmentShell: (environmentId) =>
+          appAtomRegistry.refresh(environmentShell.stateAtom(environmentId)),
+      });
+    },
+    [cancelFirstMateDecision],
+  );
   const [confirmingFirstMateTopicState, setConfirmingFirstMateTopicState] = useState<{
     readonly threadKey: string;
     readonly topicId: FirstMateTopicId;
@@ -10158,6 +10214,17 @@ ${existingPrompt}`
                     <ComposerSurface.Shell contextStrip={showComposerContextStrip}>
                       <ComposerSurface.Host>
                         <div ref={attachDraftHeroComposerAnchorRef} className="relative z-10">
+                          <FirstMateDecisionFeed
+                            items={firstMateDecisionFeed.items}
+                            onResolveDecision={resolveFirstMateDecisionFromFeed}
+                            onCancelDecision={cancelFirstMateDecisionFromFeed}
+                            onOpenThread={(threadRef) =>
+                              void navigate({
+                                to: "/$environmentId/$threadId",
+                                params: buildThreadRouteParams(threadRef),
+                              })
+                            }
+                          />
                           {activeProject && pendingFirstMateRoute ? (
                             <FirstMateRouteConfirmation
                               project={activeProject}

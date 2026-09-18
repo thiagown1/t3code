@@ -77,6 +77,7 @@ describe("FirstMateTopicsPanel", () => {
         projects={[baseProject]}
         threads={[]}
         scopedProjectKeys={null}
+        onUnlinkSupervisor={async () => true}
         onSelectTopic={async () => true}
         onSetRoutingEvaluationMode={async () => true}
         onSetWaitingDeploy={async () => true}
@@ -117,6 +118,7 @@ describe("FirstMateTopicsPanel", () => {
         ]}
         threads={[linkedThread]}
         scopedProjectKeys={null}
+        onUnlinkSupervisor={async () => true}
         onSelectTopic={async () => true}
         onSetRoutingEvaluationMode={async () => true}
         onSetWaitingDeploy={async () => true}
@@ -189,6 +191,7 @@ describe("FirstMateTopicsPanel", () => {
           },
         ]}
         scopedProjectKeys={null}
+        onUnlinkSupervisor={async () => true}
         onSelectTopic={async () => true}
         onSetRoutingEvaluationMode={async () => true}
         onSetWaitingDeploy={async () => true}
@@ -259,6 +262,7 @@ describe("FirstMateTopicsPanel", () => {
           },
         ]}
         scopedProjectKeys={null}
+        onUnlinkSupervisor={async () => true}
         onSelectTopic={async () => true}
         onSetRoutingEvaluationMode={async () => true}
         onSetWaitingDeploy={async () => true}
