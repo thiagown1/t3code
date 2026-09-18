@@ -6,7 +6,8 @@ import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 import * as NodeSqlite from "node:sqlite";
 
-import Mime from "@effect/platform-node/Mime";
+import * as Option from "effect/Option";
+import * as Mime from "effect/unstable/http/Mime";
 import { ProjectId, RepositoryIdentity } from "@t3tools/contracts";
 import type { ThreadBundleAttachmentReference, ThreadBundleThread } from "@t3tools/contracts";
 import { normalizeGitRemoteUrl } from "@t3tools/shared/git";
@@ -303,9 +304,9 @@ function attachmentFileExtension(fileName: string): string {
 function inferImageExtension(mimeType: string, fileName: string): string {
   const fromMime = IMAGE_EXTENSION_BY_MIME_TYPE[mimeType.toLowerCase()];
   if (fromMime) return fromMime;
-  const fromMimeExtension = Mime.getExtension(mimeType);
-  if (fromMimeExtension && SAFE_IMAGE_FILE_EXTENSIONS.has(fromMimeExtension)) {
-    return fromMimeExtension;
+  const fromMimeExtension = Option.map(Mime.getExtension(mimeType), (ext) => `.${ext}`);
+  if (Option.isSome(fromMimeExtension) && SAFE_IMAGE_FILE_EXTENSIONS.has(fromMimeExtension.value)) {
+    return fromMimeExtension.value;
   }
   const match = /\.([a-z0-9]{1,8})$/i.exec(fileName.trim());
   const fromName = match ? `.${match[1]!.toLowerCase()}` : "";

@@ -140,7 +140,7 @@ describe("EnvironmentBundleInventory", () => {
               return {
                 ...file,
                 stat: file.stat,
-                readAlloc: (size: FileSystem.SizeInput) => {
+                readAlloc: (size: number) => {
                   readRequests.push(Number(size));
                   return file.readAlloc(size);
                 },
@@ -181,7 +181,7 @@ describe("EnvironmentBundleInventory", () => {
                 ? {
                     ...file,
                     stat: file.stat,
-                    readAlloc: (size: FileSystem.SizeInput) => {
+                    readAlloc: (size: number) => {
                       readRequests.push(Number(size));
                       return file.readAlloc(size);
                     },

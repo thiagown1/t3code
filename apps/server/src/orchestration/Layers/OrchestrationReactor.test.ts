@@ -19,6 +19,7 @@ import * as FirstMateRoundSummaryReactor from "../FirstMateRoundSummaryReactor.t
 import { OrchestrationReactor } from "../Services/OrchestrationReactor.ts";
 import { makeOrchestrationReactor } from "./OrchestrationReactor.ts";
 import * as AgentAwarenessRelay from "../../relay/AgentAwarenessRelay.ts";
+import { StorageCleanup } from "../../storageCleanup.ts";
 
 describe("OrchestrationReactor", () => {
   let runtime: ManagedRuntime.ManagedRuntime<OrchestrationReactor, never> | null = null;
@@ -39,6 +40,15 @@ describe("OrchestrationReactor", () => {
           Layer.succeed(ThreadQueuedMessageReactor, {
             start: () => {
               started.push("thread-queued-message-reactor");
+              return Effect.void;
+            },
+            drain: Effect.void,
+          }),
+        ),
+        Layer.provideMerge(
+          Layer.succeed(StorageCleanup, {
+            start: () => {
+              started.push("storage-cleanup");
               return Effect.void;
             },
             drain: Effect.void,
@@ -163,6 +173,7 @@ describe("OrchestrationReactor", () => {
       "pull-request-sync-reactor",
       "first-mate-round-summary-reactor",
       "agent-awareness-relay",
+      "storage-cleanup",
     ]);
 
     await Effect.runPromise(Scope.close(scope, Exit.void));

@@ -23,7 +23,7 @@ export interface ParallelThreadSourceSnapshot {
 
 interface ParallelSourceMessage {
   readonly id: string;
-  readonly role: "user" | "assistant" | "system";
+  readonly role: "user" | "assistant" | "system" | "reasoning";
   readonly text: string;
   readonly streaming: boolean;
   readonly createdAt: string;

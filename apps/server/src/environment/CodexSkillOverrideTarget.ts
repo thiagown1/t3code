@@ -2,6 +2,7 @@ import * as NodeCrypto from "node:crypto";
 
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
+import * as ByteSize from "effect/ByteSize";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Toml from "effect/unstable/encoding/Toml";
@@ -9,7 +10,7 @@ import * as Toml from "effect/unstable/encoding/Toml";
 import { writeFileStringAtomically } from "../atomicWrite.ts";
 import { findEnvironmentBundleRepositoryRoot } from "./EnvironmentBundlePaths.ts";
 
-const MAX_CODEX_CONFIG_BYTES = FileSystem.Size(1_000_000);
+const MAX_CODEX_CONFIG_BYTES = ByteSize.bytes(1_000_000);
 const MISSING_TARGET_MARKER = "t3-environment-bundle:missing";
 const SKILL_CONFIG_HEADER =
   /^[\t ]*\[\[[\t ]*skills[\t ]*\.[\t ]*config[\t ]*\]\][\t ]*(?:#.*)?$/gmu;

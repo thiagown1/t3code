@@ -15,6 +15,7 @@ import {
 import { tokenizeCliArgs } from "@t3tools/shared/cliArgs";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
+import * as ByteSize from "effect/ByteSize";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
@@ -30,11 +31,11 @@ import {
   loadClaudeSkillOverrideTargetState,
 } from "./ClaudeSkillOverrideTarget.ts";
 
-const MAX_PROJECT_INSTRUCTION_BYTES = FileSystem.Size(256_000);
-const MAX_PROJECT_INSTRUCTION_READ_BYTES = FileSystem.Size(
+const MAX_PROJECT_INSTRUCTION_BYTES = ByteSize.bytes(256_000);
+const MAX_PROJECT_INSTRUCTION_READ_BYTES = ByteSize.bytes(
   Number(MAX_PROJECT_INSTRUCTION_BYTES) + 1,
 );
-const MAX_MCP_CONFIG_BYTES = FileSystem.Size(1_000_000);
+const MAX_MCP_CONFIG_BYTES = ByteSize.bytes(1_000_000);
 
 class InvalidJsonMcpConfigError extends Data.TaggedError("InvalidJsonMcpConfigError")<{
   readonly cause: unknown;
@@ -790,7 +791,7 @@ const readProjectInstruction = Effect.fn("readEnvironmentBundleProjectInstructio
             !sameCanonicalPath(path, openedPath, finalPath) ||
             !isWithinRoot(path, root, finalPath) ||
             !sameFileSnapshot(before, after) ||
-            FileSystem.Size(read.contents.byteLength) !== after.size
+            ByteSize.bytes(read.contents.byteLength) !== after.size
           ) {
             return { reason: "changed-during-scan" } as const;
           }

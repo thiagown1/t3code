@@ -14,7 +14,7 @@ import { assistantCitationsToPlainText } from "@t3tools/shared/assistantCitation
 import { limitTitleMessage } from "./ThreadTitleContext.ts";
 
 export type RoundMessage = {
-  readonly role: "user" | "assistant" | "system";
+  readonly role: "user" | "assistant" | "system" | "reasoning";
   readonly text: string;
 };
 
@@ -25,7 +25,9 @@ const OMITTED = "[Earlier content truncated]\n\n";
 /** Format the messages of one round into a bounded, newest-last transcript. */
 export function formatRoundTranscript(messages: ReadonlyArray<RoundMessage>): string {
   const sections = messages.flatMap((message) => {
-    if (message.role === "system") return [];
+    // Reasoning is the model talking to itself, not the round's outcome, and it
+    // is the easiest way to blow the budget this module exists to defend.
+    if (message.role === "system" || message.role === "reasoning") return [];
     const contents = assistantCitationsToPlainText(message.text).trim();
     return contents.length === 0 ? [] : [{ prefix: `${message.role.toUpperCase()}:\n`, contents }];
   });

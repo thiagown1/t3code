@@ -73,6 +73,7 @@ import Migration0049 from "./Migrations/049_ProjectionThreadsActiveOrderKey.ts";
 import Migration0050 from "./Migrations/050_ProjectionThreadPullRequests.ts";
 import Migration0051 from "./Migrations/051_ProjectionThreadMessageContext.ts";
 import Migration0052 from "./Migrations/052_ProjectionThreadTitleState.ts";
+import Migration0053 from "./Migrations/053_PullRequestFilesViewed.ts";
 import Migration0900 from "./Migrations/900_ProjectionThreadsDeliveryStatus.ts";
 import Migration0901 from "./Migrations/901_ProjectionProjectsFirstMate.ts";
 import Migration0902 from "./Migrations/902_ProjectionThreadsDeliveryStatusReconciliation.ts";
@@ -136,6 +137,7 @@ const migrationEntries: ReadonlyArray<MigrationEntry> = [
   [50, "ProjectionThreadPullRequests", Migration0050],
   [51, "ProjectionThreadMessageContext", Migration0051],
   [52, "ProjectionThreadTitleState", Migration0052],
+  [53, "PullRequestFilesViewed", Migration0053],
   // Fork-only migrations. Reserved range - see MigrationLedger.ts.
   [900, "ProjectionThreadsDeliveryStatus", Migration0900],
   [901, "ProjectionProjectsFirstMate", Migration0901],

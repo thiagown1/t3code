@@ -46,6 +46,7 @@ it.layer(NodeSqliteClient.layerMemory())(
         `;
         assert.deepEqual(migrations, [
           { migrationId: 52, name: "ProjectionThreadTitleState" },
+          { migrationId: 53, name: "PullRequestFilesViewed" },
           { migrationId: 900, name: "ProjectionThreadsDeliveryStatus" },
           { migrationId: 901, name: "ProjectionProjectsFirstMate" },
           { migrationId: 902, name: "ProjectionThreadsDeliveryStatusReconciliation" },
