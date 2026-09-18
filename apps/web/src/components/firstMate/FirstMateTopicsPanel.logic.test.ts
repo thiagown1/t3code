@@ -137,6 +137,33 @@ describe("FirstMate topics panel model", () => {
     ).toBe("empty");
   });
 
+  it("names the supervisor thread, and reports a link that outlived its thread", () => {
+    const supervisorThreadId = ThreadId.make("thread-supervisor");
+    const linked = buildFirstMatePanelModel({
+      projects: [project({ ...workspace, supervisorThreadId })],
+      threads: [thread(), thread({ id: supervisorThreadId, title: "Planning" })],
+      scopedProjectKeys: null,
+    });
+    expect(linked.supervisors).toMatchObject([
+      { projectId, threadId: supervisorThreadId, threadTitle: "Planning" },
+    ]);
+
+    const stale = buildFirstMatePanelModel({
+      projects: [project({ ...workspace, supervisorThreadId })],
+      threads: [thread()],
+      scopedProjectKeys: null,
+    });
+    expect(stale.supervisors).toMatchObject([{ threadId: supervisorThreadId, threadTitle: null }]);
+
+    expect(
+      buildFirstMatePanelModel({
+        projects: [project(workspace)],
+        threads: [thread()],
+        scopedProjectKeys: null,
+      }).supervisors,
+    ).toEqual([]);
+  });
+
   it("derives waiting deploy from the linked thread without persisting another status", () => {
     const model = buildFirstMatePanelModel({
       projects: [project({ ...workspace, selectedTopicId: topicId })],

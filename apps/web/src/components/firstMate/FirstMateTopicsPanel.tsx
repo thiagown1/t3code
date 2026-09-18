@@ -13,10 +13,12 @@ import {
   ArchiveIcon,
   ChevronDownIcon,
   CircleDotIcon,
+  CompassIcon,
   GitPullRequestIcon,
   Layers3Icon,
   MessageCircleQuestionIcon,
   RocketIcon,
+  Unlink2Icon,
 } from "lucide-react";
 import { useMemo, useState } from "react";
 
@@ -26,6 +28,7 @@ import {
   buildFirstMatePanelModel,
   FIRST_MATE_STATUS_LABELS,
   type FirstMatePanelItem,
+  type FirstMatePanelSupervisor,
 } from "./FirstMateTopicsPanel.logic";
 
 export interface SelectFirstMateTopicRequest {
@@ -40,11 +43,17 @@ export interface SetFirstMateRoutingEvaluationModeRequest {
   readonly mode: FirstMateRoutingEvaluationMode;
 }
 
+export interface UnlinkFirstMateSupervisorRequest {
+  readonly environmentId: EnvironmentId;
+  readonly projectId: ProjectId;
+}
+
 interface FirstMateTopicsPanelProps {
   readonly projects: ReadonlyArray<EnvironmentProject>;
   readonly threads: ReadonlyArray<EnvironmentThreadShell>;
   readonly scopedProjectKeys: ReadonlySet<string> | null;
   readonly hidden?: boolean;
+  readonly onUnlinkSupervisor: (request: UnlinkFirstMateSupervisorRequest) => Promise<boolean>;
   readonly onSelectTopic: (request: SelectFirstMateTopicRequest) => Promise<boolean>;
   readonly onSetRoutingEvaluationMode: (
     request: SetFirstMateRoutingEvaluationModeRequest,
@@ -107,6 +116,7 @@ export function FirstMateTopicsPanel({
   threads,
   scopedProjectKeys,
   hidden = false,
+  onUnlinkSupervisor,
   onSelectTopic,
   onSetRoutingEvaluationMode,
   onSetWaitingDeploy,
@@ -114,6 +124,7 @@ export function FirstMateTopicsPanel({
   onOpenThread,
 }: FirstMateTopicsPanelProps) {
   const [expanded, setExpanded] = useState(true);
+  const [unlinkingKey, setUnlinkingKey] = useState<string | null>(null);
   const [selectingKey, setSelectingKey] = useState<string | null>(null);
   const [settingRoutingEvaluation, setSettingRoutingEvaluation] = useState(false);
   const [actingKey, setActingKey] = useState<string | null>(null);
@@ -134,6 +145,18 @@ export function FirstMateTopicsPanel({
       });
     } finally {
       setSelectingKey((current) => (current === item.key ? null : current));
+    }
+  };
+
+  const unlinkSupervisor = async (supervisor: FirstMatePanelSupervisor) => {
+    setUnlinkingKey(supervisor.key);
+    try {
+      await onUnlinkSupervisor({
+        environmentId: supervisor.environmentId,
+        projectId: supervisor.projectId,
+      });
+    } finally {
+      setUnlinkingKey((current) => (current === supervisor.key ? null : current));
     }
   };
 
@@ -177,6 +200,46 @@ export function FirstMateTopicsPanel({
 
       {expanded ? (
         <>
+          {model.supervisors.length > 0 ? (
+            <ul aria-label="FirstMate supervisor threads" className="mb-1 space-y-0.5">
+              {model.supervisors.map((supervisor) => (
+                <li key={supervisor.key} className="flex items-stretch gap-0.5">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onOpenThread({
+                        environmentId: supervisor.environmentId,
+                        threadId: supervisor.threadId,
+                      })
+                    }
+                    className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-left outline-none active:scale-[0.99] hover:bg-sidebar-row-hover focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+                  >
+                    <CompassIcon aria-hidden className="size-3.5 shrink-0 text-sky-500" />
+                    <span className="min-w-0 flex-1 truncate text-xs text-sidebar-foreground">
+                      {supervisor.threadTitle ?? "Supervisor thread unavailable"}
+                    </span>
+                    <span className="shrink-0 text-[10px] text-sidebar-muted-foreground">
+                      {model.projectCount > 1 ? supervisor.projectTitle : "Supervisor"}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={`Stop using this thread as the FirstMate supervisor for ${supervisor.projectTitle}`}
+                    disabled={unlinkingKey !== null}
+                    onClick={() => void unlinkSupervisor(supervisor)}
+                    className="my-0.5 flex w-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-sidebar-muted-foreground outline-none hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring disabled:cursor-wait disabled:opacity-50"
+                  >
+                    <Unlink2Icon aria-hidden className="size-3.5" />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : model.availability === "unavailable" ? null : (
+            <p className="px-2 pb-1 text-[10px] leading-4 text-sidebar-muted-foreground">
+              No supervisor thread. Open the thread you want to plan in and run “Use this thread as
+              FirstMate supervisor”.
+            </p>
+          )}
           {model.availability === "ready" ? (
             <ul aria-live="polite" className="max-h-56 space-y-0.5 overflow-y-auto">
               {model.items.map((item) => (

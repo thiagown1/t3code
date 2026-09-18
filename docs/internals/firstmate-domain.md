@@ -72,6 +72,10 @@ topic, responsible agent, impact descriptions, recommendation, and linked
 thread navigation visible without requiring the user to find the original chat
 message.
 
+The supervisor chat renders the same pending decisions as cards above its
+composer, narrowed to that project. Both surfaces build on the one inbox model
+so aggregation and blocking-first ordering cannot drift apart.
+
 Resolving a decision records the selected persisted option, rather than only a
 generic resolved flag. Existing stored decisions and events decode with a null
 selection for backward compatibility. After a successful resolve or cancel
@@ -93,9 +97,28 @@ The pure router uses the selected topic by default. A canonical
 `@topic:<encoded-topic-id>` mention overrides it only when exactly one known
 topic is named. Missing selections, unknown or multiple mentions, stale topic
 references, and topics without a linked thread return `needs-confirmation`
-instead of guessing. This increment does not yet dispatch the routed message;
-the supervisor composer must consume this result and preserve the same
-fail-closed behavior before automatic routing is enabled.
+instead of guessing. The supervisor composer consumes that result: a routed
+message starts a turn in the destination thread and records a routing receipt,
+and anything else becomes an explicit topic confirmation above the composer.
+
+Routing only engages when the project has a supervisor thread, so the link is
+what turns FirstMate on. Clients set it with `firstmate.supervisor.link`, from
+the sidebar panel and the command palette, and clear it by linking `null`. There
+is no separate unlink command.
+
+## Supervisor tools over MCP
+
+The supervisor creates topics, updates and delegates them, and opens decisions
+through the `firstMate` MCP toolkit. Effect's MCP server registers toolkits once
+for the whole process, so these tools are listed on every thread and cannot be
+filtered per session. They are instead gated inside each handler on the live
+`supervisorThreadId` of the invoking thread's project, which is deliberately not
+an `McpCapability`: a capability is stamped when the provider session starts, and
+linking or unlinking a supervisor mid-session has to take effect immediately.
+
+The handlers mint topic and decision ids and translate a decider rejection back
+into the agent's error channel verbatim, because the rejection reason is the only
+thing that tells the agent what to do differently.
 
 ## PR ownership and automatic continuation
 

@@ -60,9 +60,24 @@ export interface FirstMatePanelPullRequest {
   readonly checks: Readonly<Record<PullRequestCheckStatus, number>>;
 }
 
+/**
+ * The thread a project talks to FirstMate in. `threadTitle` is null when that
+ * thread is not in the visible shell, which is the only way the user can tell
+ * a stale link from a live one.
+ */
+export interface FirstMatePanelSupervisor {
+  readonly key: string;
+  readonly environmentId: EnvironmentId;
+  readonly projectId: ProjectId;
+  readonly projectTitle: string;
+  readonly threadId: ThreadId;
+  readonly threadTitle: string | null;
+}
+
 export interface FirstMatePanelModel {
   readonly availability: FirstMatePanelAvailability;
   readonly projectCount: number;
+  readonly supervisors: ReadonlyArray<FirstMatePanelSupervisor>;
   readonly items: ReadonlyArray<FirstMatePanelItem>;
   readonly routingEvaluation: {
     readonly environmentId: EnvironmentId;
@@ -196,6 +211,7 @@ export function buildFirstMatePanelModel(input: {
     return {
       availability: "unavailable",
       projectCount: visibleProjects.length,
+      supervisors: [],
       items: [],
       routingEvaluation: null,
     };
@@ -204,6 +220,20 @@ export function buildFirstMatePanelModel(input: {
   const threadByKey = new Map(
     input.threads.map((thread) => [`${thread.environmentId}:${thread.id}`, thread] as const),
   );
+  const supervisors = firstMateProjects.flatMap((project): FirstMatePanelSupervisor[] => {
+    const threadId = project.firstMate?.supervisorThreadId ?? null;
+    if (threadId === null) return [];
+    return [
+      {
+        key: `${project.environmentId}:${project.id}`,
+        environmentId: project.environmentId,
+        projectId: project.id,
+        projectTitle: project.title,
+        threadId,
+        threadTitle: threadByKey.get(`${project.environmentId}:${threadId}`)?.title ?? null,
+      },
+    ];
+  });
   const items = firstMateProjects.flatMap((project) => {
     const workspace = project.firstMate;
     if (workspace === null || workspace === undefined) return [];
@@ -265,6 +295,7 @@ export function buildFirstMatePanelModel(input: {
   return {
     availability: items.length === 0 ? "empty" : "ready",
     projectCount: visibleProjects.length,
+    supervisors,
     items,
     routingEvaluation:
       evaluationProject?.firstMate != null
