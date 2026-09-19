@@ -46,17 +46,18 @@ export function planFirstMateSupervisorSubmission(input: {
     return { status: "passthrough" };
   }
 
-  // A workspace with no topics has no destination to be unsure about, and the
-  // only way to get the first one is to ask the supervisor for it. Routing here
-  // would ask "where should this go?" while offering nothing, and the send path
-  // returns on that answer — so linking a supervisor would stop the thread from
-  // ever sending again. Fail-closed is about never guessing a destination, not
-  // about refusing a conversation that has none.
-  if (workspace.topics.length === 0) {
+  const route = routeFirstMateMessage(workspace, input.message);
+  // No mention and no active topic is not an ambiguity to resolve — it is the
+  // absence of a routing request, and the thread the user typed in is the
+  // supervisor's own. Treating it as a question made the supervisor impossible
+  // to talk to: the send path returns on `needs-confirmation`, so every message
+  // was held against a prompt that could only offer topics the user had not
+  // asked for. Routing stays opt-in, through an `@topic:` mention or an
+  // explicitly selected topic; fail-closed still covers every case where a
+  // destination was requested but cannot be resolved exactly.
+  if (route.status === "needs-confirmation" && route.reason === "no-selected-topic") {
     return { status: "passthrough" };
   }
-
-  const route = routeFirstMateMessage(workspace, input.message);
   if (route.status === "needs-confirmation") {
     return { ...route, message: input.message };
   }

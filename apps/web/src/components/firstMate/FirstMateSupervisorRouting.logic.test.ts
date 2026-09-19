@@ -126,7 +126,11 @@ describe("planFirstMateSupervisorSubmission", () => {
     ).toEqual({ status: "passthrough" });
   });
 
-  it("still fails closed once a topic exists but none is selected", () => {
+  it("talks to the supervisor when no topic was asked for, even once topics exist", () => {
+    // Reported from a real install: the first fix only covered an empty
+    // workspace, so the thread bricked again the moment one topic existed.
+    // Routing is opt-in; no mention and no active topic means the message is
+    // for the supervisor.
     const unselected = {
       ...project,
       firstMate: { ...project.firstMate!, selectedTopicId: null },
@@ -137,10 +141,27 @@ describe("planFirstMateSupervisorSubmission", () => {
         project: unselected,
         activeThreadId: supervisorThreadId,
         threads: [delegatedThread],
-        message: "Continue.",
+        message: "oi",
         hasComposerContext: false,
       }),
-    ).toMatchObject({ status: "needs-confirmation", reason: "no-selected-topic" });
+    ).toEqual({ status: "passthrough" });
+  });
+
+  it("still fails closed when a destination was asked for but cannot be resolved", () => {
+    const unknownMention = {
+      ...project,
+      firstMate: { ...project.firstMate!, selectedTopicId: null },
+    };
+
+    expect(
+      planFirstMateSupervisorSubmission({
+        project: unknownMention,
+        activeThreadId: supervisorThreadId,
+        threads: [delegatedThread],
+        message: `Continue @topic:${encodeURIComponent("topic-gone")}`,
+        hasComposerContext: false,
+      }),
+    ).toMatchObject({ status: "needs-confirmation" });
   });
 
   it("does not intercept an ordinary project thread", () => {

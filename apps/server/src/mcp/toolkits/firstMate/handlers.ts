@@ -21,6 +21,7 @@ import * as OrchestrationEngine from "../../../orchestration/Services/Orchestrat
 import * as ProjectionSnapshotQuery from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import {
+  FIRST_MATE_THREAD_LIST_LIMIT,
   FIRST_MATE_TOPIC_LIST_LIMIT,
   FirstMateCommandFailedError,
   FirstMateCommandRejectedError,
@@ -321,6 +322,44 @@ const make = Effect.gen(function* () {
 
     firstmate_list_topics: (input) =>
       requireSupervisor().pipe(Effect.map((scope) => listTopics(scope.workspace, input.stage))),
+
+    firstmate_list_project_threads: (input) =>
+      Effect.gen(function* () {
+        const scope = yield* requireSupervisor();
+        const snapshot = yield* snapshots
+          .getShellSnapshot()
+          .pipe(Effect.mapError((cause) => new FirstMateCommandFailedError({ cause })));
+        const topicByThreadId = new Map(
+          scope.workspace.topics
+            .filter((topic) => topic.threadId !== null)
+            .map((topic) => [topic.threadId as string, topic.id]),
+        );
+        const candidates = snapshot.threads
+          .filter(
+            (thread) =>
+              thread.projectId === scope.project.id &&
+              thread.id !== scope.thread.id &&
+              thread.archivedAt === null &&
+              thread.settledOverride !== "settled",
+          )
+          .filter(
+            (thread) =>
+              input.includeDelegated === true || !topicByThreadId.has(thread.id as string),
+          )
+          .toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+        return {
+          threads: candidates.slice(0, FIRST_MATE_THREAD_LIST_LIMIT).map((thread) => ({
+            threadId: thread.id as string,
+            title: thread.title,
+            branch: thread.branch,
+            running: thread.session?.status === "running" || thread.session?.status === "starting",
+            waitingOnUser: thread.hasPendingUserInput || thread.hasPendingApprovals,
+            delegatedToTopicId: topicByThreadId.get(thread.id as string) ?? null,
+            updatedAt: thread.updatedAt,
+          })),
+          truncated: candidates.length > FIRST_MATE_THREAD_LIST_LIMIT,
+        };
+      }),
 
     firstmate_open_decision: (input) =>
       Effect.gen(function* () {

@@ -148,6 +148,7 @@ function makeThread(id: ThreadId): OrchestrationThreadShell {
 
 interface HarnessOptions {
   readonly firstMate?: FirstMateWorkspaceState | null;
+  readonly threads?: ReadonlyArray<OrchestrationThreadShell>;
   readonly reject?: (command: OrchestrationCommand) => OrchestrationCommandInvariantError | null;
 }
 
@@ -174,6 +175,17 @@ const makeHarness = Effect.fn("makeFirstMateToolkitHarness")(function* (
             : Option.none(),
         ),
       getProjectShellById: () => Effect.succeed(Option.some(project)),
+      getShellSnapshot: () =>
+        Effect.succeed({
+          // Mock stays structural; the tool only reads projects and threads.
+          snapshotSequence: 0,
+          updatedAt: NOW,
+          projects: [project],
+          threads: options.threads ?? [
+            makeThread(SUPERVISOR_THREAD_ID),
+            makeThread(WORKER_THREAD_ID),
+          ],
+        }),
     }),
     Layer.mock(OrchestrationEngineService)({
       readEvents: () => Stream.empty,
@@ -585,6 +597,76 @@ describe("FirstMate toolkit handlers", () => {
         threadId: WORKER_THREAD_ID,
       });
       expect(yield* Ref.get(harness.commands)).toEqual([]);
+    }),
+  );
+});
+
+describe("firstmate_list_project_threads", () => {
+  it.effect("reports the threads a topic can be delegated to", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({ firstMate: makeWorkspace() });
+
+      const result = yield* harness.call("firstmate_list_project_threads", {});
+
+      // The supervisor's own thread is never a delegation target: a topic that
+      // points back at it would route the supervisor's instructions to itself.
+      expect(result.threads.map((thread) => thread.threadId)).toEqual([WORKER_THREAD_ID]);
+      expect(result.threads[0]).toMatchObject({ title: "Thread", running: false });
+      expect(result.truncated).toBe(false);
+    }),
+  );
+
+  it.effect("hides threads another topic already owns unless asked for them", () =>
+    Effect.gen(function* () {
+      const owned = makeWorkspace();
+      const harness = yield* makeHarness({
+        firstMate: {
+          ...owned,
+          topics: owned.topics.map((topic) => ({ ...topic, threadId: WORKER_THREAD_ID })),
+        },
+      });
+
+      expect((yield* harness.call("firstmate_list_project_threads", {})).threads).toEqual([]);
+
+      const withDelegated = yield* harness.call("firstmate_list_project_threads", {
+        includeDelegated: true,
+      });
+      expect(withDelegated.threads[0]).toMatchObject({
+        threadId: WORKER_THREAD_ID,
+        delegatedToTopicId: TOPIC_ID,
+      });
+    }),
+  );
+
+  it.effect("omits settled and archived work", () =>
+    Effect.gen(function* () {
+      const settled = ThreadId.make("thread-settled");
+      const archived = ThreadId.make("thread-archived");
+      const harness = yield* makeHarness({
+        firstMate: makeWorkspace(),
+        threads: [
+          makeThread(SUPERVISOR_THREAD_ID),
+          makeThread(WORKER_THREAD_ID),
+          { ...makeThread(settled), settledOverride: "settled" },
+          { ...makeThread(archived), archivedAt: NOW },
+        ],
+      });
+
+      const result = yield* harness.call("firstmate_list_project_threads", {});
+
+      expect(result.threads.map((thread) => thread.threadId)).toEqual([WORKER_THREAD_ID]);
+    }),
+  );
+
+  it.effect("refuses a thread that is not the supervisor", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({ firstMate: makeWorkspace() });
+
+      const failure = yield* harness
+        .call("firstmate_list_project_threads", {}, WORKER_THREAD_ID)
+        .pipe(Effect.flip);
+
+      expect(failure._tag).toBe("FirstMateSupervisorOnlyError");
     }),
   );
 });

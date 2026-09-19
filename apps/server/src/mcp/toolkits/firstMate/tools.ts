@@ -298,11 +298,56 @@ const SendToTopicTool = Tool.make("firstmate_send_to_topic", {
   .annotate(Tool.Idempotent, false)
   .annotate(Tool.OpenWorld, false);
 
+export const FIRST_MATE_THREAD_LIST_LIMIT = 50;
+
+export const FirstMateProjectThreadEntry = Schema.Struct({
+  threadId: Schema.String,
+  title: Schema.String,
+  branch: Schema.NullOr(Schema.String),
+  /** Whether a provider session is mid-turn, so delegation lands behind it. */
+  running: Schema.Boolean,
+  waitingOnUser: Schema.Boolean,
+  delegatedToTopicId: Schema.NullOr(Schema.String).annotate({
+    description: "Topic that already owns this thread. Delegating it again would move that work.",
+  }),
+  updatedAt: Schema.String,
+});
+export type FirstMateProjectThreadEntry = typeof FirstMateProjectThreadEntry.Type;
+
+export const ListProjectThreadsResult = Schema.Struct({
+  threads: Schema.Array(FirstMateProjectThreadEntry),
+  truncated: Schema.Boolean.annotate({
+    description: "True when older threads were dropped to bound the response.",
+  }),
+});
+export type ListProjectThreadsResult = typeof ListProjectThreadsResult.Type;
+
+const ListProjectThreadsTool = Tool.make("firstmate_list_project_threads", {
+  description: `Read this project's unsettled threads with the id firstmate_delegate_topic takes. Without it a topic can only be delegated to a thread id the user typed out, so call it before delegating or when asked what work is open. Settled, archived, and deleted threads are omitted. ${SUPERVISOR_ONLY}`,
+  parameters: Schema.Struct({
+    includeDelegated: Schema.optional(
+      Schema.Boolean.annotate({
+        description:
+          "Include threads another topic already owns. Omit to see only threads free to take.",
+      }),
+    ),
+  }),
+  success: ListProjectThreadsResult,
+  failure: FirstMateToolError,
+  dependencies,
+})
+  .annotate(Tool.Title, "List project threads")
+  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, true)
+  .annotate(Tool.OpenWorld, false);
+
 export const FirstMateToolkit = Toolkit.make(
   CreateTopicTool,
   UpdateTopicTool,
   DelegateTopicTool,
   OpenDecisionTool,
   ListTopicsTool,
+  ListProjectThreadsTool,
   SendToTopicTool,
 );
