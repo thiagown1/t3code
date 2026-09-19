@@ -46,6 +46,16 @@ export function planFirstMateSupervisorSubmission(input: {
     return { status: "passthrough" };
   }
 
+  // A workspace with no topics has no destination to be unsure about, and the
+  // only way to get the first one is to ask the supervisor for it. Routing here
+  // would ask "where should this go?" while offering nothing, and the send path
+  // returns on that answer — so linking a supervisor would stop the thread from
+  // ever sending again. Fail-closed is about never guessing a destination, not
+  // about refusing a conversation that has none.
+  if (workspace.topics.length === 0) {
+    return { status: "passthrough" };
+  }
+
   const route = routeFirstMateMessage(workspace, input.message);
   if (route.status === "needs-confirmation") {
     return { ...route, message: input.message };

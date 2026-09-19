@@ -104,6 +104,45 @@ describe("planFirstMateSupervisorSubmission", () => {
     });
   });
 
+  it("lets the supervisor be talked to before any topic exists", () => {
+    // Observed in a running client: linking a supervisor to a fresh workspace
+    // made every send answer "where should this message go?" with nothing to
+    // choose, and the send path returns on that answer. Since a topic can only
+    // be created by asking the supervisor for one, the thread could never send
+    // again — unlinking was the only way out.
+    const emptyWorkspace = {
+      ...project,
+      firstMate: { ...project.firstMate!, topics: [], selectedTopicId: null },
+    };
+
+    expect(
+      planFirstMateSupervisorSubmission({
+        project: emptyWorkspace,
+        activeThreadId: supervisorThreadId,
+        threads: [delegatedThread],
+        message: "Create a topic for the CI work.",
+        hasComposerContext: false,
+      }),
+    ).toEqual({ status: "passthrough" });
+  });
+
+  it("still fails closed once a topic exists but none is selected", () => {
+    const unselected = {
+      ...project,
+      firstMate: { ...project.firstMate!, selectedTopicId: null },
+    };
+
+    expect(
+      planFirstMateSupervisorSubmission({
+        project: unselected,
+        activeThreadId: supervisorThreadId,
+        threads: [delegatedThread],
+        message: "Continue.",
+        hasComposerContext: false,
+      }),
+    ).toMatchObject({ status: "needs-confirmation", reason: "no-selected-topic" });
+  });
+
   it("does not intercept an ordinary project thread", () => {
     expect(
       planFirstMateSupervisorSubmission({
