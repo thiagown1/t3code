@@ -250,6 +250,7 @@ import {
   type SelectFirstMateTopicRequest,
   type SetFirstMateRoutingEvaluationModeRequest,
   type UnlinkFirstMateSupervisorRequest,
+  type LinkFirstMateSupervisorRequest,
 } from "./firstMate/FirstMateTopicsPanel";
 import { finalizeFirstMateShellCommand } from "./firstMate/firstMateShellCommand";
 import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
@@ -2267,6 +2268,18 @@ export default function Sidebar() {
     },
   });
   const newThreadContext = useHandleNewThread();
+  // The open thread, in the shape the FirstMate panel needs to offer adopting it
+  // as supervisor. A draft has no thread to link, so it stays undefined.
+  const firstMateLinkableThread = useMemo(() => {
+    const thread = newThreadContext.activeThread;
+    if (!thread) return undefined;
+    return {
+      environmentId: thread.environmentId,
+      projectId: thread.projectId,
+      threadId: thread.id,
+      threadTitle: thread.title ?? "this thread",
+    };
+  }, [newThreadContext.activeThread]);
   const openAddProjectCommandPalette = useCallback(
     () => openCommandPalette({ open: "add-project" }),
     [],
@@ -2931,6 +2944,21 @@ export default function Sidebar() {
       const result = await linkFirstMateSupervisor({
         environmentId: request.environmentId,
         input: { projectId: request.projectId, threadId: null },
+      });
+      return finalizeFirstMateShellCommand({
+        result,
+        environmentId: request.environmentId,
+        refreshEnvironmentShell: (environmentId) =>
+          appAtomRegistry.refresh(environmentShell.stateAtom(environmentId)),
+      });
+    },
+    [linkFirstMateSupervisor],
+  );
+  const handleLinkFirstMateSupervisor = useCallback(
+    async (request: LinkFirstMateSupervisorRequest) => {
+      const result = await linkFirstMateSupervisor({
+        environmentId: request.environmentId,
+        input: { projectId: request.projectId, threadId: request.threadId },
       });
       return finalizeFirstMateShellCommand({
         result,
@@ -4805,6 +4833,8 @@ export default function Sidebar() {
           onSetWaitingDeploy={handleFirstMateSetWaitingDeploy}
           onArchiveThread={handleFirstMateArchiveThread}
           onOpenThread={navigateToThread}
+          activeThread={firstMateLinkableThread}
+          onLinkSupervisor={handleLinkFirstMateSupervisor}
         />
         <SidebarGroup className="ps-[calc(var(--sidebar-content-inset)+1px)] pe-[var(--sidebar-content-inset)] pb-1 pt-0 flex-1">
           {isSearchingThreads ? (

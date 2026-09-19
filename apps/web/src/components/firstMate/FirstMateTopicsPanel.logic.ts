@@ -325,3 +325,39 @@ export const FIRST_MATE_STATUS_LABELS: Record<FirstMateTopicOperationalStatus, s
   blocked: "Blocked",
   completed: "Completed",
 };
+
+export interface LinkableSupervisorThread {
+  readonly environmentId: EnvironmentId;
+  readonly projectId: ProjectId;
+  readonly threadId: ThreadId;
+  readonly threadTitle: string;
+}
+
+/**
+ * The thread the panel may offer to adopt as supervisor, or null when there is
+ * nothing to offer.
+ *
+ * FirstMate is only reachable through one command, and the panel used to name
+ * that command without giving anyone a way to run it. Offering the open thread
+ * closes that gap, but only when linking it would actually succeed: a draft has
+ * no thread id, and a project without a FirstMate workspace would be refused by
+ * the decider.
+ */
+export function linkableSupervisorThread(input: {
+  readonly projects: ReadonlyArray<EnvironmentProject>;
+  readonly activeThread: LinkableSupervisorThread | undefined;
+  readonly availability: FirstMatePanelAvailability;
+}): LinkableSupervisorThread | null {
+  const thread = input.activeThread;
+  if (thread === undefined || input.availability === "unavailable") return null;
+  // `null` is a migrated workspace with no facts yet — the state where linking
+  // matters most. Only an absent field means the server cannot host FirstMate.
+  return input.projects.some(
+    (project) =>
+      project.environmentId === thread.environmentId &&
+      project.id === thread.projectId &&
+      project.firstMate !== undefined,
+  )
+    ? thread
+    : null;
+}

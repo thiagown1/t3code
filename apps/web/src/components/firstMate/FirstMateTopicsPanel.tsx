@@ -8,6 +8,7 @@ import type {
   FirstMateRoutingEvaluationMode,
   ProjectId,
   ScopedThreadRef,
+  ThreadId,
 } from "@t3tools/contracts";
 import {
   ArchiveIcon,
@@ -26,6 +27,8 @@ import { Tooltip, TooltipTrigger, TooltipPopup } from "~/components/ui/tooltip";
 import { cn } from "~/lib/utils";
 import {
   buildFirstMatePanelModel,
+  linkableSupervisorThread,
+  type LinkableSupervisorThread,
   FIRST_MATE_STATUS_LABELS,
   type FirstMatePanelItem,
   type FirstMatePanelSupervisor,
@@ -61,6 +64,15 @@ interface FirstMateTopicsPanelProps {
   readonly onSetWaitingDeploy: (thread: ScopedThreadRef) => Promise<boolean>;
   readonly onArchiveThread: (thread: ScopedThreadRef) => Promise<boolean>;
   readonly onOpenThread: (thread: ScopedThreadRef) => void;
+  /** The thread the user is looking at, so the panel can offer to adopt it. */
+  readonly activeThread?: LinkableSupervisorThread | undefined;
+  readonly onLinkSupervisor: (request: LinkFirstMateSupervisorRequest) => Promise<boolean>;
+}
+
+export interface LinkFirstMateSupervisorRequest {
+  readonly environmentId: EnvironmentId;
+  readonly projectId: ProjectId;
+  readonly threadId: ThreadId;
 }
 
 const topicDateFormatter = new Intl.DateTimeFormat(undefined, {
@@ -122,8 +134,11 @@ export function FirstMateTopicsPanel({
   onSetWaitingDeploy,
   onArchiveThread,
   onOpenThread,
+  activeThread,
+  onLinkSupervisor,
 }: FirstMateTopicsPanelProps) {
   const [expanded, setExpanded] = useState(true);
+  const [linkingSupervisor, setLinkingSupervisor] = useState(false);
   const [unlinkingKey, setUnlinkingKey] = useState<string | null>(null);
   const [selectingKey, setSelectingKey] = useState<string | null>(null);
   const [settingRoutingEvaluation, setSettingRoutingEvaluation] = useState(false);
@@ -134,6 +149,25 @@ export function FirstMateTopicsPanel({
   );
 
   if (hidden || projects.length === 0) return null;
+
+  const linkableSupervisor = linkableSupervisorThread({
+    projects,
+    activeThread,
+    availability: model.availability,
+  });
+
+  const linkSupervisor = async (target: LinkableSupervisorThread) => {
+    setLinkingSupervisor(true);
+    try {
+      await onLinkSupervisor({
+        environmentId: target.environmentId,
+        projectId: target.projectId,
+        threadId: target.threadId,
+      });
+    } finally {
+      setLinkingSupervisor(false);
+    }
+  };
 
   const selectTopic = async (item: FirstMatePanelItem) => {
     setSelectingKey(item.key);
@@ -235,10 +269,30 @@ export function FirstMateTopicsPanel({
               ))}
             </ul>
           ) : model.availability === "unavailable" ? null : (
-            <p className="px-2 pb-1 text-[10px] leading-4 text-sidebar-muted-foreground">
-              No supervisor thread. Open the thread you want to plan in and run “Use this thread as
-              FirstMate supervisor”.
-            </p>
+            // Telling someone to run a command without giving them a way to run
+            // it leaves FirstMate unreachable for anyone who does not already
+            // know it lives in the command palette.
+            <div className="px-2 pb-1">
+              <p className="text-[10px] leading-4 text-sidebar-muted-foreground">
+                No supervisor thread yet. FirstMate plans and routes from one thread per project.
+              </p>
+              {linkableSupervisor === null ? (
+                <p className="mt-0.5 text-[10px] leading-4 text-sidebar-muted-foreground/80">
+                  Open the thread you want to plan in, then use this button.
+                </p>
+              ) : (
+                <button
+                  type="button"
+                  disabled={linkingSupervisor}
+                  onClick={() => void linkSupervisor(linkableSupervisor)}
+                  className="mt-1 cursor-pointer rounded-md px-1.5 py-0.5 text-[10px] leading-4 text-sky-500 outline-none hover:bg-sidebar-row-hover focus-visible:ring-2 focus-visible:ring-sidebar-ring disabled:cursor-default disabled:opacity-60"
+                >
+                  {linkingSupervisor
+                    ? "Linking…"
+                    : `Use “${linkableSupervisor.threadTitle}” as supervisor`}
+                </button>
+              )}
+            </div>
           )}
           {model.availability === "ready" ? (
             <ul aria-live="polite" className="max-h-56 space-y-0.5 overflow-y-auto">
@@ -294,7 +348,14 @@ export function FirstMateTopicsPanel({
                         </Tooltip>
                       ))}
                       <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[10px] leading-4 text-sidebar-muted-foreground">
-                        <span className="truncate">{FIRST_MATE_STATUS_LABELS[item.status]}</span>
+                        {/* A topic nobody delegated has no thread to open, so its
+                            row is inert. Saying so beats showing a stage label
+                            that makes the row look like every clickable one. */}
+                        <span className="truncate">
+                          {item.threadId === null
+                            ? "Not delegated yet"
+                            : FIRST_MATE_STATUS_LABELS[item.status]}
+                        </span>
                         {item.responsibleAgentId ? (
                           <>
                             <span aria-hidden>·</span>

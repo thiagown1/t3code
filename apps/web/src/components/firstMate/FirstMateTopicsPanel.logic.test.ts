@@ -13,7 +13,11 @@ import {
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { buildFirstMatePanelModel, firstMatePanelPullRequests } from "./FirstMateTopicsPanel.logic";
+import {
+  buildFirstMatePanelModel,
+  firstMatePanelPullRequests,
+  linkableSupervisorThread,
+} from "./FirstMateTopicsPanel.logic";
 
 const environmentId = EnvironmentId.make("local");
 const projectId = ProjectId.make("project-1");
@@ -344,5 +348,56 @@ describe("FirstMate topics panel model", () => {
       status: "waiting-deploy",
       postMergeActionRequired: false,
     });
+  });
+});
+
+describe("linkableSupervisorThread", () => {
+  // Reported from a real install: the panel named a command the user had no way
+  // to run, so FirstMate stayed unreachable.
+  const openThread = {
+    environmentId,
+    projectId,
+    threadId,
+    threadTitle: "Planning",
+  };
+
+  it("offers the open thread when its project has a FirstMate workspace", () => {
+    expect(
+      linkableSupervisorThread({
+        projects: [project(null)],
+        activeThread: openThread,
+        availability: "empty",
+      }),
+    ).toEqual(openThread);
+  });
+
+  it("offers nothing on a draft, where there is no thread to link", () => {
+    expect(
+      linkableSupervisorThread({
+        projects: [project(null)],
+        activeThread: undefined,
+        availability: "empty",
+      }),
+    ).toBeNull();
+  });
+
+  it("offers nothing when the server has no FirstMate workspace to link into", () => {
+    expect(
+      linkableSupervisorThread({
+        projects: [project(undefined)],
+        activeThread: openThread,
+        availability: "unavailable",
+      }),
+    ).toBeNull();
+  });
+
+  it("offers nothing for a thread belonging to another project", () => {
+    expect(
+      linkableSupervisorThread({
+        projects: [project(null)],
+        activeThread: { ...openThread, projectId: ProjectId.make("project-2") },
+        availability: "empty",
+      }),
+    ).toBeNull();
   });
 });
