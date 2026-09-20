@@ -15,6 +15,7 @@ import * as FirstMateDecisionDeliveryReactor from "../FirstMateDecisionDeliveryR
 import * as ThreadSettlementReactor from "../ThreadSettlementReactor.ts";
 import * as PullRequestSyncReactor from "../PullRequestSyncReactor.ts";
 import * as ThreadPullRequestReactor from "../ThreadPullRequestReactor.ts";
+import * as FirstMateRequestDecisionReactor from "../FirstMateRequestDecisionReactor.ts";
 import * as FirstMateRoundSummaryReactor from "../FirstMateRoundSummaryReactor.ts";
 import * as AgentAwarenessRelay from "../../relay/AgentAwarenessRelay.ts";
 import * as StorageCleanup from "../../storageCleanup.ts";
@@ -31,6 +32,8 @@ export const makeOrchestrationReactor = Effect.gen(function* () {
     yield* FirstMateDecisionDeliveryReactor.FirstMateDecisionDeliveryReactor;
   const pullRequestSyncReactor = yield* PullRequestSyncReactor.PullRequestSyncReactor;
   const threadPullRequestReactor = yield* ThreadPullRequestReactor.ThreadPullRequestReactor;
+  const firstMateRequestDecisionReactor =
+    yield* FirstMateRequestDecisionReactor.FirstMateRequestDecisionReactor;
   const firstMateRoundSummaryReactor =
     yield* FirstMateRoundSummaryReactor.FirstMateRoundSummaryReactor;
   const agentAwarenessRelay = yield* AgentAwarenessRelay.AgentAwarenessRelay;
@@ -46,6 +49,7 @@ export const makeOrchestrationReactor = Effect.gen(function* () {
     yield* threadPullRequestReactor.start();
     yield* threadSettlementReactor.start();
     yield* firstMateDecisionDeliveryReactor.start();
+    yield* firstMateRequestDecisionReactor.start();
     yield* pullRequestSyncReactor.start();
     yield* firstMateRoundSummaryReactor.start();
     yield* agentAwarenessRelay.start();

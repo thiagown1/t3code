@@ -31,6 +31,15 @@ The **Decisions** section of the sidebar shows the same pending decisions across
 every project you have open, so you can answer without opening each supervisor
 thread.
 
+Approvals and questions raised by the worker threads themselves show up in the
+same place. When a thread a topic was delegated to asks to run a command or
+picks between answers, that question becomes a decision card, and answering it
+here answers it in that thread — the thread carries on without you opening it.
+Answering in the thread instead removes the card. Dismissing a card leaves the
+question for you to answer in its own thread, and it will not come back to the
+inbox. Some questions stay in their thread regardless, such as forms with
+several questions or ones where you can pick more than one answer.
+
 ## Follow topics
 
 The **FirstMate** section lists every topic with its stage, the agent

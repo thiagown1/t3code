@@ -71,6 +71,14 @@ export const FirstMateDecisionSource = Schema.Union([
   Schema.Struct({
     kind: Schema.Literals(["user-input", "approval"]),
     requestId: ApprovalRequestId,
+    /**
+     * Thread that raised the request. A provider request id is unique only
+     * within one provider session, so the answer cannot be routed without it:
+     * scanning threads for a matching id can land on the wrong request and
+     * authorize work the user never saw. Decisions stored before this field
+     * existed decode as `null` and are refused at delivery rather than guessed.
+     */
+    threadId: Schema.NullOr(ThreadId).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
   }),
   Schema.Struct({
     kind: Schema.Literal("firstmate"),

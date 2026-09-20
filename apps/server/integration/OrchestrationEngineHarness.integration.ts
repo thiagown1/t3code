@@ -70,6 +70,7 @@ import { ThreadDeletionReactor } from "../src/orchestration/Services/ThreadDelet
 import { ThreadArchiveReactor } from "../src/orchestration/Services/ThreadArchiveReactor.ts";
 import { ThreadQueuedMessageReactor } from "../src/orchestration/Services/ThreadQueuedMessageReactor.ts";
 import * as FirstMateDecisionDeliveryReactor from "../src/orchestration/FirstMateDecisionDeliveryReactor.ts";
+import * as FirstMateRequestDecisionReactor from "../src/orchestration/FirstMateRequestDecisionReactor.ts";
 import * as ThreadSettlementReactor from "../src/orchestration/ThreadSettlementReactor.ts";
 import * as PullRequestSyncReactor from "../src/orchestration/PullRequestSyncReactor.ts";
 import * as ThreadPullRequestReactor from "../src/orchestration/ThreadPullRequestReactor.ts";
@@ -435,6 +436,12 @@ export const makeOrchestrationIntegrationHarness = (
       ),
       Layer.provideMerge(
         Layer.succeed(FirstMateDecisionDeliveryReactor.FirstMateDecisionDeliveryReactor, {
+          start: () => Effect.void,
+          drain: Effect.void,
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.succeed(FirstMateRequestDecisionReactor.FirstMateRequestDecisionReactor, {
           start: () => Effect.void,
           drain: Effect.void,
         }),

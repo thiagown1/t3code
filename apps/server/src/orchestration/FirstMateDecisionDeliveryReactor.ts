@@ -7,13 +7,18 @@
  * the decision, so the asking agent picks the answer up on its own schedule
  * whether or not a client is connected.
  *
- * Delivery is fail-closed by design. A decision opened from a native provider
- * request (`user-input`/`approval`) is never delivered here: its source carries
- * a provider request id with no thread, and its options are free text rather
- * than `ProviderApprovalDecision` values, so there is no exact mapping from the
- * user's pick to a provider reply. Approximating one could authorize work the
- * user never authorized. Those requests stay pending on their own thread, where
- * the user answers them natively.
+ * A decision opened from a native provider request (`user-input`/`approval`)
+ * is answered on that request instead, via `thread.approval.respond` or
+ * `thread.user-input.respond`. That is only safe because the card was built
+ * *from* the request by `firstMateRequestDecisions`, so the chosen option maps
+ * to exactly one provider reply; this module re-reads the live request and
+ * rebuilds the reply from it rather than trusting the stored card.
+ *
+ * Delivery is fail-closed everywhere. A source with no thread, a thread that is
+ * archived, deleted or in another project, a request that is no longer open or
+ * is of the other kind, and an option the live request does not offer all end
+ * in a refusal and a log line. Landing an answer on the wrong request would
+ * authorize a command the user never saw, so nothing here approximates.
  *
  * @module FirstMateDecisionDeliveryReactor
  */
@@ -23,7 +28,9 @@ import {
   ThreadId,
   ThreadQueuedMessageId,
   type FirstMateDecision,
+  type FirstMateDecisionOption,
   type OrchestrationEvent,
+  type ProjectId,
 } from "@t3tools/contracts";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import * as Cause from "effect/Cause";
@@ -36,8 +43,10 @@ import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 
 import { forkParked } from "../serverActivation.ts";
+import { firstMateRequestReply } from "./firstMateRequestDecisions.ts";
 import * as OrchestrationEngine from "./Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "./Services/ProjectionSnapshotQuery.ts";
+import { openRequests, THREAD_REQUEST_ACTIVITY_KINDS } from "./threadOpenRequests.ts";
 
 export class FirstMateDecisionDeliveryReactor extends Context.Service<
   FirstMateDecisionDeliveryReactor,
@@ -57,12 +66,15 @@ type DecisionResolvedEvent = FirstMateDomainEvent & {
 
 /** Why a resolved decision was not delivered, for the one log line that says so. */
 type UndeliverableReason =
-  | "provider-request-source"
   | "no-selected-option"
   | "decision-not-found"
   | "unknown-option"
   | "source-not-a-live-thread"
-  | "source-in-another-project";
+  | "source-in-another-project"
+  | "request-source-without-thread"
+  | "request-no-longer-open"
+  | "request-kind-mismatch"
+  | "option-has-no-provider-reply";
 
 function isDecisionResolvedEvent(event: OrchestrationEvent): event is DecisionResolvedEvent {
   return (
@@ -90,12 +102,90 @@ function deliveryText(input: {
   ].join("\n");
 }
 
+type DeliveryContext = {
+  readonly engine: OrchestrationEngine.OrchestrationEngineShape;
+  readonly snapshots: ProjectionSnapshotQuery.ProjectionSnapshotQuery["Service"];
+  readonly projectId: ProjectId;
+  readonly decision: FirstMateDecision;
+  readonly option: FirstMateDecisionOption;
+  readonly selectedOptionId: string;
+  readonly skip: (reason: UndeliverableReason) => Effect.Effect<void>;
+};
+
+/**
+ * Answer the provider request the card was built from.
+ *
+ * Nothing here trusts the stored card on its own. The source names one thread,
+ * that thread is re-read live, the request must still be open and of the kind
+ * the source claims, and the reply is rebuilt from the live request payload —
+ * so an answer can only ever land on the exact request the user was shown.
+ */
+const deliverToProviderRequest = Effect.fn("deliverToProviderRequest")(function* (
+  context: DeliveryContext & {
+    readonly source: Extract<FirstMateDecision["source"], { requestId: unknown }>;
+  },
+) {
+  const { snapshots, engine, projectId, decision, option, selectedOptionId, source, skip } =
+    context;
+
+  // Without a thread there is no request to answer: a provider request id is
+  // unique only inside one provider session, so searching for a match could
+  // land on a different thread's request. Decisions written before the source
+  // carried a thread take this path and are refused.
+  if (source.threadId === null) return yield* skip("request-source-without-thread");
+
+  const thread = yield* snapshots.getThreadShellById(source.threadId);
+  if (Option.isNone(thread)) return yield* skip("source-not-a-live-thread");
+  if (thread.value.projectId !== projectId) return yield* skip("source-in-another-project");
+
+  const detail = yield* snapshots.getThreadDetailById(source.threadId, {
+    activityKinds: THREAD_REQUEST_ACTIVITY_KINDS,
+  });
+  if (Option.isNone(detail)) return yield* skip("source-not-a-live-thread");
+
+  // Answered in the thread, cancelled, or gone stale while the card sat in the
+  // inbox. Re-answering it would be a second reply to a settled request.
+  const request = openRequests(detail.value).get(source.requestId);
+  if (request === undefined) return yield* skip("request-no-longer-open");
+  const expectedKind = source.kind === "approval" ? "approval.requested" : "user-input.requested";
+  if (request.kind !== expectedKind) return yield* skip("request-kind-mismatch");
+
+  const reply = firstMateRequestReply({
+    activity: request,
+    selectedOptionId,
+    optionLabel: option.label,
+  });
+  if (reply === null) return yield* skip("option-has-no-provider-reply");
+
+  const createdAt = DateTime.formatIso(yield* DateTime.now);
+  const commandId = CommandId.make(`server:firstmate-request-answer:${decision.id}`);
+  yield* engine.dispatch(
+    reply.kind === "approval"
+      ? {
+          type: "thread.approval.respond",
+          commandId,
+          threadId: source.threadId,
+          requestId: source.requestId,
+          decision: reply.decision,
+          createdAt,
+        }
+      : {
+          type: "thread.user-input.respond",
+          commandId,
+          threadId: source.threadId,
+          requestId: source.requestId,
+          answers: reply.answers,
+          createdAt,
+        },
+  );
+});
+
 /**
  * Deliver one resolved decision, or refuse and say why.
  *
  * Every id is derived from the decision id, so a redelivered event is the same
- * command and the engine's receipt dedupe collapses it instead of queueing the
- * answer twice.
+ * command and the engine's receipt dedupe collapses it instead of answering
+ * twice.
  *
  * @internal Exported for tests.
  */
@@ -116,12 +206,22 @@ export const processDecisionResolved = Effect.fn("processDecisionResolved")(func
     ? undefined
     : (project.value.firstMate?.decisions.find((entry) => entry.id === decisionId) ?? undefined);
   if (decision === undefined) return yield* skip("decision-not-found");
-  // A provider request cannot be answered with a FirstMate option. See the
-  // module comment: there is no exact mapping, so there is no delivery.
-  if (decision.source.kind !== "firstmate") return yield* skip("provider-request-source");
 
   const option = decision.options.find((entry) => entry.id === selectedOptionId);
   if (option === undefined) return yield* skip("unknown-option");
+
+  if (decision.source.kind !== "firstmate") {
+    return yield* deliverToProviderRequest({
+      engine,
+      snapshots,
+      projectId,
+      decision,
+      option,
+      selectedOptionId,
+      source: decision.source,
+      skip,
+    });
+  }
 
   // The asker is the thread named by the source, not whichever thread is the
   // supervisor now: relinking the supervisor does not move an open question.

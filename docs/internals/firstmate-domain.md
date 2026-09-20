@@ -87,13 +87,49 @@ Delivering that answer is a separate, fail-closed step owned by
 `FirstMateDecisionDeliveryReactor`. A decision a supervisor opened names the
 asking thread in its source, so the answer is queued back on that thread as an
 ordinary message and drains with or without a connected client. A decision whose
-source is a native `user-input` or `approval` request is never answered this way:
-the source carries a provider request id and no thread, and its options are free
-text rather than `ProviderApprovalDecision` values, so no exact mapping exists.
-Approximating one could authorize work the user did not authorize, so those
-requests stay pending on their own thread for a native answer. Every other
-unmappable source — an imported decision, a deleted or archived asker, an option
-id that is not in the decision — is refused and logged rather than guessed.
+source is a native `user-input` or `approval` request is answered on that request
+instead. Every unmappable source — an imported decision, a deleted or archived
+asker, an asker in another project, an option id that is not in the decision —
+is refused and logged rather than guessed.
+
+## Provider requests as decisions
+
+A thread a topic is delegated to can block on a native approval or user-input
+request. `FirstMateRequestDecisionReactor` lifts those into the same inbox so
+the supervisor is one place to look, and `FirstMateDecisionDeliveryReactor`
+answers them on the original request.
+
+The direction matters and is the whole reason this is safe. Mapping an arbitrary
+decision onto a provider request cannot be done exactly: decision option ids are
+free text, `thread.approval.respond` takes one of five `ProviderApprovalDecision`
+literals, and `thread.user-input.respond` takes a record keyed by question id, so
+the final step would always be a guess — and a wrong guess authorizes work the
+user never saw. `firstMateRequestDecisions` inverts it and builds the card _from_
+the live request, so each option already corresponds to exactly one reply: an
+approval option's id is its `decision` literal, and a user-input option's id is
+that answer's position in the question. Requests the module cannot state exactly
+— an approval with no provider options, a multi-question form, a multi-select
+answer — produce no card and stay pending on their own thread.
+
+The `user-input`/`approval` source therefore carries the originating `threadId`.
+Without it an answer cannot be routed at all, because a provider request id is
+unique only within one provider session and scanning threads for a match can
+land on a different request. Decisions stored before the field existed decode as
+`null` and are refused at delivery.
+
+Each pass reconciles rather than reacts: it recomputes the thread's open
+requests and makes the workspace match, using the same `openRequests` derivation
+the decider uses to decide whether a thread is blocked on the user. That is what
+makes it idempotent — the decision id is derived from thread plus request, so a
+repeat is rejected as a duplicate — and what removes a card once the user answers
+the request in the thread itself. It also means cancelling such a card from the
+inbox is permanent for that request: the id already exists, so no later pass
+re-raises it, which is how "leave this one to me" is expressed.
+
+Delivery never trusts the stored card. It re-reads the source thread, requires
+the request to still be open and to be of the kind the source claims, and
+rebuilds the reply from the live request payload, checking the card's label
+against it. Any mismatch is a refusal.
 
 ## Deterministic topic routing
 

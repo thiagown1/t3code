@@ -71,11 +71,27 @@ export const FirstMateRoundSummaryReceipt = Schema.Struct({
 });
 export type FirstMateRoundSummaryReceipt = typeof FirstMateRoundSummaryReceipt.Type;
 
+/**
+ * One reconcile pass over a delegated thread's pending provider requests. The
+ * counts are reported for every pass, including the ones that change nothing,
+ * so a test can wait on the pass rather than on a card appearing.
+ */
+export const FirstMateRequestDecisionReceipt = Schema.Struct({
+  type: Schema.Literal("firstmate.request-decision.settled"),
+  threadId: ThreadId,
+  openedCount: NonNegativeInt,
+  cancelledCount: NonNegativeInt,
+  outcome: Schema.Literals(["reconciled", "skipped", "failed"]),
+  createdAt: IsoDateTime,
+});
+export type FirstMateRequestDecisionReceipt = typeof FirstMateRequestDecisionReceipt.Type;
+
 export const OrchestrationRuntimeReceipt = Schema.Union([
   CheckpointBaselineCapturedReceipt,
   CheckpointDiffFinalizedReceipt,
   TurnProcessingQuiescedReceipt,
   FirstMateRoundSummaryReceipt,
+  FirstMateRequestDecisionReceipt,
 ]);
 export type OrchestrationRuntimeReceipt = typeof OrchestrationRuntimeReceipt.Type;
 
