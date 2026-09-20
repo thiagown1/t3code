@@ -126,6 +126,13 @@ the request in the thread itself. It also means cancelling such a card from the
 inbox is permanent for that request: the id already exists, so no later pass
 re-raises it, which is how "leave this one to me" is expressed.
 
+Delegation starts a pass too, because it moves the boundary of what is projected
+at all: a thread can already be blocked on the user when its topic arrives, and a
+topic moved to another thread leaves cards behind that nothing points at any
+more. The event names only the new thread, so a delegation pass also re-checks
+every thread the workspace still holds a pending card for, and a thread no topic
+is delegated to cancels its cards instead of opening any.
+
 Delivery never trusts the stored card. It re-reads the source thread, requires
 the request to still be open and to be of the kind the source claims, and
 rebuilds the reply from the live request payload, checking the card's label

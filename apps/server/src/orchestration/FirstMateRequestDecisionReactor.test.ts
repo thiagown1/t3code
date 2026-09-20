@@ -9,23 +9,40 @@ import {
   type FirstMateDecision,
   type FirstMateTopic,
   type OrchestrationCommand,
+  type OrchestrationEvent,
   type OrchestrationProjectShell,
   type OrchestrationThreadActivity,
   type OrchestrationThreadShell,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Queue from "effect/Queue";
+import * as Ref from "effect/Ref";
+import * as Stream from "effect/Stream";
 
 import { OrchestrationCommandInvariantError } from "./Errors.ts";
-import { reconcileThreadRequestDecisions } from "./FirstMateRequestDecisionReactor.ts";
-import type { OrchestrationEngineShape } from "./Services/OrchestrationEngine.ts";
-import type { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
+import {
+  FirstMateRequestDecisionReactor,
+  layer,
+  reconcileThreadRequestDecisions,
+} from "./FirstMateRequestDecisionReactor.ts";
+import {
+  OrchestrationEngineService,
+  type OrchestrationEngineShape,
+} from "./Services/OrchestrationEngine.ts";
+import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
+import {
+  RuntimeReceiptBus,
+  type OrchestrationRuntimeReceipt,
+} from "./Services/RuntimeReceiptBus.ts";
 
 const NOW = "2026-08-01T00:00:00.000Z";
 const PROJECT_ID = ProjectId.make("project-1");
 const SUPERVISOR_THREAD_ID = ThreadId.make("thread-supervisor");
 const WORKER_THREAD_ID = ThreadId.make("thread-worker");
+const OTHER_THREAD_ID = ThreadId.make("thread-other");
 const TOPIC_ID = FirstMateTopicId.make("topic-1");
 const REQUEST_ID = ApprovalRequestId.make("request-1");
 const EXPECTED_DECISION_ID = FirstMateDecisionId.make(
@@ -363,6 +380,27 @@ describe("FirstMate request decision projection", () => {
     }),
   );
 
+  it.effect("cancels the cards a topic leaves behind when it is delegated elsewhere", () =>
+    Effect.gen(function* () {
+      const { dispatched, result } = yield* reconcile({
+        // The request is still open on the thread; what changed is that the
+        // supervisor no longer follows the work it belongs to.
+        activities: [approvalRequested(REQUEST_ID)],
+        project: makeProject({
+          topics: [makeTopic({ threadId: OTHER_THREAD_ID })],
+          decisions: [openRequestDecision()],
+        }),
+      });
+      expect(dispatched).toEqual([
+        expect.objectContaining({
+          type: "firstmate.decision.cancel",
+          decisionId: EXPECTED_DECISION_ID,
+        }),
+      ]);
+      expect(result.outcome).toBe("reconciled");
+    }),
+  );
+
   it.effect("ignores projects with no FirstMate workspace", () =>
     Effect.gen(function* () {
       const { dispatched, result } = yield* reconcile({
@@ -395,5 +433,152 @@ describe("FirstMate request decision projection", () => {
       expect(dispatched).toEqual([]);
       expect(result.outcome).toBe("reconciled");
     }),
+  );
+});
+
+function topicDelegated(threadId: ThreadId | null): OrchestrationEvent {
+  return {
+    sequence: 1,
+    eventId: EventId.make(`evt-delegated-${threadId ?? "none"}`),
+    aggregateKind: "project",
+    aggregateId: PROJECT_ID,
+    occurredAt: NOW,
+    commandId: null,
+    causationEventId: null,
+    correlationId: null,
+    metadata: {},
+    type: "firstmate.domain-event",
+    payload: {
+      type: "firstmate.topic-delegated",
+      projectId: PROJECT_ID,
+      topicId: TOPIC_ID,
+      threadId,
+      responsibleAgentId: "codex",
+      occurredAt: NOW,
+    },
+  } as OrchestrationEvent;
+}
+
+/**
+ * The reactor with its stream and receipt bus queue-backed on both sides, so a
+ * test waits on the pass it caused instead of on a clock.
+ */
+const makeHarness = Effect.fn("makeFirstMateRequestDecisionHarness")(function* (options: {
+  readonly project: OrchestrationProjectShell;
+  readonly activities?: Readonly<Record<string, ReadonlyArray<OrchestrationThreadActivity>>>;
+}) {
+  const commands = yield* Ref.make<ReadonlyArray<OrchestrationCommand>>([]);
+  const events = yield* Queue.unbounded<OrchestrationEvent>();
+  const receipts = yield* Queue.unbounded<OrchestrationRuntimeReceipt>();
+
+  const snapshots = {
+    getThreadShellById: (id: ThreadId) => Effect.succeed(Option.some(makeThread(id))),
+    getProjectShellById: () => Effect.succeed(Option.some(options.project)),
+    getThreadDetailById: (id: ThreadId) =>
+      Effect.succeed(Option.some({ activities: options.activities?.[id] ?? [] })),
+  } as unknown as ProjectionSnapshotQuery["Service"];
+
+  const dependencies = Layer.mergeAll(
+    Layer.succeed(ProjectionSnapshotQuery, snapshots),
+    Layer.succeed(OrchestrationEngineService, {
+      dispatch: (command: OrchestrationCommand) =>
+        Ref.update(commands, (recorded) => [...recorded, command]).pipe(Effect.as({ sequence: 1 })),
+      streamDomainEvents: Stream.fromQueue(events),
+    } as unknown as OrchestrationEngineShape),
+    Layer.succeed(RuntimeReceiptBus, {
+      publish: (receipt: OrchestrationRuntimeReceipt) =>
+        Queue.offer(receipts, receipt).pipe(Effect.asVoid),
+      streamEventsForTest: Stream.empty,
+    }),
+  );
+
+  // Built into the test's scope: the worker fiber has to outlive the call that
+  // acquires the service.
+  const context = yield* Layer.build(layer.pipe(Layer.provide(dependencies)));
+  const reactor = yield* Effect.service(FirstMateRequestDecisionReactor).pipe(
+    Effect.provide(context),
+  );
+  yield* reactor.start();
+
+  return {
+    commands,
+    emit: (event: OrchestrationEvent) => Queue.offer(events, event),
+    /** Resolves once the reactor has finished one thread's pass. */
+    nextReceipt: Queue.take(receipts),
+  };
+});
+
+describe("FirstMate request decisions on delegation", () => {
+  it.effect("raises a card for a request that was already waiting when the topic arrived", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({
+        project: makeProject({ topics: [makeTopic()], decisions: [] }),
+        activities: { [WORKER_THREAD_ID]: [approvalRequested(REQUEST_ID)] },
+      });
+
+      yield* harness.emit(topicDelegated(WORKER_THREAD_ID));
+      expect(yield* harness.nextReceipt).toMatchObject({
+        type: "firstmate.request-decision.settled",
+        threadId: WORKER_THREAD_ID,
+        outcome: "reconciled",
+        openedCount: 1,
+      });
+      expect(yield* Ref.get(harness.commands)).toMatchObject([
+        {
+          type: "firstmate.decision.open",
+          decisionId: EXPECTED_DECISION_ID,
+          topicId: TOPIC_ID,
+          blocking: true,
+        },
+      ]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("leaves no orphans behind when a topic moves to another thread", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({
+        // The workspace as the projector left it: the topic now points at the
+        // new thread, and the old thread's card is still pending.
+        project: makeProject({
+          topics: [makeTopic({ threadId: OTHER_THREAD_ID })],
+          decisions: [openRequestDecision()],
+        }),
+        activities: { [WORKER_THREAD_ID]: [approvalRequested(REQUEST_ID)] },
+      });
+
+      yield* harness.emit(topicDelegated(OTHER_THREAD_ID));
+      // The new thread first, then the thread the workspace still holds a card
+      // for. Both passes are reported.
+      expect(yield* harness.nextReceipt).toMatchObject({
+        threadId: OTHER_THREAD_ID,
+        outcome: "reconciled",
+        openedCount: 0,
+      });
+      expect(yield* harness.nextReceipt).toMatchObject({
+        threadId: WORKER_THREAD_ID,
+        outcome: "reconciled",
+        cancelledCount: 1,
+      });
+      expect(yield* Ref.get(harness.commands)).toMatchObject([
+        { type: "firstmate.decision.cancel", decisionId: EXPECTED_DECISION_ID },
+      ]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("delegating a thread with nothing pending changes nothing", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({
+        project: makeProject({ topics: [makeTopic()], decisions: [] }),
+      });
+
+      yield* harness.emit(topicDelegated(WORKER_THREAD_ID));
+      expect(yield* harness.nextReceipt).toMatchObject({
+        threadId: WORKER_THREAD_ID,
+        outcome: "reconciled",
+        openedCount: 0,
+        cancelledCount: 0,
+      });
+      expect(yield* Ref.get(harness.commands)).toEqual([]);
+    }).pipe(Effect.scoped),
   );
 });
