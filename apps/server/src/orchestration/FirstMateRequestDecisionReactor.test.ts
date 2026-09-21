@@ -24,6 +24,7 @@ import * as Stream from "effect/Stream";
 
 import { OrchestrationCommandInvariantError } from "./Errors.ts";
 import {
+  firstMateBackfillThreadIds,
   FirstMateRequestDecisionReactor,
   layer,
   reconcileThreadRequestDecisions,
@@ -66,7 +67,10 @@ function makeTopic(overrides: Partial<FirstMateTopic> = {}): FirstMateTopic {
   };
 }
 
-function makeThread(id: ThreadId): OrchestrationThreadShell {
+function makeThread(
+  id: ThreadId,
+  overrides: Partial<OrchestrationThreadShell> = {},
+): OrchestrationThreadShell {
   return {
     id,
     projectId: PROJECT_ID,
@@ -88,6 +92,7 @@ function makeThread(id: ThreadId): OrchestrationThreadShell {
     hasPendingApprovals: true,
     hasPendingUserInput: false,
     hasActionableProposedPlan: false,
+    ...overrides,
   };
 }
 
@@ -480,16 +485,27 @@ function topicDelegated(threadId: ThreadId | null): OrchestrationEvent {
 const makeHarness = Effect.fn("makeFirstMateRequestDecisionHarness")(function* (options: {
   readonly project: OrchestrationProjectShell;
   readonly activities?: Readonly<Record<string, ReadonlyArray<OrchestrationThreadActivity>>>;
+  /**
+   * What the shell snapshot a backfill scans reports. Empty by default, so a
+   * test about one trigger is not also a test of the one that runs at start.
+   */
+  readonly shellThreads?: ReadonlyArray<OrchestrationThreadShell>;
 }) {
   const commands = yield* Ref.make<ReadonlyArray<OrchestrationCommand>>([]);
+  const project = yield* Ref.make(options.project);
   const events = yield* Queue.unbounded<OrchestrationEvent>();
   const receipts = yield* Queue.unbounded<OrchestrationRuntimeReceipt>();
 
   const snapshots = {
     getThreadShellById: (id: ThreadId) => Effect.succeed(Option.some(makeThread(id))),
-    getProjectShellById: () => Effect.succeed(Option.some(options.project)),
+    getProjectShellById: () => Effect.map(Ref.get(project), Option.some),
     getThreadDetailById: (id: ThreadId) =>
       Effect.succeed(Option.some({ activities: options.activities?.[id] ?? [] })),
+    getShellSnapshot: () =>
+      Effect.map(Ref.get(project), (current) => ({
+        projects: [current],
+        threads: options.shellThreads ?? [],
+      })),
   } as unknown as ProjectionSnapshotQuery["Service"];
 
   const dependencies = Layer.mergeAll(
@@ -517,9 +533,162 @@ const makeHarness = Effect.fn("makeFirstMateRequestDecisionHarness")(function* (
   return {
     commands,
     emit: (event: OrchestrationEvent) => Queue.offer(events, event),
+    /** Stands in for the projector between two passes of the same test. */
+    setProject: (next: OrchestrationProjectShell) => Ref.set(project, next),
     /** Resolves once the reactor has finished one thread's pass. */
     nextReceipt: Queue.take(receipts),
   };
+});
+
+function supervisorLinked(threadId: ThreadId | null): OrchestrationEvent {
+  return {
+    sequence: 2,
+    eventId: EventId.make(`evt-supervisor-${threadId ?? "none"}`),
+    aggregateKind: "project",
+    aggregateId: PROJECT_ID,
+    occurredAt: NOW,
+    commandId: null,
+    causationEventId: null,
+    correlationId: null,
+    metadata: {},
+    type: "firstmate.domain-event",
+    payload: {
+      type: "firstmate.supervisor-linked",
+      projectId: PROJECT_ID,
+      threadId,
+      occurredAt: NOW,
+    },
+  } as OrchestrationEvent;
+}
+
+describe("FirstMate request decision backfill scan", () => {
+  const blocked = makeThread(WORKER_THREAD_ID);
+  const quiet = makeThread(OTHER_THREAD_ID, { hasPendingApprovals: false });
+  const supervisor = makeThread(SUPERVISOR_THREAD_ID);
+
+  it("reads only the threads the shell already says are blocked", () => {
+    const threadIds = firstMateBackfillThreadIds(
+      {
+        projects: [makeProject({ topics: [], decisions: [] })],
+        threads: [quiet, blocked, supervisor],
+      },
+      null,
+    );
+    // The quiet thread never has its detail read, which is what keeps a
+    // project of hundreds of settled threads cheap to scan.
+    expect(threadIds).toEqual([WORKER_THREAD_ID]);
+  });
+
+  it("counts a thread waiting on user input, not only on approval", () => {
+    const awaitingInput = makeThread(OTHER_THREAD_ID, {
+      hasPendingApprovals: false,
+      hasPendingUserInput: true,
+    });
+    expect(
+      firstMateBackfillThreadIds(
+        { projects: [makeProject({ topics: [], decisions: [] })], threads: [awaitingInput] },
+        null,
+      ),
+    ).toEqual([OTHER_THREAD_ID]);
+  });
+
+  it("scans nothing for a project with no FirstMate workspace", () => {
+    expect(
+      firstMateBackfillThreadIds(
+        {
+          projects: [makeProject({ topics: [], decisions: [], withWorkspace: false })],
+          threads: [blocked],
+        },
+        null,
+      ),
+    ).toEqual([]);
+  });
+
+  it("narrows to one project when a single project starts being supervised", () => {
+    expect(
+      firstMateBackfillThreadIds(
+        { projects: [makeProject({ topics: [], decisions: [] })], threads: [blocked] },
+        ProjectId.make("project-other"),
+      ),
+    ).toEqual([]);
+  });
+});
+
+describe("FirstMate request decisions on start and on switching FirstMate on", () => {
+  it.effect("raises cards for threads already blocked when the server starts", () =>
+    Effect.gen(function* () {
+      // Nothing new happens: the request has been sitting on the thread since
+      // before this process existed, which is what left the inbox empty.
+      const harness = yield* makeHarness({
+        project: makeProject({ topics: [], decisions: [] }),
+        activities: { [WORKER_THREAD_ID]: [approvalRequested(REQUEST_ID)] },
+        shellThreads: [makeThread(WORKER_THREAD_ID), makeThread(SUPERVISOR_THREAD_ID)],
+      });
+
+      expect(yield* harness.nextReceipt).toMatchObject({
+        type: "firstmate.request-decision.settled",
+        threadId: WORKER_THREAD_ID,
+        outcome: "reconciled",
+        openedCount: 1,
+      });
+      expect(yield* Ref.get(harness.commands)).toMatchObject([
+        {
+          type: "firstmate.decision.open",
+          decisionId: EXPECTED_DECISION_ID,
+          topicId: null,
+          blocking: true,
+        },
+      ]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("scans the project when a supervisor is linked, and never twice over", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({
+        project: makeProject({ topics: [], decisions: [] }),
+        activities: { [WORKER_THREAD_ID]: [approvalRequested(REQUEST_ID)] },
+        shellThreads: [makeThread(WORKER_THREAD_ID)],
+      });
+
+      expect(yield* harness.nextReceipt).toMatchObject({
+        threadId: WORKER_THREAD_ID,
+        openedCount: 1,
+      });
+
+      // The workspace as the projector leaves it once the first scan lands.
+      yield* harness.setProject(
+        makeProject({ topics: [], decisions: [openRequestDecision({ topicId: null })] }),
+      );
+      yield* harness.emit(supervisorLinked(SUPERVISOR_THREAD_ID));
+
+      // Same thread, same request, same derived id: the second scan finds the
+      // card already there and opens nothing.
+      expect(yield* harness.nextReceipt).toMatchObject({
+        threadId: WORKER_THREAD_ID,
+        outcome: "reconciled",
+        openedCount: 0,
+        cancelledCount: 0,
+      });
+      expect(yield* Ref.get(harness.commands)).toHaveLength(1);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("does not scan a project when its supervisor is unlinked", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({
+        project: makeProject({ topics: [], decisions: [] }),
+        activities: { [WORKER_THREAD_ID]: [approvalRequested(REQUEST_ID)] },
+        shellThreads: [makeThread(WORKER_THREAD_ID)],
+      });
+
+      expect(yield* harness.nextReceipt).toMatchObject({ openedCount: 1 });
+      yield* harness.emit(supervisorLinked(null));
+      // A delegation behind it proves the unlink produced no pass of its own:
+      // this receipt is the delegation's, not a scan's.
+      yield* harness.emit(topicDelegated(OTHER_THREAD_ID));
+      expect(yield* harness.nextReceipt).toMatchObject({ threadId: OTHER_THREAD_ID });
+    }).pipe(Effect.scoped),
+  );
 });
 
 describe("FirstMate request decisions on delegation", () => {

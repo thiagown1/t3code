@@ -28,10 +28,20 @@
  * never because delegation moved: delegation no longer decides what is
  * projected, so it must not take a live question away from the user.
  *
- * Two things start a pass: request activity on a thread, and a topic being
- * delegated to one. The second is a backfill, not a boundary change - the
- * first delegation in a project is often what creates the workspace, and the
- * thread it names can already be blocked on the user.
+ * Request activity on a thread is the steady-state trigger, but it only ever
+ * catches threads that block *after* FirstMate is watching. A user who turns
+ * FirstMate on, or restarts the server, is usually already blocked on several
+ * threads, and those requests raise no new event - so without a scan the inbox
+ * stays empty for exactly the person it exists for. Linking a supervisor and
+ * server start therefore each run a backfill, and a topic being delegated
+ * re-checks the thread it names.
+ *
+ * The scan is cheap by construction. The shell snapshot already records which
+ * threads are blocked on the user, so only those have their detail read; a
+ * project with hundreds of settled threads costs one snapshot and nothing
+ * more. It runs parked off the boot path and, like every other pass here,
+ * logs and moves on if it fails. Re-running it opens nothing twice, because a
+ * card's id is derived from its thread and request.
  *
  * Dismissing a card with the inbox's Cancel button is therefore permanent for
  * that request: the decision id is derived from the request, so a later pass
@@ -47,6 +57,8 @@ import {
   type FirstMateDecision,
   type FirstMateWorkspaceState,
   type OrchestrationEvent,
+  type OrchestrationShellSnapshot,
+  type ProjectId,
 } from "@t3tools/contracts";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import * as Cause from "effect/Cause";
@@ -91,26 +103,75 @@ const SKIPPED: FirstMateRequestReconcileResult = {
 };
 
 /**
- * The thread one event asks this reactor to re-check.
+ * What one trigger asks this reactor to re-check.
  *
- * Request activity is the steady-state trigger, and the same event stream
- * carries both halves of that loop: a `*.requested` opens a card, a
- * `*.resolved` in the thread closes it. Delegation is a backfill for the thread
- * it names, which may have been blocked on the user since before the workspace
- * existed. Nothing else needs re-checking when delegation moves, because which
- * topic owns a thread no longer decides whether its requests are projected.
+ * `thread` is the steady state, and the same event stream carries both halves
+ * of that loop: a `*.requested` opens a card, a `*.resolved` in the thread
+ * closes it. `backfill` is a scan, for the triggers that know a project may
+ * hold blocked threads but cannot name them - FirstMate being switched on, and
+ * server start. A null `projectId` means every supervised project.
  */
-function reconcileThreadIdForEvent(event: OrchestrationEvent): ThreadId | null {
+type ReconcileTask =
+  | { readonly kind: "thread"; readonly threadId: ThreadId }
+  | { readonly kind: "backfill"; readonly projectId: ProjectId | null };
+
+/** Server start: sweep every project FirstMate already supervises. */
+const BACKFILL_EVERY_PROJECT: ReconcileTask = { kind: "backfill", projectId: null };
+
+function reconcileTaskForEvent(event: OrchestrationEvent): ReconcileTask | null {
   if (event.type === "thread.activity-appended") {
-    return REQUEST_ACTIVITY_KINDS.has(event.payload.activity.kind) ? event.payload.threadId : null;
+    return REQUEST_ACTIVITY_KINDS.has(event.payload.activity.kind)
+      ? { kind: "thread", threadId: event.payload.threadId }
+      : null;
   }
-  if (
-    event.type === "firstmate.domain-event" &&
-    event.payload.type === "firstmate.topic-delegated"
-  ) {
-    return event.payload.threadId;
+  if (event.type !== "firstmate.domain-event") return null;
+  // Linking a supervisor is the moment a project starts being watched, and the
+  // threads it is already blocked on raise nothing new to announce themselves.
+  if (event.payload.type === "firstmate.supervisor-linked") {
+    return event.payload.threadId === null
+      ? null
+      : { kind: "backfill", projectId: event.payload.projectId };
+  }
+  if (event.payload.type === "firstmate.topic-delegated" && event.payload.threadId !== null) {
+    return { kind: "thread", threadId: event.payload.threadId };
   }
   return null;
+}
+
+/**
+ * Threads a scan has to re-check: the ones a supervised project is already
+ * blocked on.
+ *
+ * `hasPendingApprovals` and `hasPendingUserInput` come free with the shell, and
+ * reading a thread's detail is the expensive half of a pass, so a project with
+ * hundreds of settled threads is filtered down to the handful actually waiting
+ * on the user without touching one of them. The supervisor is dropped here so
+ * the scan does not queue a pass that only exists to be skipped; every other
+ * rule - archived, deleted, no workspace - still belongs to the pass itself.
+ *
+ * @internal Exported for tests.
+ */
+export function firstMateBackfillThreadIds(
+  snapshot: Pick<OrchestrationShellSnapshot, "projects" | "threads">,
+  projectId: ProjectId | null,
+): ReadonlyArray<ThreadId> {
+  const supervisorByProjectId = new Map<ProjectId, ThreadId | null>();
+  for (const project of snapshot.projects) {
+    if (projectId !== null && project.id !== projectId) continue;
+    const workspace = project.firstMate;
+    if (workspace === null || workspace === undefined) continue;
+    supervisorByProjectId.set(project.id, workspace.supervisorThreadId);
+  }
+  if (supervisorByProjectId.size === 0) return [];
+
+  const threadIds: ThreadId[] = [];
+  for (const thread of snapshot.threads) {
+    if (!supervisorByProjectId.has(thread.projectId)) continue;
+    if (supervisorByProjectId.get(thread.projectId) === thread.id) continue;
+    if (!thread.hasPendingApprovals && !thread.hasPendingUserInput) continue;
+    threadIds.push(thread.id);
+  }
+  return threadIds;
 }
 
 /** Pending cards this workspace already holds for requests on one thread. */
@@ -265,17 +326,44 @@ export const make = Effect.gen(function* () {
       ),
     );
 
-  const worker = yield* makeDrainableWorker(processThread);
+  /**
+   * A scan reads one snapshot and fans out from it. Failing to read it costs
+   * the backfill, never the reactor: request activity still opens cards, and
+   * the next start scans again.
+   */
+  const threadsForTask = (task: ReconcileTask) =>
+    task.kind === "thread"
+      ? Effect.succeed<ReadonlyArray<ThreadId>>([task.threadId])
+      : snapshots.getShellSnapshot().pipe(
+          Effect.map((snapshot) => firstMateBackfillThreadIds(snapshot, task.projectId)),
+          Effect.catchCause((cause) =>
+            Cause.hasInterruptsOnly(cause)
+              ? Effect.failCause(cause)
+              : Effect.logWarning("FirstMate request decision backfill could not read the shell", {
+                  projectId: task.projectId,
+                  cause: Cause.pretty(cause),
+                }).pipe(Effect.as<ReadonlyArray<ThreadId>>([])),
+          ),
+        );
+
+  const worker = yield* makeDrainableWorker((task: ReconcileTask) =>
+    Effect.flatMap(threadsForTask(task), (threadIds) =>
+      Effect.forEach(threadIds, processThread, { discard: true }),
+    ),
+  );
 
   const start: FirstMateRequestDecisionReactor["Service"]["start"] = Effect.fn(
     "FirstMateRequestDecisionReactor.start",
   )(function* () {
     yield* forkParked(
       Stream.runForEach(engine.streamDomainEvents, (event) => {
-        const threadId = reconcileThreadIdForEvent(event);
-        return threadId === null ? Effect.void : worker.enqueue(threadId);
+        const task = reconcileTaskForEvent(event);
+        return task === null ? Effect.void : worker.enqueue(task);
       }),
     );
+    // Parked with the stream, so a restart catches up on everything that was
+    // already waiting without holding up the boot that has to serve it.
+    yield* forkParked(worker.enqueue(BACKFILL_EVERY_PROJECT));
   });
 
   return { start, drain: worker.drain } satisfies FirstMateRequestDecisionReactor["Service"];

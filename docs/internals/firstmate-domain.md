@@ -136,12 +136,21 @@ the request in the thread itself. It also means cancelling such a card from the
 inbox is permanent for that request: the id already exists, so no later pass
 re-raises it, which is how "leave this one to me" is expressed.
 
-Delegation starts a pass too, but only as a backfill for the thread the event
-names: the first delegation in a project is often what creates the workspace, and
-that thread can already be blocked on the user. Nothing else is re-checked,
-because which topic owns a thread no longer decides whether its requests are
-projected. A card leaves the inbox only when its request closed - never because
-delegation moved, which would take a live question away from the user.
+Request activity only ever catches threads that block after FirstMate is
+watching. Switching FirstMate on, or restarting the server, usually finds
+several threads already blocked, and those requests raise no new event - so
+without a scan the inbox stays empty for exactly the person it exists for.
+`firstmate.supervisor-linked` therefore scans its project, server start scans
+every supervised project, and a topic being delegated re-checks the thread it
+names. The scan is cheap by construction: the shell snapshot already records
+`hasPendingApprovals` and `hasPendingUserInput`, and reading a thread's detail
+is the expensive half of a pass, so a project of hundreds of settled threads
+costs one snapshot and nothing more. It is parked off the boot path and, like
+every pass, logs and moves on if it fails. Re-running it opens nothing twice,
+because a card's id is derived from its thread and request.
+
+A card leaves the inbox only when its request closed - never because delegation
+moved, which would take a live question away from the user.
 
 Delivery never trusts the stored card. It re-reads the source thread, requires
 the request to still be open and to be of the kind the source claims, and
