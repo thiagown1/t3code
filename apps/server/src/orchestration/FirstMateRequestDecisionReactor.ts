@@ -1,30 +1,37 @@
 /**
- * FirstMateRequestDecisionReactor - lifts a delegated thread's pending requests
- * into the FirstMate supervisor's decision inbox.
+ * FirstMateRequestDecisionReactor - lifts a project's pending requests into the
+ * FirstMate supervisor's decision inbox.
  *
- * A user running seven threads at once should not have to open each one to
- * find out which is waiting on them. When a thread FirstMate delegated a topic
- * to raises an approval or user-input request, this reactor opens a decision on
- * that project's FirstMate workspace, so the request shows up in the same
+ * A user running seven threads at once should not have to open each one to find
+ * out which is waiting on them. When any thread in a project with a FirstMate
+ * workspace raises an approval or user-input request, this reactor opens a
+ * decision on that workspace, so the request shows up in the same
  * blocking-first feed as the decisions the supervisor asks itself.
+ *
+ * A pending request belongs to the thread that raised it, not to a topic.
+ * Topics are orchestration - durable work the user named - and most threads
+ * never get one, so requiring delegation left the inbox empty for exactly the
+ * user this exists for. A card still carries the topic delegated to its thread
+ * when there is one, because that is the better label; it no longer needs one
+ * to exist.
+ *
+ * Two things stay out: the supervisor thread, which would otherwise become a
+ * source of its own inbox, and requests `firstMateRequestDecisions` cannot
+ * state exactly, which stay pending on their own thread.
  *
  * Each pass reconciles rather than reacts: it recomputes the thread's open
  * requests and makes the workspace match. That is what makes it idempotent
  * (a repeated pass re-derives the same decision id, which the decider rejects
  * as a duplicate) and what closes the loop when the user answers a request in
  * the thread itself (the request is no longer open, so its card is cancelled
- * and leaves the inbox).
+ * and leaves the inbox). A card leaves the inbox only when its request closed,
+ * never because delegation moved: delegation no longer decides what is
+ * projected, so it must not take a live question away from the user.
  *
- * Two things start a pass: request activity on a thread, and delegation. The
- * second matters because delegation moves the boundary of what is projected at
- * all — a thread can already be blocked on the user when its topic arrives, and
- * a topic moved to another thread leaves the old thread's cards pointing at
- * work the supervisor no longer owns.
- *
- * Scope is deliberately narrow. Only threads a FirstMate topic is delegated to
- * are projected, never the supervisor thread itself, and only requests
- * `firstMateRequestDecisions` can state exactly. Everything else stays pending
- * on its own thread.
+ * Two things start a pass: request activity on a thread, and a topic being
+ * delegated to one. The second is a backfill, not a boundary change - the
+ * first delegation in a project is often what creates the workspace, and the
+ * thread it names can already be blocked on the user.
  *
  * Dismissing a card with the inbox's Cancel button is therefore permanent for
  * that request: the decision id is derived from the request, so a later pass
@@ -40,8 +47,6 @@ import {
   type FirstMateDecision,
   type FirstMateWorkspaceState,
   type OrchestrationEvent,
-  type OrchestrationThreadActivity,
-  type ProjectId,
 } from "@t3tools/contracts";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import * as Cause from "effect/Cause";
@@ -73,11 +78,6 @@ export class FirstMateRequestDecisionReactor extends Context.Service<
 
 const REQUEST_ACTIVITY_KINDS = new Set<string>(THREAD_REQUEST_ACTIVITY_KINDS);
 
-type OpenRequests = ReadonlyMap<string, OrchestrationThreadActivity>;
-
-/** What a thread nothing is delegated to is treated as having open. */
-const NO_OPEN_REQUESTS: OpenRequests = new Map();
-
 export interface FirstMateRequestReconcileResult {
   readonly outcome: "reconciled" | "skipped";
   readonly openedRequestIds: ReadonlyArray<string>;
@@ -91,61 +91,26 @@ const SKIPPED: FirstMateRequestReconcileResult = {
 };
 
 /**
- * What one event asks this reactor to re-check.
+ * The thread one event asks this reactor to re-check.
  *
- * `thread` is the steady-state trigger, and the same event stream carries both
- * halves of that loop: a `*.requested` opens a card, a `*.resolved` in the
- * thread closes it. `delegation` is the trigger for the boundary moving, where
- * the threads to re-check are not all named by the event.
+ * Request activity is the steady-state trigger, and the same event stream
+ * carries both halves of that loop: a `*.requested` opens a card, a
+ * `*.resolved` in the thread closes it. Delegation is a backfill for the thread
+ * it names, which may have been blocked on the user since before the workspace
+ * existed. Nothing else needs re-checking when delegation moves, because which
+ * topic owns a thread no longer decides whether its requests are projected.
  */
-type ReconcileTask =
-  | { readonly kind: "thread"; readonly threadId: ThreadId }
-  | {
-      readonly kind: "delegation";
-      readonly projectId: ProjectId;
-      readonly threadId: ThreadId | null;
-    };
-
-function reconcileTaskForEvent(event: OrchestrationEvent): ReconcileTask | null {
+function reconcileThreadIdForEvent(event: OrchestrationEvent): ThreadId | null {
   if (event.type === "thread.activity-appended") {
-    return REQUEST_ACTIVITY_KINDS.has(event.payload.activity.kind)
-      ? { kind: "thread", threadId: event.payload.threadId }
-      : null;
+    return REQUEST_ACTIVITY_KINDS.has(event.payload.activity.kind) ? event.payload.threadId : null;
   }
   if (
     event.type === "firstmate.domain-event" &&
     event.payload.type === "firstmate.topic-delegated"
   ) {
-    return {
-      kind: "delegation",
-      projectId: event.payload.projectId,
-      threadId: event.payload.threadId,
-    };
+    return event.payload.threadId;
   }
   return null;
-}
-
-/**
- * Threads a delegation change has to re-check: the thread the topic just moved
- * to, plus every thread this workspace still holds a pending card for.
- *
- * The event names only the new thread, so the thread a topic just left is found
- * from the workspace instead. Re-checking a thread that is still delegated is a
- * no-op by construction, which is cheaper than teaching the event to carry the
- * delegation it replaced.
- */
-function delegationReconcileThreadIds(input: {
-  readonly workspace: FirstMateWorkspaceState | null;
-  readonly threadId: ThreadId | null;
-}): ReadonlyArray<ThreadId> {
-  const threadIds = new Set<ThreadId>(input.threadId === null ? [] : [input.threadId]);
-  for (const decision of input.workspace?.decisions ?? []) {
-    if (decision.status !== "pending") continue;
-    if (decision.source.kind === "firstmate") continue;
-    if (decision.source.threadId === null) continue;
-    threadIds.add(decision.source.threadId);
-  }
-  return [...threadIds];
 }
 
 /** Pending cards this workspace already holds for requests on one thread. */
@@ -188,25 +153,16 @@ export const reconcileThreadRequestDecisions = Effect.fn("reconcileThreadRequest
     // into its own inbox would make it a source of itself.
     if (workspace.supervisorThreadId === threadId) return SKIPPED;
 
+    // A label, not a gate. The thread is projected either way; a topic
+    // delegated here just gives its cards a better name than the thread title.
     const topic = workspace.topics.find((entry) => entry.threadId === threadId) ?? null;
     const existing = pendingRequestDecisions(workspace, threadId);
-    // A thread no topic points at raises nothing new. It is still reconciled
-    // when it holds cards, because a topic delegated away from it would
-    // otherwise strand them: the supervisor would keep showing questions about
-    // work it no longer follows.
-    if (topic === null && existing.length === 0) return SKIPPED;
 
-    // Orphaned cards are cancelled without reading the thread: nothing is
-    // delegated there, so no request on it belongs in this inbox either way.
-    const open =
-      topic === null
-        ? NO_OPEN_REQUESTS
-        : yield* snapshots
-            .getThreadDetailById(threadId, { activityKinds: THREAD_REQUEST_ACTIVITY_KINDS })
-            .pipe(
-              Effect.map((detail) => (Option.isNone(detail) ? null : openRequests(detail.value))),
-            );
-    if (open === null) return SKIPPED;
+    const detail = yield* snapshots.getThreadDetailById(threadId, {
+      activityKinds: THREAD_REQUEST_ACTIVITY_KINDS,
+    });
+    if (Option.isNone(detail)) return SKIPPED;
+    const open = openRequests(detail.value);
     // Any status, not just pending. A card the user dismissed from the inbox
     // must stay dismissed while its request is still open in the thread —
     // that is how "I will answer this one myself" is expressed.
@@ -230,35 +186,35 @@ export const reconcileThreadRequestDecisions = Effect.fn("reconcileThreadRequest
 
     const createdAt = DateTime.formatIso(yield* DateTime.now);
     const openedRequestIds: string[] = [];
-    // A card belongs to the topic delegated here, so an orphaned thread only
-    // ever sheds cards; `open` is empty for it and this loop does not run.
-    if (topic !== null) {
-      for (const [requestId, activity] of open) {
-        const decisionId = firstMateRequestDecisionId(threadId, ApprovalRequestId.make(requestId));
-        if (known.has(decisionId)) continue;
-        const draft = draftFirstMateRequestDecision({ threadId, activity });
-        if (draft === null) continue;
-        const opened = yield* dispatchOrLog({
-          type: "firstmate.decision.open",
-          commandId: CommandId.make(`server:firstmate-request-open:${decisionId}`),
-          projectId: project.value.id,
-          createdAt,
-          decisionId,
-          topicId: topic.id,
-          source: draft.source,
-          question: draft.question,
-          options: draft.options,
-          // Never nudge the user toward authorizing something. The provider's
-          // opinion about a safe default is not the supervisor's to relay.
-          recommendedOptionId: null,
-          // A provider waiting on an answer is the definition of blocked.
-          blocking: true,
-        });
-        if (opened) openedRequestIds.push(requestId);
-      }
+    for (const [requestId, activity] of open) {
+      const decisionId = firstMateRequestDecisionId(threadId, ApprovalRequestId.make(requestId));
+      if (known.has(decisionId)) continue;
+      const draft = draftFirstMateRequestDecision({ threadId, activity });
+      if (draft === null) continue;
+      const opened = yield* dispatchOrLog({
+        type: "firstmate.decision.open",
+        commandId: CommandId.make(`server:firstmate-request-open:${decisionId}`),
+        projectId: project.value.id,
+        createdAt,
+        decisionId,
+        topicId: topic?.id ?? null,
+        source: draft.source,
+        question: draft.question,
+        options: draft.options,
+        // Never nudge the user toward authorizing something. The provider's
+        // opinion about a safe default is not the supervisor's to relay.
+        recommendedOptionId: null,
+        // A provider waiting on an answer is the definition of blocked.
+        blocking: true,
+      });
+      if (opened) openedRequestIds.push(requestId);
     }
 
     const cancelledDecisionIds: string[] = [];
+    // Only a closed request sheds its card: answered in the thread, cancelled,
+    // or gone stale. Delegation moving is not a reason to take a live question
+    // away from the user, because the question was never the topic's to begin
+    // with.
     for (const decision of existing) {
       if (open.has(decision.requestId as string)) continue;
       const cancelled = yield* dispatchOrLog({
@@ -309,45 +265,15 @@ export const make = Effect.gen(function* () {
       ),
     );
 
-  /**
-   * A delegation names one thread and implies the rest, so the threads it
-   * touches are read from the workspace here rather than in the stream loop.
-   * A delegation that touches none — a topic undelegated from a thread holding
-   * no cards — reconciles nothing and publishes no receipt.
-   */
-  const threadsForTask = (task: ReconcileTask) =>
-    task.kind === "thread"
-      ? Effect.succeed<ReadonlyArray<ThreadId>>([task.threadId])
-      : snapshots.getProjectShellById(task.projectId).pipe(
-          Effect.map((project) =>
-            delegationReconcileThreadIds({
-              workspace: Option.isNone(project) ? null : (project.value.firstMate ?? null),
-              threadId: task.threadId,
-            }),
-          ),
-          Effect.catchCause((cause) =>
-            Cause.hasInterruptsOnly(cause)
-              ? Effect.failCause(cause)
-              : Effect.logWarning("FirstMate delegation reconcile could not read its project", {
-                  projectId: task.projectId,
-                  cause: Cause.pretty(cause),
-                }).pipe(Effect.as([])),
-          ),
-        );
-
-  const worker = yield* makeDrainableWorker((task: ReconcileTask) =>
-    Effect.flatMap(threadsForTask(task), (threadIds) =>
-      Effect.forEach(threadIds, processThread, { discard: true }),
-    ),
-  );
+  const worker = yield* makeDrainableWorker(processThread);
 
   const start: FirstMateRequestDecisionReactor["Service"]["start"] = Effect.fn(
     "FirstMateRequestDecisionReactor.start",
   )(function* () {
     yield* forkParked(
       Stream.runForEach(engine.streamDomainEvents, (event) => {
-        const task = reconcileTaskForEvent(event);
-        return task === null ? Effect.void : worker.enqueue(task);
+        const threadId = reconcileThreadIdForEvent(event);
+        return threadId === null ? Effect.void : worker.enqueue(threadId);
       }),
     );
   });

@@ -33,7 +33,11 @@ function decisionsForThread(
   const topicIds = new Set(
     state.topics.filter((topic) => topic.threadId === threadId).map((topic) => topic.id),
   );
-  return state.decisions.filter((decision) => topicIds.has(decision.topicId));
+  // Only topic-owned decisions travel. A card lifted from a live provider
+  // request is a question about work in flight, not history worth carrying.
+  return state.decisions.filter(
+    (decision) => decision.topicId !== null && topicIds.has(decision.topicId),
+  );
 }
 
 export function exportThreadBundleFromProjection(

@@ -164,11 +164,13 @@ function decisionsForThread(
       )
       .map((topic) => topic.id),
   );
-  const authoritative = firstMate.decisions.filter((decision) => topicIds.has(decision.topicId));
+  // Matches the export side: cards with no topic are live provider questions,
+  // not decisions a handoff has to reproduce.
+  const authoritative = firstMate.decisions.filter(
+    (decision) => decision.topicId !== null && topicIds.has(decision.topicId),
+  );
   for (const decision of authoritative) {
-    if (decision.projectId !== snapshot.project.id || !topicIds.has(decision.topicId)) {
-      fail("decision-mismatch");
-    }
+    if (decision.projectId !== snapshot.project.id) fail("decision-mismatch");
   }
   const byId = (left: FirstMateDecision, right: FirstMateDecision) =>
     String(left.id).localeCompare(String(right.id));

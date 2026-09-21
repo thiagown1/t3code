@@ -93,7 +93,14 @@ export type FirstMateDecisionStatus = typeof FirstMateDecisionStatus.Type;
 export const FirstMateDecision = Schema.Struct({
   id: FirstMateDecisionId,
   projectId: ProjectId,
-  topicId: FirstMateTopicId,
+  /**
+   * Topic the card belongs to, when one does. A pending provider request
+   * belongs to the thread that raised it, and most threads carry no topic, so
+   * the inbox would be empty if a topic were required to reach it. Decisions
+   * stored before this field could be null still name their topic; ones stored
+   * without the field at all decode as unowned.
+   */
+  topicId: Schema.NullOr(FirstMateTopicId).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
   source: FirstMateDecisionSource,
   question: TrimmedNonEmptyString,
   options: Schema.Array(FirstMateDecisionOption),
@@ -237,7 +244,7 @@ export const FirstMateCommand = Schema.Union([
     ...FirstMateCommandBase,
     type: Schema.Literal("firstmate.decision.open"),
     decisionId: FirstMateDecisionId,
-    topicId: FirstMateTopicId,
+    topicId: Schema.NullOr(FirstMateTopicId),
     source: FirstMateDecisionSource,
     question: TrimmedNonEmptyString,
     options: Schema.Array(FirstMateDecisionOption),

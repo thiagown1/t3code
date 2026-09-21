@@ -73,6 +73,9 @@ function listTopics(
     .toSorted((left, right) => Number(right.blocking) - Number(left.blocking));
   const pendingCountByTopic = new Map<string, number>();
   for (const decision of pending) {
+    // A card lifted from a thread with no topic still reaches the supervisor
+    // through `pendingDecisions`; it just has no topic row to count against.
+    if (decision.topicId === null) continue;
     pendingCountByTopic.set(decision.topicId, (pendingCountByTopic.get(decision.topicId) ?? 0) + 1);
   }
   const matching = workspace.topics

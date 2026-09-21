@@ -122,7 +122,11 @@ describe("FirstMate chat decision feed", () => {
 
     expect(feed.isSupervisorThread).toBe(true);
     expect(feed.items.map((item) => item.decisionId)).toEqual(["blocking", "advisory"]);
-    expect(feed.items[0]).toMatchObject({ topicTitle: "Rate limits", threadId: workerThreadId });
+    expect(feed.items[0]).toMatchObject({
+      originKind: "topic",
+      originTitle: "Rate limits",
+      threadId: workerThreadId,
+    });
   });
 
   it("stays empty in a worker thread of the same project", () => {

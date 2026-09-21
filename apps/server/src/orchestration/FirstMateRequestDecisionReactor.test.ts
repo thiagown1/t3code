@@ -255,17 +255,24 @@ describe("FirstMate request decision projection", () => {
 
   it.effect("cancels the card when the request is answered inside the thread", () =>
     Effect.gen(function* () {
-      const { dispatched } = yield* reconcile({
-        activities: [approvalRequested(REQUEST_ID), approvalResolved(REQUEST_ID)],
-        project: makeProject({ topics: [makeTopic()], decisions: [openRequestDecision()] }),
-      });
-      expect(dispatched).toEqual([
-        expect.objectContaining({
-          type: "firstmate.decision.cancel",
-          projectId: PROJECT_ID,
-          decisionId: EXPECTED_DECISION_ID,
-        }),
-      ]);
+      // Both shapes of card leave the same way: the one a topic owns and the
+      // one belonging only to the thread that asked.
+      for (const topics of [[makeTopic()], []]) {
+        const { dispatched } = yield* reconcile({
+          activities: [approvalRequested(REQUEST_ID), approvalResolved(REQUEST_ID)],
+          project: makeProject({
+            topics,
+            decisions: [openRequestDecision(topics.length === 0 ? { topicId: null } : {})],
+          }),
+        });
+        expect(dispatched).toEqual([
+          expect.objectContaining({
+            type: "firstmate.decision.cancel",
+            projectId: PROJECT_ID,
+            decisionId: EXPECTED_DECISION_ID,
+          }),
+        ]);
+      }
     }),
   );
 
@@ -369,34 +376,41 @@ describe("FirstMate request decision projection", () => {
     }),
   );
 
-  it.effect("ignores threads no FirstMate topic is delegated to", () =>
+  it.effect("opens an unowned card for a thread no FirstMate topic is delegated to", () =>
     Effect.gen(function* () {
+      // The case the inbox exists for: threads running with nothing delegated,
+      // one of them blocked on an approval.
       const { dispatched, result } = yield* reconcile({
         activities: [approvalRequested(REQUEST_ID)],
         project: makeProject({ topics: [makeTopic({ threadId: null })], decisions: [] }),
       });
-      expect(dispatched).toEqual([]);
-      expect(result.outcome).toBe("skipped");
+      expect(dispatched).toEqual([
+        expect.objectContaining({
+          type: "firstmate.decision.open",
+          decisionId: EXPECTED_DECISION_ID,
+          topicId: null,
+          source: { kind: "approval", requestId: REQUEST_ID, threadId: WORKER_THREAD_ID },
+          recommendedOptionId: null,
+          blocking: true,
+        }),
+      ]);
+      expect(result.outcome).toBe("reconciled");
     }),
   );
 
-  it.effect("cancels the cards a topic leaves behind when it is delegated elsewhere", () =>
+  it.effect("keeps a live card when its topic is delegated to another thread", () =>
     Effect.gen(function* () {
       const { dispatched, result } = yield* reconcile({
-        // The request is still open on the thread; what changed is that the
-        // supervisor no longer follows the work it belongs to.
+        // The request is still open on the thread. Delegation moving used to
+        // orphan this card; it no longer decides anything, so taking the
+        // question away here would hide work still blocked on the user.
         activities: [approvalRequested(REQUEST_ID)],
         project: makeProject({
           topics: [makeTopic({ threadId: OTHER_THREAD_ID })],
           decisions: [openRequestDecision()],
         }),
       });
-      expect(dispatched).toEqual([
-        expect.objectContaining({
-          type: "firstmate.decision.cancel",
-          decisionId: EXPECTED_DECISION_ID,
-        }),
-      ]);
+      expect(dispatched).toEqual([]);
       expect(result.outcome).toBe("reconciled");
     }),
   );
@@ -534,7 +548,7 @@ describe("FirstMate request decisions on delegation", () => {
     }).pipe(Effect.scoped),
   );
 
-  it.effect("leaves no orphans behind when a topic moves to another thread", () =>
+  it.effect("moving a topic to another thread does not disturb the old thread's card", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness({
         // The workspace as the projector left it: the topic now points at the
@@ -547,21 +561,15 @@ describe("FirstMate request decisions on delegation", () => {
       });
 
       yield* harness.emit(topicDelegated(OTHER_THREAD_ID));
-      // The new thread first, then the thread the workspace still holds a card
-      // for. Both passes are reported.
+      // Only the thread the event names is re-checked now. The old thread's
+      // request is still open, and its card is still the user's to answer.
       expect(yield* harness.nextReceipt).toMatchObject({
         threadId: OTHER_THREAD_ID,
         outcome: "reconciled",
         openedCount: 0,
+        cancelledCount: 0,
       });
-      expect(yield* harness.nextReceipt).toMatchObject({
-        threadId: WORKER_THREAD_ID,
-        outcome: "reconciled",
-        cancelledCount: 1,
-      });
-      expect(yield* Ref.get(harness.commands)).toMatchObject([
-        { type: "firstmate.decision.cancel", decisionId: EXPECTED_DECISION_ID },
-      ]);
+      expect(yield* Ref.get(harness.commands)).toEqual([]);
     }).pipe(Effect.scoped),
   );
 

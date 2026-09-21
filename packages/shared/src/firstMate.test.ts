@@ -1,4 +1,5 @@
 import {
+  ApprovalRequestId,
   CommandId,
   FirstMateDecisionId,
   FirstMateTopicId,
@@ -164,6 +165,38 @@ describe("FirstMate domain", () => {
       status: "resolved",
       selectedOptionId: "yes",
       resolvedAt: "2026-09-14T22:00:00.000Z",
+    });
+  });
+
+  it("opens a decision no topic owns, and still requires a topic it names", () => {
+    const empty = createEmptyFirstMateWorkspace(projectId, "2026-09-14T19:00:00.000Z");
+    const openDecision = (owner: FirstMateTopicId | null) =>
+      command({
+        type: "firstmate.decision.open",
+        decisionId,
+        topicId: owner,
+        source: {
+          kind: "approval",
+          requestId: ApprovalRequestId.make("request-1"),
+          threadId: ThreadId.make("thread-worker"),
+        },
+        question: "Run rm -rf ./build?",
+        options: [
+          { id: "accept", label: "Yes, run it", description: "Allow this once." },
+          { id: "decline", label: "No", description: "Refuse this request." },
+        ],
+        recommendedOptionId: null,
+        blocking: true,
+      });
+
+    // A provider request belongs to its thread, so no topic has to exist.
+    const state = accept(empty, openDecision(null));
+    expect(state.decisions[0]).toMatchObject({ topicId: null, status: "pending" });
+
+    // A topic the command does name still has to be real.
+    expect(decideFirstMateCommand(empty, openDecision(topicId))).toEqual({
+      accepted: false,
+      reason: "topic-not-found",
     });
   });
 

@@ -119,7 +119,7 @@ export function FirstMateDecisionInbox({
                 {item.threadId !== null ? (
                   <button
                     type="button"
-                    aria-label={`Open ${item.topicTitle}`}
+                    aria-label={`Open ${item.originTitle}`}
                     onClick={() => {
                       if (item.threadId === null) return;
                       onOpenThread({ environmentId: item.environmentId, threadId: item.threadId });
@@ -139,7 +139,7 @@ export function FirstMateDecisionInbox({
                 </button>
               </div>
               <div className="mt-1 flex min-w-0 items-center gap-1 text-[10px] text-sidebar-muted-foreground">
-                <span className="truncate">{item.topicTitle}</span>
+                <span className="truncate">{item.originTitle}</span>
                 {item.responsibleAgentId ? (
                   <>
                     <span aria-hidden>·</span>

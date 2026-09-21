@@ -64,7 +64,7 @@ export function FirstMateDecisionFeed({
             ) : null}
           </header>
           <div className="mt-1 flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
-            <span className="truncate">{item.topicTitle}</span>
+            <span className="truncate">{item.originTitle}</span>
             {item.responsibleAgentId ? (
               <>
                 <span aria-hidden>·</span>
@@ -74,14 +74,14 @@ export function FirstMateDecisionFeed({
             {item.threadId !== null ? (
               <button
                 type="button"
-                aria-label={`Open ${item.topicTitle}`}
+                aria-label={`Open ${item.originTitle}`}
                 onClick={() => {
                   if (item.threadId === null) return;
                   onOpenThread({ environmentId: item.environmentId, threadId: item.threadId });
                 }}
                 className="ml-auto inline-flex shrink-0 cursor-pointer items-center gap-0.5 rounded px-1 py-0.5 outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
               >
-                Open topic
+                {item.originKind === "topic" ? "Open topic" : "Open thread"}
                 <ArrowUpRightIcon aria-hidden className="size-3" />
               </button>
             ) : null}

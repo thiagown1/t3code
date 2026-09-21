@@ -3,6 +3,7 @@ import type {
   EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/models";
 import {
+  ApprovalRequestId,
   EnvironmentId,
   FirstMateDecisionId,
   FirstMateTopicId,
@@ -22,6 +23,7 @@ const now = "2026-09-14T20:00:00.000Z";
 
 function project(
   decisions: NonNullable<EnvironmentProject["firstMate"]>["decisions"],
+  topics?: NonNullable<EnvironmentProject["firstMate"]>["topics"],
 ): EnvironmentProject {
   return {
     environmentId,
@@ -39,7 +41,7 @@ function project(
       projectId,
       supervisorThreadId: null,
       selectedTopicId: null,
-      topics: [
+      topics: topics ?? [
         {
           id: topicId,
           projectId,
@@ -109,6 +111,23 @@ function decision(id: string, blocking: boolean, status: "pending" | "resolved" 
   };
 }
 
+/** A card the request reactor lifted out of a thread, owned by a topic or not. */
+function requestDecision(
+  id: string,
+  owningTopicId: typeof topicId | null,
+  sourceThreadId: ThreadId = threadId,
+) {
+  return {
+    ...decision(id, true),
+    topicId: owningTopicId,
+    source: {
+      kind: "approval" as const,
+      requestId: ApprovalRequestId.make(`request-${id}`),
+      threadId: sourceThreadId,
+    },
+  };
+}
+
 describe("FirstMate decision inbox model", () => {
   it("keeps only pending decisions and links them to their topic thread", () => {
     const model = buildFirstMateDecisionInboxModel({
@@ -120,10 +139,50 @@ describe("FirstMate decision inbox model", () => {
     expect(model.items).toHaveLength(1);
     expect(model.items[0]).toMatchObject({
       decisionId: "pending",
-      topicTitle: "FirstMate inbox",
+      originKind: "topic",
+      originTitle: "FirstMate inbox",
       threadId,
       responsibleAgentId: "firstmate",
     });
+  });
+
+  it("names the asking thread when no topic owns the card", () => {
+    const model = buildFirstMateDecisionInboxModel({
+      projects: [project([requestDecision("unowned", null)], [])],
+      threads: [linkedThread],
+      scopedProjectKeys: null,
+    });
+
+    expect(model.items).toHaveLength(1);
+    expect(model.items[0]).toMatchObject({
+      decisionId: "unowned",
+      topicId: null,
+      originKind: "thread",
+      // Without a topic the thread title is the only honest label, and the
+      // provider running it is the closest thing to who is asking.
+      originTitle: "Implement inbox",
+      responsibleAgentId: "codex",
+      threadId,
+    });
+  });
+
+  it("drops a card whose origin the client cannot name", () => {
+    const unknownThread = ThreadId.make("thread-gone");
+    const model = buildFirstMateDecisionInboxModel({
+      projects: [
+        project(
+          [
+            requestDecision("dangling-topic", topicId),
+            requestDecision("dead-thread", null, unknownThread),
+          ],
+          [],
+        ),
+      ],
+      threads: [linkedThread],
+      scopedProjectKeys: null,
+    });
+
+    expect(model.items).toEqual([]);
   });
 
   it("puts blocking decisions first", () => {

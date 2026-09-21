@@ -67,10 +67,13 @@ that integration is present.
 ## Global decision inbox
 
 Pending FirstMate decisions are aggregated across the visible project scope and
-shown above the topic panel. Blocking decisions sort first. Each row keeps its
-topic, responsible agent, impact descriptions, recommendation, and linked
-thread navigation visible without requiring the user to find the original chat
-message.
+shown above the topic panel. Blocking decisions sort first. Each row names where
+the card came from - the owning topic when there is one, otherwise the thread
+that asked - alongside the responsible agent or provider, impact descriptions,
+recommendation, and linked thread navigation, without requiring the user to find
+the original chat message. A card that can name neither a topic nor a thread the
+client can see is dropped: answering a question with no visible origin is
+deciding in the dark, and delivery would refuse that thread anyway.
 
 The supervisor chat renders the same pending decisions as cards above its
 composer, narrowed to that project. Both surfaces build on the one inbox model
@@ -94,10 +97,17 @@ is refused and logged rather than guessed.
 
 ## Provider requests as decisions
 
-A thread a topic is delegated to can block on a native approval or user-input
-request. `FirstMateRequestDecisionReactor` lifts those into the same inbox so
-the supervisor is one place to look, and `FirstMateDecisionDeliveryReactor`
-answers them on the original request.
+Any thread in a project with a FirstMate workspace can block on a native
+approval or user-input request. `FirstMateRequestDecisionReactor` lifts those
+into the same inbox so the supervisor is one place to look, and
+`FirstMateDecisionDeliveryReactor` answers them on the original request.
+
+A pending request belongs to the thread that raised it, not to a topic, so
+`FirstMateDecision.topicId` is nullable and a card carries a topic only when one
+is delegated to its thread. Scoping the projection to delegated threads was the
+original design and it made the inbox empty for the user it exists for: running
+several threads with nothing delegated is the normal case. The supervisor thread
+is still excluded, so it never becomes a source of its own inbox.
 
 The direction matters and is the whole reason this is safe. Mapping an arbitrary
 decision onto a provider request cannot be done exactly: decision option ids are
@@ -126,12 +136,12 @@ the request in the thread itself. It also means cancelling such a card from the
 inbox is permanent for that request: the id already exists, so no later pass
 re-raises it, which is how "leave this one to me" is expressed.
 
-Delegation starts a pass too, because it moves the boundary of what is projected
-at all: a thread can already be blocked on the user when its topic arrives, and a
-topic moved to another thread leaves cards behind that nothing points at any
-more. The event names only the new thread, so a delegation pass also re-checks
-every thread the workspace still holds a pending card for, and a thread no topic
-is delegated to cancels its cards instead of opening any.
+Delegation starts a pass too, but only as a backfill for the thread the event
+names: the first delegation in a project is often what creates the workspace, and
+that thread can already be blocked on the user. Nothing else is re-checked,
+because which topic owns a thread no longer decides whether its requests are
+projected. A card leaves the inbox only when its request closed - never because
+delegation moved, which would take a live question away from the user.
 
 Delivery never trusts the stored card. It re-reads the source thread, requires
 the request to still be open and to be of the kind the source claims, and

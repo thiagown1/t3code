@@ -220,7 +220,10 @@ export function decideFirstMateCommand(
       };
 
     case "firstmate.decision.open":
-      if (!topic) return reject("topic-not-found");
+      // A card names a topic only when one owns the work. A provider request
+      // belongs to the thread that raised it, which usually has no topic at
+      // all; only a topic the command does name has to exist.
+      if (command.topicId !== null && !topic) return reject("topic-not-found");
       if (decision) return reject("decision-already-exists");
       return {
         accepted: true,

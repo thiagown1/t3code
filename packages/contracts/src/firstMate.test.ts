@@ -82,6 +82,39 @@ describe("FirstMate contracts", () => {
     expect(decision.selectedOptionId).toBeNull();
   });
 
+  it("keeps the topic of decisions stored before a card could be unowned", () => {
+    const owned = decodeDecision({
+      id: "decision-owned",
+      projectId: "project-1",
+      topicId: "topic-1",
+      source: { kind: "firstmate", sourceId: "routing" },
+      question: "Deploy behind a feature flag?",
+      options: [{ id: "yes", label: "Yes", description: "Keep activation separate." }],
+      recommendedOptionId: "yes",
+      blocking: true,
+      status: "pending",
+      createdAt: "2026-09-14T20:00:00.000Z",
+      updatedAt: "2026-09-14T20:00:00.000Z",
+      resolvedAt: null,
+    });
+    expect(owned.topicId).toBe("topic-1");
+
+    const unowned = decodeDecision({
+      id: "decision-unowned",
+      projectId: "project-1",
+      source: { kind: "approval", requestId: "request-1", threadId: "thread-worker" },
+      question: "Run rm -rf ./build?",
+      options: [{ id: "accept", label: "Yes, run it", description: "Allow this once." }],
+      recommendedOptionId: null,
+      blocking: true,
+      status: "pending",
+      createdAt: "2026-09-14T20:00:00.000Z",
+      updatedAt: "2026-09-14T20:00:00.000Z",
+      resolvedAt: null,
+    });
+    expect(unowned.topicId).toBeNull();
+  });
+
   it("decodes historical resolution events without a selected option", () => {
     const event = decodeEvent({
       type: "firstmate.decision-resolved",

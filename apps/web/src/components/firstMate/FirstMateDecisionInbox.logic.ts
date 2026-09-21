@@ -6,6 +6,7 @@ import type {
   EnvironmentId,
   FirstMateDecision,
   FirstMateDecisionId,
+  FirstMateTopic,
   FirstMateTopicId,
   ProjectId,
   ThreadId,
@@ -17,8 +18,10 @@ export interface FirstMateDecisionInboxItem {
   readonly projectId: ProjectId;
   readonly projectTitle: string;
   readonly decisionId: FirstMateDecisionId;
-  readonly topicId: FirstMateTopicId;
-  readonly topicTitle: string;
+  readonly topicId: FirstMateTopicId | null;
+  /** Whether {@link originTitle} names a topic or the thread that asked. */
+  readonly originKind: "topic" | "thread";
+  readonly originTitle: string;
   readonly responsibleAgentId: string | null;
   readonly threadId: ThreadId | null;
   readonly question: string;
@@ -33,6 +36,24 @@ export interface FirstMateDecisionInboxModel {
   readonly items: ReadonlyArray<FirstMateDecisionInboxItem>;
 }
 
+/**
+ * Where a card came from, as something the user can read before answering.
+ *
+ * Most cards now come from a thread nobody delegated a topic to, so a topic is
+ * no longer the only label. A card that can name neither a topic nor a live
+ * thread is dropped: answering a question with no visible origin is deciding in
+ * the dark, and the server refuses to deliver to a thread this client cannot
+ * see anyway.
+ */
+function decisionOrigin(
+  topic: FirstMateTopic | null,
+  thread: EnvironmentThreadShell | null,
+): { readonly kind: "topic" | "thread"; readonly title: string } | null {
+  if (topic !== null) return { kind: "topic", title: topic.title };
+  if (thread !== null) return { kind: "thread", title: thread.title };
+  return null;
+}
+
 export function buildFirstMateDecisionInboxModel(input: {
   readonly projects: ReadonlyArray<EnvironmentProject>;
   readonly threads: ReadonlyArray<EnvironmentThreadShell>;
@@ -43,19 +64,31 @@ export function buildFirstMateDecisionInboxModel(input: {
       input.scopedProjectKeys === null ||
       input.scopedProjectKeys.has(`${project.environmentId}:${project.id}`),
   );
-  const threadKeys = new Set(input.threads.map((thread) => `${thread.environmentId}:${thread.id}`));
+  const threadsByKey = new Map(
+    input.threads.map((thread) => [`${thread.environmentId}:${thread.id}`, thread] as const),
+  );
   const items = visibleProjects.flatMap((project) => {
     const workspace = project.firstMate;
     if (workspace === null || workspace === undefined) return [];
     const topicsById = new Map(workspace.topics.map((topic) => [topic.id, topic] as const));
     return workspace.decisions.flatMap((decision): FirstMateDecisionInboxItem[] => {
       if (decision.status !== "pending") return [];
-      const topic = topicsById.get(decision.topicId);
-      if (topic === undefined) return [];
-      const threadId =
-        topic.threadId !== null && threadKeys.has(`${project.environmentId}:${topic.threadId}`)
-          ? topic.threadId
-          : null;
+      const topic = decision.topicId === null ? null : (topicsById.get(decision.topicId) ?? null);
+      // A topic id naming nothing describes work this workspace lost track of.
+      if (decision.topicId !== null && topic === null) return [];
+
+      // A provider request names its own thread, and that is where answering
+      // the card lands. A question the supervisor asked itself belongs to
+      // whichever thread its topic is delegated to.
+      const sourceThreadId =
+        decision.source.kind === "firstmate" ? (topic?.threadId ?? null) : decision.source.threadId;
+      const thread =
+        sourceThreadId === null
+          ? null
+          : (threadsByKey.get(`${project.environmentId}:${sourceThreadId}`) ?? null);
+      const origin = decisionOrigin(topic, thread);
+      if (origin === null) return [];
+
       return [
         {
           key: `${project.environmentId}:${project.id}:${decision.id}`,
@@ -64,9 +97,13 @@ export function buildFirstMateDecisionInboxModel(input: {
           projectTitle: project.title,
           decisionId: decision.id,
           topicId: decision.topicId,
-          topicTitle: topic.title,
-          responsibleAgentId: topic.responsibleAgentId,
-          threadId,
+          originKind: origin.kind,
+          originTitle: origin.title,
+          // Without a topic naming who owns the work, the provider the thread
+          // runs is the closest honest answer to "who is asking".
+          responsibleAgentId:
+            topic !== null ? topic.responsibleAgentId : (thread?.modelSelection.instanceId ?? null),
+          threadId: thread?.id ?? null,
           question: decision.question,
           options: decision.options,
           recommendedOptionId: decision.recommendedOptionId,

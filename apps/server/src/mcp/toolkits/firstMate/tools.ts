@@ -231,7 +231,8 @@ export type FirstMateTopicListEntry = typeof FirstMateTopicListEntry.Type;
 /** Deliberately without option text: this only has to stop a duplicate question. */
 export const FirstMatePendingDecisionEntry = Schema.Struct({
   decisionId: Schema.String,
-  topicId: Schema.String,
+  /** Null for a card lifted from a thread no topic is delegated to. */
+  topicId: Schema.NullOr(Schema.String),
   question: Schema.String,
   blocking: Schema.Boolean,
 });
