@@ -1,0 +1,117 @@
+name: Upstream Drift
+
+# Answers one question every morning: is today's upstream sync cheap or expensive?
+#
+# Read-only. It fetches upstream and probes the merge with `git merge-tree`, which
+# writes no refs and no files, so no branch is ever created or moved here. The
+# local merge lives in `vp run sync:upstream`.
+#
+# Reporting: the run's step summary always carries the full report, and one
+# long-lived issue (found by `upstream-sync` label) is rewritten in place so the
+# title alone answers the question from the issue list. A comment — the only
+# thing that actually notifies — is posted solely when the situation changes,
+# so a week of identical drift stays quiet.
+
+on:
+  schedule:
+    # 06:40 UTC, before European working hours and after upstream's US day.
+    - cron: "40 6 * * *"
+  workflow_dispatch:
+    inputs:
+      base:
+        description: "Fork branch to measure"
+        required: false
+        default: firstmate
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: upstream-drift
+  cancel-in-progress: false
+
+jobs:
+  report:
+    name: Report upstream drift
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout fork branch
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.base || 'firstmate' }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      # No install: scripts/upstream-drift-report.ts and its library import only
+      # node builtins, so a daily drift check costs a fetch, not a pnpm install.
+      - name: Fetch upstream
+        run: |
+          git remote add upstream https://github.com/pingdotgg/t3code.git
+          git fetch --no-tags --quiet upstream main
+
+      - id: drift
+        name: Measure drift
+        run: |
+          node scripts/upstream-drift-report.ts \
+            --base "${{ inputs.base || 'firstmate' }}" \
+            --upstream upstream/main \
+            --out "${RUNNER_TEMP}/upstream-drift.md"
+
+      - name: Update the upstream sync issue
+        uses: actions/github-script@v8
+        env:
+          REPORT_PATH: ${{ runner.temp }}/upstream-drift.md
+          DRIFT_TITLE: ${{ steps.drift.outputs.title }}
+          DRIFT_COST: ${{ steps.drift.outputs.cost }}
+          DRIFT_FINGERPRINT: ${{ steps.drift.outputs.fingerprint }}
+        with:
+          script: |
+            const fs = require("node:fs");
+            const label = "upstream-sync";
+            const marker = "<!-- upstream-drift-state:";
+            const report = fs.readFileSync(process.env.REPORT_PATH, "utf8");
+            const fingerprint = process.env.DRIFT_FINGERPRINT;
+            const body = [
+              report,
+              `_Updated by [this run](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})._`,
+              `${marker}${fingerprint} -->`,
+            ].join("\n\n");
+
+            const existing = (
+              await github.rest.issues.listForRepo({
+                ...context.repo,
+                state: "open",
+                labels: label,
+                per_page: 1,
+              })
+            ).data[0];
+
+            if (!existing) {
+              await github.rest.issues.create({
+                ...context.repo,
+                title: process.env.DRIFT_TITLE,
+                body,
+                labels: [label],
+              });
+              return;
+            }
+
+            // The body is the current state; only a change earns a notification.
+            const previous = (existing.body ?? "").includes(`${marker}${fingerprint} -->`);
+            await github.rest.issues.update({
+              ...context.repo,
+              issue_number: existing.number,
+              title: process.env.DRIFT_TITLE,
+              body,
+            });
+            if (!previous && process.env.DRIFT_COST === "expensive") {
+              await github.rest.issues.createComment({
+                ...context.repo,
+                issue_number: existing.number,
+                body: `Upstream sync got more expensive: **${process.env.DRIFT_TITLE}**. Details in the issue body above.`,
+              });
+            }
