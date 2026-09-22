@@ -37,17 +37,20 @@ const ERROR_MESSAGES: Record<ThreadProviderHandoffPreparationErrorCode, string> 
   "decision-mismatch": "The persisted decisions do not match the source thread.",
   "source-mismatch": "The persisted provider selection does not match the handoff source.",
   "target-invalid": "The requested handoff target is invalid.",
-  "stale-sequence": "The persisted snapshot changed before the handoff could be prepared.",
-  "stale-turn": "The source turn changed before the handoff could be prepared.",
-  "stale-context": "The source context changed before the handoff could be prepared.",
-  streaming: "The source thread still has a streaming message.",
-  "pending-approval": "The source thread has a pending approval.",
-  "pending-question": "The source thread has a pending question.",
-  "session-active": "The source provider session is still active.",
-  "session-unknown": "The source provider session cannot be verified.",
-  "compaction-active": "The source thread has a pending context compaction.",
-  "queued-after-current-turn": "The source thread has work queued after the current turn.",
-  "invalid-context": "The persisted source context cannot be prepared safely.",
+  "stale-sequence":
+    "The conversation changed. Review the latest messages and try the handoff again.",
+  "stale-turn": "The conversation started another turn. Wait for it to finish, then try again.",
+  "stale-context": "The conversation context changed. Review it and try the handoff again.",
+  streaming: "Wait for the current response to finish, then try the handoff again.",
+  "pending-approval": "Respond to the pending approval before changing providers.",
+  "pending-question": "Answer the pending question before changing providers.",
+  "session-active": "Wait for the current turn to finish before changing providers.",
+  "session-unknown":
+    "The current provider session could not be verified. Reconnect it and try again.",
+  "compaction-active": "Wait for context compaction to finish before changing providers.",
+  "queued-after-current-turn": "Send or cancel the queued message before changing providers.",
+  "invalid-context":
+    "The conversation could not be transferred safely. Review its content and try again.",
 };
 
 /** A deliberately small, safe error surface: no provider failures or persisted content escape. */
@@ -292,7 +295,6 @@ export function prepareThreadProviderHandoff(
     fail("target-invalid");
   }
 
-  validateSessionAndSource(snapshot.thread, input.source);
   if (snapshot.pendingTurnStart !== null) {
     if (snapshot.pendingTurnStart.threadId !== snapshot.thread.id) fail("thread-mismatch");
     const pendingMessage = snapshot.thread.messages.find(
@@ -303,6 +305,7 @@ export function prepareThreadProviderHandoff(
   }
   const decisions = decisionsForThread(snapshot);
   validateNoPendingWork(snapshot.thread, decisions);
+  validateSessionAndSource(snapshot.thread, input.source);
 
   let envelope: ThreadProviderHandoffEnvelope;
   try {

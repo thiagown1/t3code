@@ -215,6 +215,17 @@ function expectBlocked(
 }
 
 describe("prepareThreadProviderHandoff", () => {
+  it.each([
+    ["streaming", "Wait for the current response to finish"],
+    ["pending-approval", "Respond to the pending approval"],
+    ["pending-question", "Answer the pending question"],
+    ["session-active", "Wait for the current turn to finish"],
+    ["compaction-active", "Wait for context compaction to finish"],
+    ["queued-after-current-turn", "Send or cancel the queued message"],
+  ] as const)("gives an actionable %s refusal", (code, guidance) => {
+    expect(new ThreadProviderHandoffPreparationError(code).message).toContain(guidance);
+  });
+
   it("prepares a sanitized envelope from the exact persisted snapshot", () => {
     const envelope = prepare();
 
@@ -352,6 +363,31 @@ describe("prepareThreadProviderHandoff", () => {
                 id: `activity-${kind}` as never,
                 tone: "approval",
                 kind,
+                summary: "Pending",
+                payload: { requestId: "request-one" },
+                turnId: TURN_ID,
+                createdAt: NOW,
+              },
+            ],
+          },
+        }),
+      ),
+    );
+  });
+
+  it("names the pending action even while the provider session reports running", () => {
+    const current = thread();
+    expectBlocked("pending-approval", () =>
+      prepare(
+        snapshot({
+          thread: {
+            ...current,
+            session: { ...current.session!, status: "running" },
+            activities: [
+              {
+                id: "activity-approval" as never,
+                tone: "approval",
+                kind: "approval.requested",
                 summary: "Pending",
                 payload: { requestId: "request-one" },
                 turnId: TURN_ID,
