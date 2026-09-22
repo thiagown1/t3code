@@ -3,11 +3,20 @@ import type {
   OrchestrationProjectShell,
   OrchestrationThread,
   ProjectId,
+  ServerProvider,
   ThreadId,
   ThreadProviderHandoffProvider,
   TurnId,
 } from "@t3tools/contracts";
+import { it as effectIt } from "@effect/vitest";
 import { describe, expect, it } from "vite-plus/test";
+import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+
+import {
+  preflightThreadProviderHandoff,
+  type ThreadProviderHandoffPreflightServices,
+} from "./ThreadProviderHandoffPreflight.ts";
 
 import {
   prepareThreadProviderHandoff,
@@ -556,5 +565,76 @@ describe("prepareThreadProviderHandoff", () => {
         ),
       );
     },
+  );
+});
+
+describe("preflightThreadProviderHandoff", () => {
+  const input = {
+    handoffId: "handoff-23",
+    threadId: THREAD_ID,
+    target: TARGET,
+    reason: "quota" as const,
+    expectedSequence: 23,
+    expectedTurnId: TURN_ID,
+    createdAt: NOW,
+  };
+
+  function services(sequenceAfter = 23, targetAvailable = true) {
+    const state = snapshot();
+    let sequenceReads = 0;
+    const deps: ThreadProviderHandoffPreflightServices = {
+      snapshots: {
+        getSnapshotSequence: () =>
+          Effect.succeed({ snapshotSequence: sequenceReads++ === 0 ? 23 : sequenceAfter }),
+        getThreadDetailSnapshot: () =>
+          Effect.succeed(
+            Option.some({ snapshotSequence: state.snapshotSequence, thread: state.thread }),
+          ),
+        getProjectShellById: () => Effect.succeed(Option.some(state.project)),
+      },
+      turns: { getPendingTurnStartByThreadId: () => Effect.succeed(Option.none()) },
+      providers: {
+        getProviders: Effect.succeed([
+          {
+            instanceId: TARGET.providerInstanceId,
+            driver: TARGET.driver,
+            enabled: true,
+            installed: true,
+            availability: targetAvailable ? "available" : "unavailable",
+            status: "ready",
+            models: [{ slug: TARGET.model }],
+          } as unknown as ServerProvider,
+        ]),
+      },
+    };
+    return deps;
+  }
+
+  effectIt.effect("attests one persisted revision and returns its sanitized envelope", () =>
+    Effect.gen(function* () {
+      const envelope = yield* preflightThreadProviderHandoff(input, services());
+      expect(envelope).toMatchObject({
+        source: SOURCE,
+        target: TARGET,
+        sequence: 23,
+      });
+      expect(envelope.context.messages).toHaveLength(2);
+      expect(envelope.contextHash).toMatch(/^[a-f0-9]{64}$/);
+      expect(envelope.envelopeHash).toMatch(/^[a-f0-9]{64}$/);
+    }),
+  );
+
+  effectIt.effect("rejects a projection change during preflight", () =>
+    Effect.gen(function* () {
+      const error = yield* Effect.flip(preflightThreadProviderHandoff(input, services(24)));
+      expect(error).toMatchObject({ code: "stale-sequence" });
+    }),
+  );
+
+  effectIt.effect("rejects a target that is no longer available", () =>
+    Effect.gen(function* () {
+      const error = yield* Effect.flip(preflightThreadProviderHandoff(input, services(23, false)));
+      expect(error).toMatchObject({ code: "target-invalid" });
+    }),
   );
 });
