@@ -1,0 +1,142 @@
+name: CLI archive (fork)
+
+# Builds the self-contained Linux CLI archive from this fork and attaches it to
+# a fork release, so a VPS can install a branch build with `curl` + `tar` and
+# no Node, npm, or compiler on the box.
+#
+# This is deliberately NOT release.yml. That workflow publishes to the @t3code
+# npm scope via trusted publishing and pushes version commits as the Release
+# App, neither of which a fork can do. Here the GitHub release asset is the
+# whole product: no npm, no updater manifests, no desktop artifacts.
+#
+# The archive carries no T3 Connect configuration, because the Clerk and relay
+# values live in the upstream `production` environment. Everything else works;
+# for cloud linking, set T3CODE_RELAY_URL and T3CODE_CLERK_PUBLISHABLE_KEY in
+# the server's environment at runtime (apps/server/src/cloud/publicConfig.ts
+# prefers the runtime values over the build-time ones).
+
+on:
+  workflow_dispatch:
+    inputs:
+      arch:
+        description: Target architecture
+        type: choice
+        options: [x64, arm64]
+        default: x64
+
+concurrency:
+  group: cli-archive-fork-${{ github.ref }}-${{ inputs.arch }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  archive:
+    name: Linux ${{ inputs.arch }}
+    runs-on: ${{ inputs.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: false
+
+      - name: Install dependencies
+        run: vp install --filter=t3... --filter=@t3tools/web... --filter=@t3tools/scripts...
+
+      - name: Resolve build version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="$(node -p "require('./apps/server/package.json').version")"
+          echo "value=${base}-vps.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+
+      - name: Align package versions to build version
+        run: node scripts/update-release-package-versions.ts "${{ steps.version.outputs.value }}"
+
+      - name: Cache resource monitor
+        id: resource_monitor_cache
+        uses: actions/cache@v6
+        with:
+          path: native/resource-monitor/target/${{ inputs.arch == 'arm64' && 'aarch64-unknown-linux-gnu' || 'x86_64-unknown-linux-gnu' }}/release/t3-resource-monitor
+          key: resource-monitor-linux-${{ inputs.arch }}-${{ hashFiles('native/resource-monitor/Cargo.lock', 'native/resource-monitor/Cargo.toml', 'native/resource-monitor/src/**') }}
+
+      - name: Setup Rust
+        if: steps.resource_monitor_cache.outputs.cache-hit != 'true'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ inputs.arch == 'arm64' && 'aarch64-unknown-linux-gnu' || 'x86_64-unknown-linux-gnu' }}
+
+      - name: Build resource monitor
+        if: steps.resource_monitor_cache.outputs.cache-hit != 'true'
+        run: |
+          cargo build --locked --release \
+            --manifest-path native/resource-monitor/Cargo.toml \
+            --target ${{ inputs.arch == 'arm64' && 'aarch64-unknown-linux-gnu' || 'x86_64-unknown-linux-gnu' }}
+
+      # Builds the server bundle and, through its dependency on @t3tools/web,
+      # the web client into apps/server/dist. The desktop app is not built.
+      - name: Build JS bundle
+        run: vp run --filter t3 build
+
+      - name: Build CLI single-executable
+        env:
+          # Exact version, not a major: vp downloads it from nodejs.org/dist, and
+          # only exact versions have a dist directory. Keep in step with
+          # SEA_NODE_VERSION in apps/server/vite.config.ts.
+          VP_NODE_VERSION: "26.8.2"
+        run: node apps/server/scripts/cli.ts build-exe --verbose
+
+      - name: Stage resource monitor for the archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          rust_target="${{ inputs.arch == 'arm64' && 'aarch64-unknown-linux-gnu' || 'x86_64-unknown-linux-gnu' }}"
+          target_dir="$RUNNER_TEMP/cli-resource-monitor/linux-${{ inputs.arch }}"
+          mkdir -p "$target_dir"
+          cp "native/resource-monitor/target/${rust_target}/release/t3-resource-monitor" "$target_dir/t3-resource-monitor"
+
+      - name: Build CLI archive
+        run: |
+          node scripts/build-cli-archive.ts \
+            --platform linux \
+            --arch ${{ inputs.arch }} \
+            --version "${{ steps.version.outputs.value }}" \
+            --resource-monitor-dir "$RUNNER_TEMP/cli-resource-monitor" \
+            --output-dir release-cli
+
+      - name: Smoke-test CLI archive
+        run: node scripts/smoke-cli-archive.ts --archive release-cli/* --expect-version "${{ steps.version.outputs.value }}"
+
+      - name: Checksum
+        working-directory: release-cli
+        run: |
+          set -euo pipefail
+          sha256sum t3-*.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+
+      # A release (not an artifact): assets on a public repo are plain URLs, so
+      # any VPS can curl them without a token, and they do not expire.
+      - name: Publish fork release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release create "cli-${{ steps.version.outputs.value }}" \
+            release-cli/t3-*.tar.gz release-cli/SHA256SUMS \
+            --target "$GITHUB_SHA" \
+            --prerelease \
+            --title "CLI archive ${{ steps.version.outputs.value }} (linux-${{ inputs.arch }})" \
+            --notes "Fork build of \`$GITHUB_REF_NAME\` at \`$GITHUB_SHA\`. Not an upstream release: no npm package, no updater manifest, and \`t3 update\` does not know about it."
