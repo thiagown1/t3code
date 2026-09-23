@@ -68,6 +68,14 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
   );
   const activeEntry = entries.find((entry) => entry.instanceId === selection?.instanceId);
   const mixedModel = useScopedSettingsMixed(["defaultModelSelection"]);
+  const firstMateSelection = settings.firstMateModelSelection ?? selection;
+  const firstMateModelOptions = getCustomModelOptionsByInstance(
+    settings,
+    providers,
+    firstMateSelection?.instanceId,
+    firstMateSelection?.model,
+  );
+  const mixedFirstMateModel = useScopedSettingsMixed(["firstMateModelSelection"]);
   const mixedPermissions = useScopedSettingsMixed(["defaultRuntimeMode"]);
   const PermissionIcon = runtimeModeConfig[settings.defaultRuntimeMode].icon;
   const mixedWorkspace = useScopedSettingsMixed(["defaultThreadEnvMode"]);
@@ -130,6 +138,15 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
       return;
     }
     updateSettings({ defaultModelSelection: value });
+  };
+
+  const setFirstMateModel = (value: ModelSelection | null) => {
+    const reason = value ? modelDisabledReason(value.instanceId, value.model) : null;
+    if (reason) {
+      toastManager.add({ type: "error", title: "FirstMate model not saved", description: reason });
+      return;
+    }
+    updateSettings({ firstMateModelSelection: value });
   };
 
   return (
@@ -218,6 +235,48 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
                     />
                   ) : null}
                 </div>
+              ) : (
+                <span className="text-sm text-muted-foreground">No providers available</span>
+              )
+            }
+          />
+          <SettingsRow
+            serverScoped
+            settingKeys={["firstMateModelSelection"]}
+            mixed={mixedFirstMateModel}
+            id="firstmate-model"
+            title="FirstMate model"
+            description="Model for the FirstMate chat that plans work and prepares decisions."
+            status={
+              unavailable || mixedFirstMateModel || settings.firstMateModelSelection !== null
+                ? undefined
+                : "Same as new threads"
+            }
+            resetAction={
+              settings.firstMateModelSelection !== null ? (
+                <SettingResetButton
+                  label="FirstMate model"
+                  onClick={() => setFirstMateModel(null)}
+                />
+              ) : null
+            }
+            control={
+              firstMateSelection ? (
+                <ProviderModelPicker
+                  activeInstanceId={firstMateSelection.instanceId}
+                  model={firstMateSelection.model}
+                  lockedProvider={null}
+                  instanceEntries={entries}
+                  modelOptionsByInstance={firstMateModelOptions}
+                  triggerVariant="outline"
+                  triggerClassName={SETTINGS_PICKER_TRIGGER_CLASSNAME}
+                  triggerAriaLabel="FirstMate model"
+                  {...(mixedFirstMateModel ? { triggerLabel: "Mixed" } : {})}
+                  getModelDisabledReason={modelDisabledReason}
+                  onInstanceModelChange={(instanceId, model) =>
+                    setFirstMateModel(createModelSelection(instanceId, model))
+                  }
+                />
               ) : (
                 <span className="text-sm text-muted-foreground">No providers available</span>
               )

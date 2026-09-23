@@ -404,6 +404,9 @@ export function applyServerSettingsPatch(
     ...(patch.sourceControlWriterModelSelection !== undefined
       ? { sourceControlWriterModelSelection: patch.sourceControlWriterModelSelection }
       : {}),
+    ...(patch.firstMateModelSelection !== undefined
+      ? { firstMateModelSelection: patch.firstMateModelSelection }
+      : {}),
     ...(automaticGitFetchInterval !== undefined ? { automaticGitFetchInterval } : {}),
     ...(providerHealthRefreshInterval !== undefined ? { providerHealthRefreshInterval } : {}),
   };

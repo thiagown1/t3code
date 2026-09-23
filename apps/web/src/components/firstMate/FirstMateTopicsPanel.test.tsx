@@ -83,7 +83,7 @@ describe("FirstMateTopicsPanel", () => {
         onSetWaitingDeploy={async () => true}
         onArchiveThread={async () => true}
         onOpenThread={() => {}}
-        onLinkSupervisor={async () => true}
+        onOpenFirstMate={async () => true}
       />,
     );
 
@@ -126,7 +126,7 @@ describe("FirstMateTopicsPanel", () => {
         onSetWaitingDeploy={async () => true}
         onArchiveThread={async () => true}
         onOpenThread={() => {}}
-        onLinkSupervisor={async () => true}
+        onOpenFirstMate={async () => true}
       />,
     );
 
@@ -201,7 +201,7 @@ describe("FirstMateTopicsPanel", () => {
         onSetWaitingDeploy={async () => true}
         onArchiveThread={async () => true}
         onOpenThread={() => {}}
-        onLinkSupervisor={async () => true}
+        onOpenFirstMate={async () => true}
       />,
     );
 
@@ -274,7 +274,7 @@ describe("FirstMateTopicsPanel", () => {
         onSetWaitingDeploy={async () => true}
         onArchiveThread={async () => true}
         onOpenThread={() => {}}
-        onLinkSupervisor={async () => true}
+        onOpenFirstMate={async () => true}
       />,
     );
 

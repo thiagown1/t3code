@@ -1,4 +1,5 @@
 import {
+  DEFAULT_PROVIDER_INTERACTION_MODE,
   EventId,
   MAX_SCRIPT_ID_LENGTH,
   SCRIPT_RUN_COMMAND_PATTERN,
@@ -327,6 +328,48 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           deletedAt: occurredAt,
         },
       };
+    }
+
+    case "firstmate.supervisor.ensure": {
+      const project = yield* requireProject({
+        readModel,
+        command,
+        projectId: command.projectId,
+      });
+      const currentId = project.firstMate?.supervisorThreadId ?? null;
+      const current =
+        currentId === null ? undefined : readModel.threads.find((t) => t.id === currentId);
+      if (current !== undefined && current.deletedAt === null && current.archivedAt === null) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `FirstMate supervisor thread '${currentId}' already exists.`,
+        });
+      }
+      return yield* decideCommandSequence({
+        readModel,
+        commands: [
+          {
+            type: "thread.create",
+            commandId: command.commandId,
+            threadId: command.threadId,
+            projectId: command.projectId,
+            title: "FirstMate",
+            modelSelection: command.modelSelection,
+            runtimeMode: command.runtimeMode,
+            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+            branch: null,
+            worktreePath: null,
+            createdAt: command.createdAt,
+          },
+          {
+            type: "firstmate.supervisor.link",
+            commandId: command.commandId,
+            projectId: command.projectId,
+            threadId: command.threadId,
+            createdAt: command.createdAt,
+          },
+        ],
+      });
     }
 
     case "firstmate.supervisor.link":

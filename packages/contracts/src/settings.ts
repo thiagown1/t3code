@@ -1010,6 +1010,7 @@ export const PROJECT_SCOPED_SERVER_SETTING_KEYS = [
   "enableAgentDeviceAccess",
   "textGenerationModelSelection",
   "sourceControlWriterModelSelection",
+  "firstMateModelSelection",
   "sourceControlWritingStyle",
   "pullRequestMergeMethod",
   "sidebarAutoSettleOnMerge",
@@ -1036,6 +1037,7 @@ export const ProjectSettingsOverrides = Schema.Struct({
   enableAgentDeviceAccess: Schema.optionalKey(Schema.Boolean),
   textGenerationModelSelection: Schema.optionalKey(ModelSelection),
   sourceControlWriterModelSelection: Schema.optionalKey(Schema.NullOr(ModelSelection)),
+  firstMateModelSelection: Schema.optionalKey(Schema.NullOr(ModelSelection)),
   sourceControlWritingStyle: Schema.optionalKey(SourceControlWritingStyleSettings),
   pullRequestMergeMethod: Schema.optionalKey(Schema.NullOr(PullRequestMergeMethod)),
   sidebarAutoSettleOnMerge: Schema.optionalKey(Schema.Boolean),
@@ -1205,6 +1207,10 @@ export const ServerSettings = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
   sourceControlWriterModelSelection: Schema.NullOr(ModelSelection).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+  /** Model for the FirstMate chat; `null` uses the default new-thread model. */
+  firstMateModelSelection: Schema.NullOr(ModelSelection).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
   /**
@@ -1494,6 +1500,7 @@ export const ServerSettingsPatch = Schema.Struct({
     }),
   ),
   sourceControlWriterModelSelection: Schema.optionalKey(Schema.NullOr(ModelSelection)),
+  firstMateModelSelection: Schema.optionalKey(Schema.NullOr(ModelSelection)),
   pullRequestMergeMethod: Schema.optionalKey(Schema.NullOr(PullRequestMergeMethod)),
   observability: Schema.optionalKey(
     Schema.Struct({

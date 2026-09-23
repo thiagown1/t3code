@@ -61,6 +61,7 @@ export type RevertThreadCheckpointInput = CommandInput<"thread.checkpoint.revert
 };
 export type StopThreadSessionInput = CommandInput<"thread.session.stop">;
 export type LinkFirstMateSupervisorInput = CommandInput<"firstmate.supervisor.link">;
+export type EnsureFirstMateSupervisorInput = CommandInput<"firstmate.supervisor.ensure">;
 export type CreateFirstMateTopicInput = CommandInput<"firstmate.topic.create">;
 export type SelectFirstMateTopicInput = CommandInput<"firstmate.topic.select">;
 export type RecordFirstMateRoutingInput = CommandInput<"firstmate.routing.record">;
@@ -115,6 +116,17 @@ export const linkFirstMateSupervisor: (input: LinkFirstMateSupervisorInput) => C
     return yield* dispatch({
       ...input,
       type: "firstmate.supervisor.link",
+      commandId: metadata.commandId,
+      createdAt: metadata.createdAt,
+    });
+  });
+
+export const ensureFirstMateSupervisor: (input: EnsureFirstMateSupervisorInput) => CommandEffect =
+  Effect.fn("EnvironmentCommands.ensureFirstMateSupervisor")(function* (input) {
+    const metadata = yield* timestampedCommandMetadata(input);
+    return yield* dispatch({
+      ...input,
+      type: "firstmate.supervisor.ensure",
       commandId: metadata.commandId,
       createdAt: metadata.createdAt,
     });

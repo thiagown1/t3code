@@ -8,7 +8,6 @@ import type {
   FirstMateRoutingEvaluationMode,
   ProjectId,
   ScopedThreadRef,
-  ThreadId,
 } from "@t3tools/contracts";
 import {
   ArchiveIcon,
@@ -66,13 +65,13 @@ interface FirstMateTopicsPanelProps {
   readonly onOpenThread: (thread: ScopedThreadRef) => void;
   /** The thread the user is looking at, so the panel can offer to adopt it. */
   readonly activeThread?: LinkableSupervisorThread | undefined;
-  readonly onLinkSupervisor: (request: LinkFirstMateSupervisorRequest) => Promise<boolean>;
+  readonly onOpenFirstMate: (request: OpenFirstMateRequest) => Promise<boolean>;
 }
 
-export interface LinkFirstMateSupervisorRequest {
+/** Opens the project's FirstMate chat, creating it when it is missing. */
+export interface OpenFirstMateRequest {
   readonly environmentId: EnvironmentId;
   readonly projectId: ProjectId;
-  readonly threadId: ThreadId;
 }
 
 const topicDateFormatter = new Intl.DateTimeFormat(undefined, {
@@ -135,7 +134,7 @@ export function FirstMateTopicsPanel({
   onArchiveThread,
   onOpenThread,
   activeThread,
-  onLinkSupervisor,
+  onOpenFirstMate,
 }: FirstMateTopicsPanelProps) {
   const [expanded, setExpanded] = useState(true);
   const [linkingSupervisor, setLinkingSupervisor] = useState(false);
@@ -156,14 +155,10 @@ export function FirstMateTopicsPanel({
     availability: model.availability,
   });
 
-  const linkSupervisor = async (target: LinkableSupervisorThread) => {
+  const openFirstMate = async (target: OpenFirstMateRequest) => {
     setLinkingSupervisor(true);
     try {
-      await onLinkSupervisor({
-        environmentId: target.environmentId,
-        projectId: target.projectId,
-        threadId: target.threadId,
-      });
+      await onOpenFirstMate({ environmentId: target.environmentId, projectId: target.projectId });
     } finally {
       setLinkingSupervisor(false);
     }
@@ -240,17 +235,13 @@ export function FirstMateTopicsPanel({
                 <li key={supervisor.key} className="flex items-stretch gap-0.5">
                   <button
                     type="button"
-                    onClick={() =>
-                      onOpenThread({
-                        environmentId: supervisor.environmentId,
-                        threadId: supervisor.threadId,
-                      })
-                    }
+                    disabled={linkingSupervisor}
+                    onClick={() => void openFirstMate(supervisor)}
                     className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-left outline-none active:scale-[0.99] hover:bg-sidebar-row-hover focus-visible:ring-2 focus-visible:ring-sidebar-ring"
                   >
                     <CompassIcon aria-hidden className="size-3.5 shrink-0 text-sky-500" />
                     <span className="min-w-0 flex-1 truncate text-xs text-sidebar-foreground">
-                      {supervisor.threadTitle ?? "Supervisor thread unavailable"}
+                      {supervisor.threadTitle ?? "Start a new FirstMate chat"}
                     </span>
                     <span className="shrink-0 text-[10px] text-sidebar-muted-foreground">
                       {model.projectCount > 1 ? supervisor.projectTitle : "Supervisor"}
@@ -274,22 +265,20 @@ export function FirstMateTopicsPanel({
             // know it lives in the command palette.
             <div className="px-2 pb-1">
               <p className="text-[10px] leading-4 text-sidebar-muted-foreground">
-                No supervisor thread yet. FirstMate plans and routes from one thread per project.
+                FirstMate plans and routes work from one chat per project.
               </p>
               {linkableSupervisor === null ? (
                 <p className="mt-0.5 text-[10px] leading-4 text-sidebar-muted-foreground/80">
-                  Open the thread you want to plan in, then use this button.
+                  Open a thread in a project to start its FirstMate chat.
                 </p>
               ) : (
                 <button
                   type="button"
                   disabled={linkingSupervisor}
-                  onClick={() => void linkSupervisor(linkableSupervisor)}
+                  onClick={() => void openFirstMate(linkableSupervisor)}
                   className="mt-1 cursor-pointer rounded-md px-1.5 py-0.5 text-[10px] leading-4 text-sky-500 outline-none hover:bg-sidebar-row-hover focus-visible:ring-2 focus-visible:ring-sidebar-ring disabled:cursor-default disabled:opacity-60"
                 >
-                  {linkingSupervisor
-                    ? "Linking…"
-                    : `Use “${linkableSupervisor.threadTitle}” as supervisor`}
+                  {linkingSupervisor ? "Opening…" : "Open FirstMate chat"}
                 </button>
               )}
             </div>

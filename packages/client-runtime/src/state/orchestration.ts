@@ -13,6 +13,7 @@ import {
   handoffThread,
   createFirstMateTopic,
   linkFirstMateSupervisor,
+  ensureFirstMateSupervisor,
   openFirstMateDecision,
   recordFirstMateRouting,
   setFirstMateRoutingEvaluationMode,
@@ -22,6 +23,7 @@ import {
   type HandoffThreadInput,
   type CreateFirstMateTopicInput,
   type LinkFirstMateSupervisorInput,
+  type EnsureFirstMateSupervisorInput,
   type OpenFirstMateDecisionInput,
   type RecordFirstMateRoutingInput,
   type SetFirstMateRoutingEvaluationModeInput,
@@ -34,6 +36,7 @@ export type {
   HandoffThreadInput,
   CreateFirstMateTopicInput,
   LinkFirstMateSupervisorInput,
+  EnsureFirstMateSupervisorInput,
   OpenFirstMateDecisionInput,
   RecordFirstMateRoutingInput,
   SetFirstMateRoutingEvaluationModeInput,
@@ -113,6 +116,15 @@ export function createOrchestrationEnvironmentAtoms<R, E>(
     linkFirstMateSupervisor: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:firstmate:link-supervisor",
       execute: (input: LinkFirstMateSupervisorInput) => linkFirstMateSupervisor(input),
+      scheduler: firstMateScheduler,
+      concurrency: {
+        mode: "serial" as const,
+        key: ({ environmentId, input }) => JSON.stringify([environmentId, input.projectId]),
+      },
+    }),
+    ensureFirstMateSupervisor: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:firstmate:ensure-supervisor",
+      execute: (input: EnsureFirstMateSupervisorInput) => ensureFirstMateSupervisor(input),
       scheduler: firstMateScheduler,
       concurrency: {
         mode: "serial" as const,

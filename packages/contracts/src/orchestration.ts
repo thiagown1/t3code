@@ -1248,6 +1248,19 @@ const ThreadCreateCommand = Schema.Struct({
   historyImport: Schema.optional(Schema.Literal(true)),
 });
 
+// Creates the project's FirstMate chat and links it as the supervisor in one
+// step. Rejected when the linked supervisor thread is still live, so racing
+// clients converge on a single chat.
+const FirstMateSupervisorEnsureCommand = Schema.Struct({
+  type: Schema.Literal("firstmate.supervisor.ensure"),
+  commandId: CommandId,
+  projectId: ProjectId,
+  threadId: ThreadId,
+  modelSelection: ModelSelection,
+  runtimeMode: RuntimeMode,
+  createdAt: IsoDateTime,
+});
+
 const ThreadDeleteCommand = Schema.Struct({
   type: Schema.Literal("thread.delete"),
   commandId: CommandId,
@@ -1690,6 +1703,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadConversationRevertCommand,
   ThreadSessionStopCommand,
   FirstMateCommand,
+  FirstMateSupervisorEnsureCommand,
 ]);
 export type DispatchableClientOrchestrationCommand =
   typeof DispatchableClientOrchestrationCommand.Type;
@@ -1726,6 +1740,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadConversationRevertCommand,
   ThreadSessionStopCommand,
   FirstMateCommand,
+  FirstMateSupervisorEnsureCommand,
 ]);
 export type ClientOrchestrationCommand = typeof ClientOrchestrationCommand.Type;
 

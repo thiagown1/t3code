@@ -35,6 +35,7 @@ import {
   type ProjectIconOverride,
   type ScopedThreadRef,
   type ThreadDeliveryStatus,
+  DEFAULT_SERVER_SETTINGS,
   type ThreadId,
 } from "@t3tools/contracts";
 import type { TimestampFormat } from "@t3tools/contracts/settings";
@@ -250,9 +251,15 @@ import {
   type SelectFirstMateTopicRequest,
   type SetFirstMateRoutingEvaluationModeRequest,
   type UnlinkFirstMateSupervisorRequest,
-  type LinkFirstMateSupervisorRequest,
+  type OpenFirstMateRequest,
 } from "./firstMate/FirstMateTopicsPanel";
 import { finalizeFirstMateShellCommand } from "./firstMate/firstMateShellCommand";
+import {
+  liveFirstMateThreadId,
+  resolveFirstMateModelSelection,
+} from "./firstMate/firstMateChat.logic";
+import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
+import { newThreadId } from "../lib/utils";
 import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
 import { Tooltip, TooltipPopup, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 import {
@@ -2208,6 +2215,10 @@ export default function Sidebar() {
     orchestrationEnvironment.linkFirstMateSupervisor,
     "unlink FirstMate supervisor",
   );
+  const ensureFirstMateSupervisor = useAtomCommand(
+    orchestrationEnvironment.ensureFirstMateSupervisor,
+    "start FirstMate chat",
+  );
   const setFirstMateRoutingEvaluationMode = useAtomCommand(
     orchestrationEnvironment.setFirstMateRoutingEvaluationMode,
     "set FirstMate routing evaluation mode",
@@ -2954,20 +2965,63 @@ export default function Sidebar() {
     },
     [linkFirstMateSupervisor],
   );
-  const handleLinkFirstMateSupervisor = useCallback(
-    async (request: LinkFirstMateSupervisorRequest) => {
-      const result = await linkFirstMateSupervisor({
-        environmentId: request.environmentId,
-        input: { projectId: request.projectId, threadId: request.threadId },
+  const handleOpenFirstMate = useCallback(
+    async (request: OpenFirstMateRequest) => {
+      const project = projects.find(
+        (entry) => entry.environmentId === request.environmentId && entry.id === request.projectId,
+      );
+      if (!project) return false;
+      const open = (threadId: ThreadId) => {
+        const threadRef = { environmentId: request.environmentId, threadId };
+        void navigateToThread(threadRef);
+        useRightPanelStore.getState().open(threadRef, "firstmate-decisions");
+        return true;
+      };
+      const existing = liveFirstMateThreadId(project, (threadId) =>
+        threads.some(
+          (thread) =>
+            thread.environmentId === request.environmentId &&
+            thread.id === threadId &&
+            thread.archivedAt === null,
+        ),
+      );
+      if (existing !== null) return open(existing);
+
+      const config = serverConfigs.get(request.environmentId);
+      const settings = config?.settings ?? DEFAULT_SERVER_SETTINGS;
+      const modelSelection = resolveFirstMateModelSelection({
+        settings,
+        providers: config?.providers ?? [],
+        project,
       });
-      return finalizeFirstMateShellCommand({
+      if (modelSelection === null) {
+        toastManager.add({
+          type: "error",
+          title: "FirstMate chat not started",
+          description: "No provider is available for the FirstMate model.",
+        });
+        return false;
+      }
+      const threadId = newThreadId();
+      const result = await ensureFirstMateSupervisor({
+        environmentId: request.environmentId,
+        input: {
+          projectId: project.id,
+          threadId,
+          modelSelection,
+          runtimeMode: resolveProjectSettings(settings, project.id, project).settings
+            .defaultRuntimeMode,
+        },
+      });
+      const ok = finalizeFirstMateShellCommand({
         result,
         environmentId: request.environmentId,
         refreshEnvironmentShell: (environmentId) =>
           appAtomRegistry.refresh(environmentShell.stateAtom(environmentId)),
       });
+      return ok ? open(threadId) : false;
     },
-    [linkFirstMateSupervisor],
+    [ensureFirstMateSupervisor, navigateToThread, projects, serverConfigs, threads],
   );
   const handleSelectFirstMateTopic = useCallback(
     async (request: SelectFirstMateTopicRequest) => {
@@ -4834,7 +4888,7 @@ export default function Sidebar() {
           onArchiveThread={handleFirstMateArchiveThread}
           onOpenThread={navigateToThread}
           activeThread={firstMateLinkableThread}
-          onLinkSupervisor={handleLinkFirstMateSupervisor}
+          onOpenFirstMate={handleOpenFirstMate}
         />
         <SidebarGroup className="ps-[calc(var(--sidebar-content-inset)+1px)] pe-[var(--sidebar-content-inset)] pb-1 pt-0 flex-1">
           {isSearchingThreads ? (

@@ -526,6 +526,7 @@ import {
   type FirstMateRouteConfirmationRequest,
 } from "./firstMate/FirstMateRouteConfirmation";
 import { FirstMateDecisionFeed } from "./firstMate/FirstMateDecisionFeed";
+import { FirstMateDecisionsPanel } from "./firstMate/FirstMateDecisionsPanel";
 import { buildFirstMateChatDecisionFeed } from "./firstMate/FirstMateDecisionFeed.logic";
 import type { ResolveFirstMateDecisionRequest } from "./firstMate/FirstMateDecisionInbox";
 import { planFirstMateSupervisorSubmission } from "./firstMate/FirstMateSupervisorRouting.logic";
@@ -4721,6 +4722,13 @@ export default function ChatView(props: ChatViewProps) {
   const addAgentsSurface = useCallback(() => {
     if (!activeThreadRef) return;
     useRightPanelStore.getState().open(activeThreadRef, "agents");
+  }, [activeThreadRef]);
+  const isFirstMateChat =
+    activeThreadRef !== null &&
+    activeProject?.firstMate?.supervisorThreadId === activeThreadRef.threadId;
+  const addFirstMateDecisionsSurface = useCallback(() => {
+    if (!activeThreadRef) return;
+    useRightPanelStore.getState().open(activeThreadRef, "firstmate-decisions");
   }, [activeThreadRef]);
   const supportsThreadPullRequests =
     serverConfig?.environment.capabilities.threadPullRequests === true;
@@ -10237,6 +10245,19 @@ export default function ChatView(props: ChatViewProps) {
         environmentId={activeThreadRef?.environmentId ?? null}
         threadId={activeThreadRef?.threadId ?? null}
       />
+    ) : renderedRightPanelSurface?.kind === "firstmate-decisions" ? (
+      <FirstMateDecisionsPanel
+        project={activeProject ?? undefined}
+        threads={allThreadShells}
+        onResolveDecision={resolveFirstMateDecisionFromFeed}
+        onCancelDecision={cancelFirstMateDecisionFromFeed}
+        onOpenThread={(threadRef) =>
+          void navigate({
+            to: "/$environmentId/$threadId",
+            params: buildThreadRouteParams(threadRef),
+          })
+        }
+      />
     ) : renderedRightPanelSurface?.kind === "device" ? (
       <Suspense fallback={null}>
         <DevicePanel
@@ -10991,6 +11012,7 @@ export default function ChatView(props: ChatViewProps) {
           onAddPullRequest={addPullRequestSurface}
           onAddPullRequests={addPullRequestsSurface}
           onAddAgents={addAgentsSurface}
+          onAddFirstMateDecisions={addFirstMateDecisionsSurface}
           onAddDevice={addDeviceSurface}
           browserAvailable={isPreviewSupportedInRuntime()}
           terminalAvailable={activeProject !== null}
@@ -10999,6 +11021,7 @@ export default function ChatView(props: ChatViewProps) {
           pullRequestAvailable={pullRequestSurfaceAvailable}
           pullRequestsAvailable={pullRequestsSurfaceAvailable}
           agentsAvailable
+          firstMateDecisionsAvailable={isFirstMateChat}
           deviceAvailable={activeThreadRef !== null}
           liveAgentCount={agentPanelModel.liveCount}
         >
@@ -11049,6 +11072,7 @@ export default function ChatView(props: ChatViewProps) {
             onAddPullRequest={addPullRequestSurface}
             onAddPullRequests={addPullRequestsSurface}
             onAddAgents={addAgentsSurface}
+            onAddFirstMateDecisions={addFirstMateDecisionsSurface}
             onAddDevice={addDeviceSurface}
             browserAvailable={isPreviewSupportedInRuntime()}
             terminalAvailable={activeProject !== null}
@@ -11057,6 +11081,7 @@ export default function ChatView(props: ChatViewProps) {
             pullRequestAvailable={pullRequestSurfaceAvailable}
             pullRequestsAvailable={pullRequestsSurfaceAvailable}
             agentsAvailable
+            firstMateDecisionsAvailable={isFirstMateChat}
             deviceAvailable={activeThreadRef !== null}
             liveAgentCount={agentPanelModel.liveCount}
           >

@@ -70,6 +70,7 @@ function commandToAggregateRef(command: OrchestrationCommand): {
     case "project.meta.update":
     case "project.delete":
     case "firstmate.supervisor.link":
+    case "firstmate.supervisor.ensure":
     case "firstmate.topic.create":
     case "firstmate.topic.select":
     case "firstmate.topic.update":
