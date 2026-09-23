@@ -3286,6 +3286,10 @@ export function makeOpenCodeAdapter(
                     system: buildRuntimeInstructions({
                       harness: "OpenCode",
                       model: `${parsedModel.providerID}/${parsedModel.modelID}`,
+                      firstMateCoordinator: McpProviderSession.isFirstMateCoordinatorSession(
+                        input.threadId,
+                        boundInstanceId,
+                      ),
                     }),
                     parts: [...(text ? [{ type: "text" as const, text }] : []), ...fileParts],
                   },

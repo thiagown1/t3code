@@ -933,6 +933,16 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     ),
   );
 
+  /** Whether the thread is linked as its project's FirstMate supervisor right now. */
+  const isFirstMateSupervisor = (threadId: ThreadId) =>
+    Effect.gen(function* () {
+      if (Option.isNone(projectionQuery)) return false;
+      const thread = yield* projectionQuery.value.getThreadShellById(threadId);
+      if (Option.isNone(thread)) return false;
+      const project = yield* projectionQuery.value.getProjectShellById(thread.value.projectId);
+      return Option.isSome(project) && project.value.firstMate?.supervisorThreadId === threadId;
+    }).pipe(Effect.catch(() => Effect.succeed(false)));
+
   const agentAccessCapabilities = Effect.fn("ProviderService.agentAccessCapabilities")(function* (
     threadId: ThreadId,
   ) {
@@ -989,10 +999,12 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         const deviceEnvironment = capabilities.has("device")
           ? yield* agentDeviceEnvironment
           : undefined;
+        const firstMateCoordinator = yield* isFirstMateSupervisor(threadId);
         yield* Effect.sync(() =>
           McpProviderSession.setMcpProviderSession({
             ...credential.config,
             ...(deviceEnvironment ? { agentDeviceEnvironment: deviceEnvironment } : {}),
+            ...(firstMateCoordinator ? { firstMateCoordinator } : {}),
           }),
         );
       }

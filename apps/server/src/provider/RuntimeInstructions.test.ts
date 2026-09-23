@@ -20,6 +20,14 @@ describe("buildRuntimeInstructions", () => {
     ).toContain("through the Codex harness, as custom model with high reasoning effort.");
   });
 
+  it("adds the coordinator section only for the FirstMate supervisor", () => {
+    expect(buildRuntimeInstructions({ harness: "Codex" })).not.toContain("firstmate_coordinator");
+    const coordinator = buildRuntimeInstructions({ harness: "Codex", firstMateCoordinator: true });
+    expect(coordinator).toContain("<firstmate_coordinator>");
+    expect(coordinator).toContain("firstmate_dispatch");
+    expect(coordinator).not.toMatch(/captain|crew|ahoy/i);
+  });
+
   it.each([undefined, "", "auto", "default"])("omits unresolved model %s", (model) => {
     const instructions = buildRuntimeInstructions({ harness: "Cursor", model });
     expect(instructions).toContain("through the Cursor harness.");

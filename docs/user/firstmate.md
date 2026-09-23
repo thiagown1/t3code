@@ -21,6 +21,18 @@ To stop, use the unlink button beside the supervisor row in the sidebar, or run
 **Stop using this thread as FirstMate supervisor**. Linking a different thread
 replaces the old one. Topics and decisions are untouched either way.
 
+## Dispatch work and get updates
+
+The supervisor coordinates rather than doing the work itself. Ask it for
+something and it splits the request into tasks, then starts each one in a new
+thread of the same project, in its own worktree by default. New threads use the
+project's default model and permission mode unless you ask for something else.
+
+When one of those threads finishes a turn and turn review (below) marks it done,
+finds it blocked, or needs your decision, the supervisor gets a short
+"[Thread update]" note and reports back to you. Routine auto-continues stay
+quiet. Ask "status" at any time for a one-line recap per task.
+
 ## Answer decisions
 
 Pending decisions appear as cards above the composer in the supervisor thread,

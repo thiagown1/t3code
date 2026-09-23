@@ -1,6 +1,7 @@
 import {
   EventId,
   FirstMateDecisionId,
+  FirstMateTopicId,
   MessageId,
   ProjectId,
   ProviderDriverKind,
@@ -37,6 +38,7 @@ import {
 import { ProviderService } from "../provider/Services/ProviderService.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { FirstMateTurnReviewReactor, layer } from "./FirstMateTurnReviewReactor.ts";
+import { FIRST_MATE_THREAD_UPDATE_PREFIX } from "./firstMateTurnReviewCommands.ts";
 import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
 import {
@@ -166,6 +168,8 @@ interface HarnessOptions {
   readonly shell?: Partial<OrchestrationThreadShell>;
   readonly decisions?: ReadonlyArray<FirstMateDecision>;
   readonly messages?: ReadonlyArray<OrchestrationMessage>;
+  readonly topics?: FirstMateWorkspaceState["topics"];
+  readonly supervisorArchived?: boolean;
 }
 
 const makeHarness = Effect.fn("makeFirstMateTurnReviewHarness")(function* (
@@ -176,12 +180,26 @@ const makeHarness = Effect.fn("makeFirstMateTurnReviewHarness")(function* (
   const runtimeEvents = yield* Queue.unbounded<ProviderRuntimeEvent>();
   const receipts = yield* Queue.unbounded<OrchestrationRuntimeReceipt>();
   const shell = makeThreadShell(options.shell ?? {});
-  const project = makeProject(makeWorkspace(options.decisions ?? []));
+  const project = makeProject({
+    ...makeWorkspace(options.decisions ?? []),
+    topics: options.topics ?? [],
+  });
+  const supervisor = makeThreadShell({
+    id: SUPERVISOR_THREAD_ID,
+    title: "FirstMate",
+    archivedAt: options.supervisorArchived === true ? NOW : null,
+  });
 
   const dependencies = Layer.mergeAll(
     Layer.mock(ProjectionSnapshotQuery)({
       getThreadShellById: (threadId) =>
-        Effect.succeed(threadId === shell.id ? Option.some(shell) : Option.none()),
+        Effect.succeed(
+          threadId === shell.id
+            ? Option.some(shell)
+            : threadId === supervisor.id
+              ? Option.some(supervisor)
+              : Option.none(),
+        ),
       getProjectShellById: () => Effect.succeed(Option.some(project)),
       getThreadDetailById: () =>
         Effect.succeed(Option.some(makeThreadDetail(shell, options.messages ?? DEFAULT_MESSAGES))),
@@ -375,4 +393,99 @@ describe("FirstMateTurnReviewReactor", () => {
       expect(yield* Ref.get(harness.commands)).toHaveLength(0);
     }).pipe(Effect.scoped),
   );
+
+  describe("thread updates to the supervisor", () => {
+    const delegatedTopic: FirstMateWorkspaceState["topics"][number] = {
+      id: FirstMateTopicId.make("topic-calc"),
+      projectId: PROJECT_ID,
+      title: "Calculator app",
+      summary: "Build the calculator.",
+      stage: "implementation",
+      threadId: WORKER_THREAD_ID,
+      responsibleAgentId: null,
+      latestRoundSummary: null,
+      createdAt: NOW,
+      updatedAt: NOW,
+      completedAt: null,
+    };
+    const updatesIn = (commands: ReadonlyArray<OrchestrationCommand>) =>
+      commands.filter(
+        (command) =>
+          command.type === "thread.queued-message.enqueue" &&
+          command.threadId === SUPERVISOR_THREAD_ID,
+      );
+
+    it.effect("reports a delegated thread marked done", () =>
+      Effect.gen(function* () {
+        const harness = yield* makeHarness({ topics: [delegatedTopic] });
+        yield* harness.emit(turnCompleted());
+        expect(yield* harness.nextReceipt).toMatchObject({ outcome: "marked-done" });
+        const updates = updatesIn(yield* Ref.get(harness.commands));
+        expect(updates).toMatchObject([
+          {
+            dispatchTiming: "after-current-turn",
+            message: {
+              role: "user",
+              text: `${FIRST_MATE_THREAD_UPDATE_PREFIX} Calculator (topic Calculator app): marked done. Last message: Added tests; all pass. Want me to deploy it?`,
+            },
+          },
+        ]);
+      }).pipe(Effect.scoped),
+    );
+
+    it.effect("reports a delegated thread that needs a decision or is blocked", () =>
+      Effect.gen(function* () {
+        const needsUser = yield* makeHarness({
+          topics: [delegatedTopic],
+          verdict: { outcome: "needs_user", outcomeConfidence: 0.9, inScope: 0.2 },
+        });
+        yield* needsUser.emit(turnCompleted());
+        yield* needsUser.nextReceipt;
+        const [question] = updatesIn(yield* Ref.get(needsUser.commands));
+        expect(question).toMatchObject({
+          message: {
+            text: expect.stringContaining(
+              "needs your decision: Added tests; all pass. Want me to deploy it?",
+            ),
+          },
+        });
+
+        const blocked = yield* makeHarness({
+          topics: [delegatedTopic],
+          verdict: { outcome: "blocked", outcomeConfidence: 0.9, inScope: 0.5 },
+        });
+        yield* blocked.emit(turnCompleted());
+        yield* blocked.nextReceipt;
+        const [blockedUpdate] = updatesIn(yield* Ref.get(blocked.commands));
+        expect(blockedUpdate).toMatchObject({
+          message: { text: expect.stringContaining("): blocked: Added tests") },
+        });
+      }).pipe(Effect.scoped),
+    );
+
+    it.effect("stays quiet on auto-continue, undelegated threads, and an archived supervisor", () =>
+      Effect.gen(function* () {
+        const continued = yield* makeHarness({
+          topics: [delegatedTopic],
+          verdict: { outcome: "continue", outcomeConfidence: 0.9, inScope: 0.9 },
+        });
+        yield* continued.emit(turnCompleted());
+        expect(yield* continued.nextReceipt).toMatchObject({ outcome: "continued" });
+        expect(updatesIn(yield* Ref.get(continued.commands))).toEqual([]);
+
+        const undelegated = yield* makeHarness();
+        yield* undelegated.emit(turnCompleted());
+        yield* undelegated.nextReceipt;
+        expect(updatesIn(yield* Ref.get(undelegated.commands))).toEqual([]);
+
+        const archived = yield* makeHarness({
+          topics: [delegatedTopic],
+          supervisorArchived: true,
+        });
+        yield* archived.emit(turnCompleted());
+        expect(yield* archived.nextReceipt).toMatchObject({ outcome: "marked-done" });
+        expect(updatesIn(yield* Ref.get(archived.commands))).toEqual([]);
+      }).pipe(Effect.scoped),
+    );
+  });
 });

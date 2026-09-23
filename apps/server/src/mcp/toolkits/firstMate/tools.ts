@@ -1,6 +1,7 @@
 import {
   FirstMateDecisionOption,
   FirstMateTopicStage,
+  ModelSelection,
   TrimmedNonEmptyString,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
@@ -343,7 +344,56 @@ const ListProjectThreadsTool = Tool.make("firstmate_list_project_threads", {
   .annotate(Tool.Idempotent, true)
   .annotate(Tool.OpenWorld, false);
 
+export const DispatchResult = Schema.Struct({
+  threadId: Schema.String,
+  topicId: Schema.String,
+  isolation: Schema.Literals(["worktree", "local"]).annotate({
+    description:
+      "Where the thread actually runs. A worktree request falls back to local when the project is not a Git repository with a checked-out branch.",
+  }),
+  branch: Schema.NullOr(Schema.String),
+});
+export type DispatchResult = typeof DispatchResult.Type;
+
+const DispatchTool = Tool.make("firstmate_dispatch", {
+  description: `Start a task: create a new thread in this project, send it the prompt as its first message, and delegate the task's topic to it. Omit topicId to create a new topic at stage implementation. Returns immediately; the thread's progress comes back to you as "[Thread update]" messages. ${SUPERVISOR_ONLY}`,
+  parameters: Schema.Struct({
+    title: TrimmedNonEmptyString.annotate({
+      description: "Short title for the new thread, and for the topic when one is created.",
+    }),
+    prompt: TrimmedNonEmptyString.annotate({
+      description:
+        "First message for the agent doing the work: goal, context, constraints, and what done looks like.",
+    }),
+    topicId: Schema.optional(
+      TrimmedNonEmptyString.annotate({
+        description: "Existing topic to delegate to the new thread. Omit to create one.",
+      }),
+    ),
+    isolation: Schema.optional(
+      Schema.Literals(["worktree", "local"]).annotate({
+        description:
+          "worktree (default) gives the thread its own Git worktree and branch; local runs it in the project checkout.",
+      }),
+    ),
+    modelSelection: Schema.optional(
+      ModelSelection.annotate({
+        description: "Model for the new thread. Omit to use the project's default for new threads.",
+      }),
+    ),
+  }),
+  success: DispatchResult,
+  failure: FirstMateToolError,
+  dependencies,
+})
+  .annotate(Tool.Title, "Dispatch a task to a new thread")
+  .annotate(Tool.Readonly, false)
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, false)
+  .annotate(Tool.OpenWorld, false);
+
 export const FirstMateToolkit = Toolkit.make(
+  DispatchTool,
   CreateTopicTool,
   UpdateTopicTool,
   DelegateTopicTool,

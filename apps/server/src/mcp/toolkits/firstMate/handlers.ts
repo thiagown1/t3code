@@ -1,5 +1,6 @@
 import {
   CommandId,
+  DEFAULT_PROVIDER_INTERACTION_MODE,
   FirstMateDecisionId,
   FirstMateTopicId,
   MessageId,
@@ -16,9 +17,13 @@ import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
+import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 
 import * as OrchestrationEngine from "../../../orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
+import * as GitWorkflowService from "../../../git/GitWorkflowService.ts";
+import * as ServerSettings from "../../../serverSettings.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import {
   FIRST_MATE_THREAD_LIST_LIMIT,
@@ -127,10 +132,22 @@ function rejectUnusableDecision(
   return null;
 }
 
+const DISPATCH_SUMMARY_MAX_CHARS = 240;
+
+/** A dispatched topic's summary: the prompt on one line, cut to panel size. */
+function summarizePrompt(prompt: string): string {
+  const line = prompt.replaceAll(/\s+/g, " ").trim();
+  return line.length <= DISPATCH_SUMMARY_MAX_CHARS
+    ? line
+    : `${line.slice(0, DISPATCH_SUMMARY_MAX_CHARS - 1).trimEnd()}…`;
+}
+
 const make = Effect.gen(function* () {
   const engine = yield* OrchestrationEngine.OrchestrationEngineService;
   const snapshots = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
   const crypto = yield* Crypto.Crypto;
+  const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
+  const serverSettings = yield* ServerSettings.ServerSettingsService;
 
   const uuid = crypto.randomUUIDv4.pipe(
     Effect.mapError((cause) => new FirstMateCommandFailedError({ cause })),
@@ -240,7 +257,124 @@ const make = Effect.gen(function* () {
       ),
     );
 
+  /**
+   * The worktree half of the client's new-thread bootstrap (see
+   * dispatchBootstrapTurnStart in ws.ts), without the progress card or setup
+   * script: branch off the project's checked-out ref into a temporary branch.
+   * Null means the project cannot host a worktree and the thread runs local.
+   */
+  const prepareWorktree = Effect.fn("FirstMateToolkit.prepareWorktree")(function* (
+    projectCwd: string,
+  ) {
+    const status = yield* gitWorkflow
+      .localStatus({ cwd: projectCwd })
+      .pipe(Effect.mapError((cause) => new FirstMateCommandFailedError({ cause })));
+    if (!status.isRepo || status.refName === null) return null;
+    const token = (yield* uuid).replaceAll("-", "");
+    const created = yield* gitWorkflow
+      .createWorktree({
+        cwd: projectCwd,
+        refName: status.refName,
+        newRefName: buildTemporaryWorktreeBranchName(() => token),
+        baseRefName: status.refName,
+        path: null,
+      })
+      .pipe(Effect.mapError((cause) => new FirstMateCommandFailedError({ cause })));
+    return { branch: created.worktree.refName, worktreePath: created.worktree.path };
+  });
+
   return FirstMateToolkit.of({
+    firstmate_dispatch: (input) =>
+      Effect.gen(function* () {
+        const scope = yield* requireSupervisor();
+        const existingTopic =
+          input.topicId === undefined ? null : yield* requireTopic(scope, input.topicId);
+        const settings = yield* serverSettings.getSettings.pipe(
+          Effect.mapError((cause) => new FirstMateCommandFailedError({ cause })),
+        );
+        const projectSettings = resolveProjectSettings(
+          settings,
+          scope.project.id,
+          scope.project,
+        ).settings;
+        // Same resolution as a new thread from the sidebar; the supervisor's
+        // own model is only the last resort.
+        const modelSelection =
+          input.modelSelection ??
+          projectSettings.defaultModelSelection ??
+          scope.thread.modelSelection;
+        const runtimeMode = projectSettings.defaultRuntimeMode;
+        const worktree =
+          (input.isolation ?? "worktree") === "worktree"
+            ? yield* prepareWorktree(scope.project.workspaceRoot)
+            : null;
+        const threadId = ThreadId.make(yield* uuid);
+        const createdAt = DateTime.formatIso(yield* DateTime.now);
+        yield* dispatch({
+          type: "thread.create",
+          commandId: yield* commandId("mcp-fm-dispatch-thread", scope.thread.id),
+          threadId,
+          projectId: scope.project.id,
+          title: input.title,
+          modelSelection,
+          runtimeMode,
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          branch: worktree?.branch ?? null,
+          worktreePath: worktree?.worktreePath ?? null,
+          createdAt,
+        });
+        // Delegate before the turn starts so its first finished turn already
+        // reports back to the supervisor.
+        let topicId: FirstMateTopicId;
+        if (existingTopic === null) {
+          topicId = FirstMateTopicId.make(`topic-${yield* uuid}`);
+          yield* dispatch({
+            type: "firstmate.topic.create",
+            commandId: yield* commandId("mcp-fm-dispatch-topic", scope.thread.id),
+            projectId: scope.project.id,
+            createdAt,
+            topicId,
+            title: input.title,
+            summary: summarizePrompt(input.prompt),
+            stage: "implementation",
+            threadId,
+            responsibleAgentId: null,
+          });
+        } else {
+          topicId = existingTopic.id;
+          yield* dispatch({
+            type: "firstmate.topic.delegate",
+            commandId: yield* commandId("mcp-fm-dispatch-delegate", scope.thread.id),
+            projectId: scope.project.id,
+            createdAt,
+            topicId,
+            threadId,
+            responsibleAgentId: existingTopic.responsibleAgentId,
+          });
+        }
+        yield* dispatch({
+          type: "thread.turn.start",
+          commandId: yield* commandId("mcp-fm-dispatch-turn", scope.thread.id),
+          threadId,
+          message: {
+            messageId: MessageId.make(`firstmate-dispatch:${yield* uuid}`),
+            role: "user",
+            text: input.prompt,
+            attachments: [],
+          },
+          modelSelection,
+          runtimeMode,
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          createdAt,
+        });
+        return {
+          threadId,
+          topicId,
+          isolation: worktree === null ? ("local" as const) : ("worktree" as const),
+          branch: worktree?.branch ?? null,
+        };
+      }),
+
     firstmate_create_topic: (input) =>
       Effect.gen(function* () {
         const scope = yield* requireSupervisor();

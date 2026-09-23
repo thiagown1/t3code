@@ -22,6 +22,8 @@ import {
   CommandId,
   FirstMateDecisionId,
   type FirstMateDecision,
+  type FirstMateWorkspaceState,
+  type OrchestrationThreadShell,
   type OrchestrationCommand,
   type ProviderRuntimeEvent,
   type ThreadId,
@@ -51,6 +53,9 @@ import { ProviderService } from "../provider/Services/ProviderService.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { forkParked } from "../serverActivation.ts";
 import {
+  buildThreadUpdateText,
+  threadUpdateCommand,
+  type ThreadUpdateKind,
   turnReviewContinueCommand,
   turnReviewMarkDoneCommand,
 } from "./firstMateTurnReviewCommands.ts";
@@ -289,8 +294,57 @@ export const make = Effect.gen(function* () {
       outcome = "decision-opened";
     }
     yield* engine.dispatch(command);
+    if (action !== "continue") {
+      yield* reportToSupervisor({
+        workspace,
+        thread,
+        key,
+        createdAt,
+        kind:
+          action === "mark-done"
+            ? "marked-done"
+            : verdict.outcome === "blocked"
+              ? "blocked"
+              : "needs-decision",
+        lastAssistantText,
+      });
+    }
     return outcome;
   });
+
+  /**
+   * Tell the supervisor what happened to a thread it delegated a topic to.
+   * Plain auto-continues stay silent: they are routine and would flood it.
+   */
+  const reportToSupervisor = Effect.fn("FirstMateTurnReviewReactor.reportToSupervisor")(
+    function* (input: {
+      readonly workspace: FirstMateWorkspaceState;
+      readonly thread: OrchestrationThreadShell;
+      readonly key: string;
+      readonly createdAt: string;
+      readonly kind: ThreadUpdateKind;
+      readonly lastAssistantText: string;
+    }) {
+      const topic = input.workspace.topics.find((entry) => entry.threadId === input.thread.id);
+      const supervisorThreadId = input.workspace.supervisorThreadId;
+      if (topic === undefined || supervisorThreadId === null) return;
+      const supervisor = yield* snapshots.getThreadShellById(supervisorThreadId);
+      if (Option.isNone(supervisor) || supervisor.value.archivedAt !== null) return;
+      yield* engine.dispatch(
+        threadUpdateCommand({
+          supervisorThreadId,
+          key: input.key,
+          createdAt: input.createdAt,
+          text: buildThreadUpdateText({
+            threadTitle: input.thread.title,
+            topicTitle: topic.title,
+            kind: input.kind,
+            lastAssistantText: input.lastAssistantText,
+          }),
+        }),
+      );
+    },
+  );
 
   const processTurn = (input: ReviewInput) =>
     review(input).pipe(

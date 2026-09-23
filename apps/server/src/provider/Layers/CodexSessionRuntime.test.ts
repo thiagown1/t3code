@@ -303,6 +303,22 @@ describe("buildTurnStartParams", () => {
     NodeAssert.ok(settings?.developer_instructions?.includes(`as ${DEFAULT_MODEL} with medium`));
   });
 
+  it.effect("adds the coordinator block only for the FirstMate supervisor", () =>
+    Effect.gen(function* () {
+      const instructions = (firstMateCoordinator: boolean) =>
+        buildTurnStartParams({
+          threadId: "provider-thread-1",
+          runtimeMode: "full-access",
+          prompt: "Plan the work",
+          interactionMode: "default",
+          firstMateCoordinator,
+        }).pipe(Effect.map((params) => params.collaborationMode?.settings.developer_instructions));
+
+      NodeAssert.ok((yield* instructions(true))?.includes("<firstmate_coordinator>"));
+      NodeAssert.ok(!(yield* instructions(false))?.includes("<firstmate_coordinator>"));
+    }),
+  );
+
   it.effect("routes approvals to the auto reviewer in auto mode", () =>
     Effect.gen(function* () {
       const params = yield* buildTurnStartParams({

@@ -15,6 +15,20 @@ export interface McpProviderSessionConfig {
    * already pointed at the server's daemon; the agent never handles a token.
    */
   readonly agentDeviceEnvironment?: Readonly<Record<string, string>>;
+  /**
+   * Set when the thread was its project's FirstMate supervisor as the session
+   * started. Adapters use it to add the coordinator runtime instructions; the
+   * firstmate_* tools still gate on the live workspace at call time.
+   */
+  readonly firstMateCoordinator?: boolean;
+}
+
+/** Whether this provider session should receive the FirstMate coordinator instructions. */
+export function isFirstMateCoordinatorSession(
+  threadId: ThreadId,
+  providerInstanceId?: ProviderInstanceId,
+): boolean {
+  return readMcpProviderSession(threadId, providerInstanceId)?.firstMateCoordinator === true;
 }
 
 /** Provider env with the device variables applied over `base`, or `base` untouched. */

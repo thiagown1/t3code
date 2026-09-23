@@ -12,6 +12,9 @@ import {
   type OrchestrationCommand,
   type OrchestrationProjectShell,
   type OrchestrationThreadShell,
+  type VcsCreateWorktreeInput,
+  type VcsCreateWorktreeResult,
+  type VcsStatusLocalResult,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Crypto from "effect/Crypto";
@@ -28,6 +31,8 @@ import {
   type OrchestrationEngineShape,
 } from "../../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { GitWorkflowService } from "../../../git/GitWorkflowService.ts";
+import * as ServerSettings from "../../../serverSettings.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import { FirstMateToolkitHandlersLive } from "./handlers.ts";
 import { FIRST_MATE_TOPIC_LIST_LIMIT, FirstMateToolkit } from "./tools.ts";
@@ -150,12 +155,15 @@ interface HarnessOptions {
   readonly firstMate?: FirstMateWorkspaceState | null;
   readonly threads?: ReadonlyArray<OrchestrationThreadShell>;
   readonly reject?: (command: OrchestrationCommand) => OrchestrationCommandInvariantError | null;
+  /** False when the project checkout is not a Git repository. */
+  readonly repo?: boolean;
 }
 
 const makeHarness = Effect.fn("makeFirstMateToolkitHarness")(function* (
   options: HarnessOptions = {},
 ) {
   const commands = yield* Ref.make<ReadonlyArray<OrchestrationCommand>>([]);
+  const worktreeRequests: Array<VcsCreateWorktreeInput> = [];
   const project = makeProject(
     options.firstMate === undefined ? makeWorkspace() : options.firstMate,
   );
@@ -194,6 +202,28 @@ const makeHarness = Effect.fn("makeFirstMateToolkitHarness")(function* (
       latestSequence: Effect.succeed(0),
     }),
     Layer.succeed(Crypto.Crypto, testCrypto),
+    ServerSettings.layerTest({ defaultRuntimeMode: "approval-required" }),
+    Layer.mock(GitWorkflowService)({
+      localStatus: () =>
+        Effect.succeed({
+          isRepo: options.repo !== false,
+          hasPrimaryRemote: false,
+          isDefaultRef: true,
+          refName: options.repo === false ? null : "main",
+          hasWorkingTreeChanges: false,
+          workingTree: { files: [], insertions: 0, deletions: 0 },
+        } as unknown as VcsStatusLocalResult),
+      createWorktree: (input) =>
+        Effect.sync(() => {
+          worktreeRequests.push(input);
+          return {
+            worktree: {
+              path: "/workspace/worktrees/new",
+              refName: input.newRefName ?? input.refName,
+            },
+          } as unknown as VcsCreateWorktreeResult;
+        }),
+    }),
   );
   const toolkit = yield* FirstMateToolkit.pipe(
     Effect.provide(FirstMateToolkitHandlersLive.pipe(Layer.provide(dependencies))),
@@ -212,7 +242,7 @@ const makeHarness = Effect.fn("makeFirstMateToolkitHarness")(function* (
       Effect.provideService(McpInvocationContext.McpInvocationContext, invocation(threadId)),
       Effect.provide(dependencies),
     );
-  return { commands, call };
+  return { commands, call, worktreeRequests };
 });
 
 describe("FirstMate toolkit handlers", () => {
@@ -667,6 +697,101 @@ describe("firstmate_list_project_threads", () => {
         .pipe(Effect.flip);
 
       expect(failure._tag).toBe("FirstMateSupervisorOnlyError");
+    }),
+  );
+
+  it.effect("dispatches a task to a new worktree thread and opens its topic", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness();
+
+      const result = yield* harness.call("firstmate_dispatch", {
+        title: "Fix login",
+        prompt: "Fix the login redirect loop.\nAdd a regression test.",
+      });
+
+      expect(result).toMatchObject({ isolation: "worktree", branch: expect.any(String) });
+      expect(harness.worktreeRequests).toMatchObject([
+        { cwd: "/workspace/project", refName: "main", baseRefName: "main" },
+      ]);
+      const commands = yield* Ref.get(harness.commands);
+      expect(commands.map((command) => command.type)).toEqual([
+        "thread.create",
+        "firstmate.topic.create",
+        "thread.turn.start",
+      ]);
+      expect(commands[0]).toMatchObject({
+        threadId: result.threadId,
+        projectId: PROJECT_ID,
+        title: "Fix login",
+        // No project default model in settings: falls back to the supervisor's.
+        modelSelection: { instanceId: "codex", model: "gpt-5" },
+        runtimeMode: "approval-required",
+        branch: result.branch,
+        worktreePath: "/workspace/worktrees/new",
+      });
+      expect(commands[1]).toMatchObject({
+        topicId: result.topicId,
+        stage: "implementation",
+        threadId: result.threadId,
+        summary: "Fix the login redirect loop. Add a regression test.",
+      });
+      expect(commands[2]).toMatchObject({
+        threadId: result.threadId,
+        message: { role: "user", text: "Fix the login redirect loop.\nAdd a regression test." },
+      });
+    }),
+  );
+
+  it.effect("delegates an existing topic and honours local isolation and a model", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness();
+      const modelSelection = { instanceId: ProviderInstanceId.make("claude"), model: "opus" };
+
+      const result = yield* harness.call("firstmate_dispatch", {
+        title: "Rate limits",
+        prompt: "Implement the limiter.",
+        topicId: TOPIC_ID,
+        isolation: "local",
+        modelSelection,
+      });
+
+      expect(result).toMatchObject({ topicId: TOPIC_ID, isolation: "local", branch: null });
+      expect(harness.worktreeRequests).toEqual([]);
+      const commands = yield* Ref.get(harness.commands);
+      expect(commands.map((command) => command.type)).toEqual([
+        "thread.create",
+        "firstmate.topic.delegate",
+        "thread.turn.start",
+      ]);
+      expect(commands[0]).toMatchObject({ modelSelection, worktreePath: null, branch: null });
+      expect(commands[1]).toMatchObject({ topicId: TOPIC_ID, threadId: result.threadId });
+    }),
+  );
+
+  it.effect("runs local when the project is not a Git repository", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({ repo: false });
+
+      const result = yield* harness.call("firstmate_dispatch", {
+        title: "Docs",
+        prompt: "Write the docs.",
+      });
+
+      expect(result.isolation).toBe("local");
+      expect(harness.worktreeRequests).toEqual([]);
+    }),
+  );
+
+  it.effect("refuses to dispatch outside the supervisor thread", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness();
+
+      const failure = yield* harness
+        .call("firstmate_dispatch", { title: "X", prompt: "Y" }, WORKER_THREAD_ID)
+        .pipe(Effect.flip);
+
+      expect(failure._tag).toBe("FirstMateSupervisorOnlyError");
+      expect(yield* Ref.get(harness.commands)).toEqual([]);
     }),
   );
 });

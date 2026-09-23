@@ -50,3 +50,65 @@ export function turnReviewMarkDoneCommand(input: {
     deliveryStatus: "done",
   };
 }
+
+/**
+ * Prefix of every server-written report to the FirstMate supervisor. The
+ * coordinator instructions (RuntimeInstructions.ts) tell the supervisor these
+ * come from the server, and the turn review never reviews the supervisor, so
+ * the reports neither get judged nor count as auto-continues.
+ */
+export const FIRST_MATE_THREAD_UPDATE_PREFIX = "[Thread update]";
+
+const THREAD_UPDATE_QUESTION_CHARS = 300;
+const THREAD_UPDATE_LAST_MESSAGE_CHARS = 500;
+
+export type ThreadUpdateKind = "marked-done" | "needs-decision" | "blocked";
+
+function clipTail(text: string, limit: number): string {
+  const line = text.replaceAll(/\s+/g, " ").trim();
+  return line.length <= limit ? line : `…${line.slice(-(limit - 1)).trimStart()}`;
+}
+
+/** One short report on a delegated thread's finished turn. */
+export function buildThreadUpdateText(input: {
+  readonly threadTitle: string;
+  readonly topicTitle: string;
+  readonly kind: ThreadUpdateKind;
+  readonly lastAssistantText: string;
+}): string {
+  const tail = clipTail(input.lastAssistantText, THREAD_UPDATE_QUESTION_CHARS);
+  const status =
+    input.kind === "marked-done"
+      ? "marked done"
+      : input.kind === "blocked"
+        ? `blocked: ${tail || "no message"}`
+        : `needs your decision: ${tail || "no message"}`;
+  const lastMessage = clipTail(input.lastAssistantText, THREAD_UPDATE_LAST_MESSAGE_CHARS);
+  return `${FIRST_MATE_THREAD_UPDATE_PREFIX} ${input.threadTitle} (topic ${input.topicTitle}): ${status}.${
+    lastMessage ? ` Last message: ${lastMessage}` : ""
+  }`;
+}
+
+/** Queue a thread update for the supervisor behind whatever it is doing. */
+export function threadUpdateCommand(input: {
+  readonly supervisorThreadId: ThreadId;
+  readonly key: string;
+  readonly text: string;
+  readonly createdAt: string;
+}): OrchestrationCommand {
+  return {
+    type: "thread.queued-message.enqueue",
+    commandId: CommandId.make(`server:firstmate-thread-update:${input.key}`),
+    threadId: input.supervisorThreadId,
+    queuedMessageId: ThreadQueuedMessageId.make(`firstmate-thread-update:${input.key}`),
+    message: {
+      messageId: MessageId.make(`firstmate-thread-update:${input.key}`),
+      role: "user",
+      text: input.text,
+      attachments: [],
+    },
+    dispatchTiming: "after-current-turn",
+    queuedAfterActivityId: null,
+    createdAt: input.createdAt,
+  };
+}

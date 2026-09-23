@@ -195,6 +195,7 @@ ${browserToolInstructions(browserToolsAvailable)}
 export interface CodexRuntimeInfo {
   readonly model: string;
   readonly reasoningEffort: string;
+  readonly firstMateCoordinator?: boolean | undefined;
 }
 
 export function buildCodexDeveloperInstructions(
