@@ -1,0 +1,11 @@
+# ~/.config/systemd/user/t3-update.timer
+[Unit]
+Description=Check for a new T3 Code fork CLI release every 15 minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=15min
+RandomizedDelaySec=1min
+
+[Install]
+WantedBy=timers.target

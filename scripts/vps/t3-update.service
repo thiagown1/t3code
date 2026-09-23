@@ -1,0 +1,10 @@
+# ~/.config/systemd/user/t3-update.service
+[Unit]
+Description=Install the newest T3 Code fork CLI release
+Documentation=https://github.com/thiagown1/t3code/blob/main/docs/operations/release.md
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/t3-update
+TimeoutStartSec=15min
