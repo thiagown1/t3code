@@ -72,6 +72,7 @@ import {
   ThreadId,
   ThreadBundleExportError,
   ThreadBundleImportError,
+  ThreadProviderHandoffRpcError,
   type TerminalAttachStreamEvent,
   type TerminalError,
   type TerminalEvent,
@@ -104,6 +105,9 @@ import {
 } from "./orchestration/Normalizer.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
+import { runThreadProviderHandoff } from "./orchestration/ThreadProviderHandoffCoordinator.ts";
+import { makeProjectionTurnRepository } from "./persistence/Layers/ProjectionTurns.ts";
+import * as ThreadProviderHandoffStore from "./persistence/ThreadProviderHandoffStore.ts";
 import { ThreadDeletionReactor } from "./orchestration/Services/ThreadDeletionReactor.ts";
 import {
   observeRpcEffect as instrumentRpcEffect,
@@ -202,6 +206,7 @@ import * as SessionStore from "./auth/SessionStore.ts";
 import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http.ts";
 import * as RelayClient from "@t3tools/shared/relayClient";
 const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
+const isThreadProviderHandoffRpcError = Schema.is(ThreadProviderHandoffRpcError);
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 const CONFIG_DISCOVERY_TIMEOUT = Duration.seconds(5);
@@ -529,6 +534,8 @@ const makeWsRpcLayer = (
       const crypto = yield* Crypto.Crypto;
       const sql = yield* SqlClient.SqlClient;
       const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
+      const projectionTurns = yield* makeProjectionTurnRepository;
+      const handoffStore = yield* ThreadProviderHandoffStore.make;
       /** A reference's host-level link key; the project's own host where the ref names none. */
       const resolvePullRequestSyncKey = (reference: PullRequestRef) =>
         reference.host !== undefined && reference.repository.includes("/")
@@ -2109,6 +2116,36 @@ const makeWsRpcLayer = (
                     message: "Failed to preview thread cleanup",
                     cause,
                   }),
+              ),
+            ),
+            { "rpc.aggregate": "orchestration" },
+          ),
+        [ORCHESTRATION_WS_METHODS.handoffThread]: (input) =>
+          observeRpcEffect(
+            ORCHESTRATION_WS_METHODS.handoffThread,
+            runThreadProviderHandoff(input, {
+              snapshots: projectionSnapshotQuery,
+              turns: projectionTurns,
+              providers: providerRegistry,
+              store: handoffStore,
+              directory: providerSessionDirectory,
+              providerService,
+              dispatch: dispatchFromClient,
+              nextCommandId: (purpose) =>
+                crypto.randomUUIDv4.pipe(
+                  Effect.orDie,
+                  Effect.map((uuid) => CommandId.make(`server:${purpose}:${uuid}`)),
+                ),
+              nowIso,
+              newHandoffId: crypto.randomUUIDv4.pipe(Effect.orDie),
+            }).pipe(
+              Effect.mapError((cause) =>
+                isThreadProviderHandoffRpcError(cause)
+                  ? cause
+                  : new ThreadProviderHandoffRpcError({
+                      code: "unknown",
+                      detail: "The provider handoff could not be completed safely.",
+                    }),
               ),
             ),
             { "rpc.aggregate": "orchestration" },

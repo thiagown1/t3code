@@ -10,6 +10,7 @@ import {
 import type { EnvironmentRegistry } from "../connection/registry.ts";
 import {
   cancelFirstMateDecision,
+  handoffThread,
   createFirstMateTopic,
   linkFirstMateSupervisor,
   openFirstMateDecision,
@@ -18,6 +19,7 @@ import {
   resolveFirstMateDecision,
   selectFirstMateTopic,
   type CancelFirstMateDecisionInput,
+  type HandoffThreadInput,
   type CreateFirstMateTopicInput,
   type LinkFirstMateSupervisorInput,
   type OpenFirstMateDecisionInput,
@@ -29,6 +31,7 @@ import {
 
 export type {
   CancelFirstMateDecisionInput,
+  HandoffThreadInput,
   CreateFirstMateTopicInput,
   LinkFirstMateSupervisorInput,
   OpenFirstMateDecisionInput,
@@ -99,6 +102,14 @@ export function createOrchestrationEnvironmentAtoms<R, E>(
 ) {
   const firstMateScheduler = createAtomCommandScheduler();
   return {
+    handoffThread: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:provider-handoff",
+      execute: (input: HandoffThreadInput) => handoffThread(input),
+      concurrency: {
+        mode: "serial" as const,
+        key: ({ environmentId, input }) => JSON.stringify([environmentId, input.threadId]),
+      },
+    }),
     linkFirstMateSupervisor: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:firstmate:link-supervisor",
       execute: (input: LinkFirstMateSupervisorInput) => linkFirstMateSupervisor(input),

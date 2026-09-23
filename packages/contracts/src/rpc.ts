@@ -43,6 +43,11 @@ import {
   ThreadBundleImportResult,
 } from "./threadBundle.ts";
 import {
+  ThreadProviderHandoffRpcError,
+  ThreadProviderHandoffStartInput,
+  ThreadProviderHandoffStartResult,
+} from "./threadProviderHandoff.ts";
+import {
   FilesystemBrowseInput,
   FilesystemBrowseResult,
   FilesystemBrowseError,
@@ -1357,6 +1362,12 @@ const WsOrchestrationPreviewThreadCleanupRpc = Rpc.make(
   },
 );
 
+const WsOrchestrationHandoffThreadRpc = Rpc.make(ORCHESTRATION_WS_METHODS.handoffThread, {
+  payload: ThreadProviderHandoffStartInput,
+  success: ThreadProviderHandoffStartResult,
+  error: Schema.Union([ThreadProviderHandoffRpcError, EnvironmentAuthorizationError]),
+});
+
 const WsOrchestrationSubscribeShellRpc = Rpc.make(ORCHESTRATION_WS_METHODS.subscribeShell, {
   payload: OrchestrationRpcSchemas.subscribeShell.input,
   success: OrchestrationRpcSchemas.subscribeShell.output,
@@ -1594,6 +1605,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationSearchThreadsRpc,
   WsOrchestrationGetArchivedShellSnapshotRpc,
   WsOrchestrationPreviewThreadCleanupRpc,
+  WsOrchestrationHandoffThreadRpc,
   WsOrchestrationSubscribeShellRpc,
   WsOrchestrationSubscribeThreadRpc,
 );

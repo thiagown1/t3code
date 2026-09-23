@@ -2827,7 +2827,10 @@ export function makeOpenCodeAdapter(
               // The runtime binds the server's lifetime to the Scope.Scope
               // we provide below — closing `sessionScope` kills the child
               // process automatically. No manual `server.close()` needed.
-              const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
+              const mcpSession = McpProviderSession.readMcpProviderSession(
+                input.threadId,
+                input.providerInstanceId,
+              );
               const server = yield* openCodeRuntime.connectToOpenCodeServer({
                 binaryPath,
                 directory,

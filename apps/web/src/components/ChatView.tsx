@@ -451,7 +451,6 @@ import {
   type LocalDispatchSnapshot,
   PullRequestDialogState,
   cloneComposerImageForRetry,
-  buildProviderMigrationPrompt,
   deriveLockedProvider,
   readFileAsDataUrl,
   resolveFileAttachmentUrl,
@@ -1518,6 +1517,9 @@ export default function ChatView(props: ChatViewProps) {
   });
   const startThreadTurn = useAtomCommand(threadEnvironment.startTurn, { reportFailure: false });
   const selectFirstMateTopic = useAtomCommand(orchestrationEnvironment.selectFirstMateTopic, {
+    reportFailure: false,
+  });
+  const handoffThread = useAtomCommand(orchestrationEnvironment.handoffThread, {
     reportFailure: false,
   });
   const recordFirstMateRouting = useAtomCommand(orchestrationEnvironment.recordFirstMateRouting, {
@@ -9283,6 +9285,7 @@ export default function ChatView(props: ChatViewProps) {
     sourceLabel: string;
     targetLabel: string;
   } | null>(null);
+  const [providerHandoffPending, setProviderHandoffPending] = useState(false);
 
   const resolveProviderLabel = useCallback(
     (instanceId: ProviderInstanceId | null | undefined): string => {
@@ -9293,65 +9296,86 @@ export default function ChatView(props: ChatViewProps) {
     [providerStatuses],
   );
 
-  const confirmProviderMigration = useCallback(
-    (options: { carryTranscript: boolean }) => {
-      const request = providerMigrationRequest;
-      setProviderMigrationRequest(null);
-      if (!request || !activeThread) return;
-      const resolvedModel = resolveAppModelSelectionForInstance(
-        request.instanceId,
-        settings,
-        providerStatuses,
-        request.model,
-      );
-      if (!resolvedModel) {
-        scheduleComposerFocus();
+  const confirmProviderMigration = useCallback(async () => {
+    const request = providerMigrationRequest;
+    if (!request || !activeThread || providerHandoffPending) return;
+    const resolvedModel = resolveAppModelSelectionForInstance(
+      request.instanceId,
+      settings,
+      providerStatuses,
+      request.model,
+    );
+    if (!resolvedModel) {
+      toastManager.add({
+        type: "warning",
+        title: "Provider unavailable",
+        description: "The selected model is no longer available. Choose another target.",
+      });
+      scheduleComposerFocus();
+      return;
+    }
+    const target = providerStatuses.find((entry) => entry.instanceId === request.instanceId);
+    if (!target) return;
+    const nextModelSelection: ModelSelection = {
+      instanceId: request.instanceId,
+      model: resolvedModel,
+    };
+    setProviderHandoffPending(true);
+    try {
+      const result = await handoffThread({
+        environmentId: activeThread.environmentId,
+        input: {
+          threadId: activeThread.id,
+          target: {
+            providerInstanceId: request.instanceId,
+            driver: target.driver,
+            model: resolvedModel,
+          },
+        },
+      });
+      if (result._tag === "Failure") {
+        if (!isAtomCommandInterrupted(result)) {
+          const failure = squashAtomCommandFailure(result);
+          toastManager.add({
+            type: "error",
+            title: "Provider handoff failed",
+            description:
+              failure instanceof Error
+                ? failure.message
+                : "The original provider is still available. Try again after reviewing the thread.",
+          });
+        }
         return;
       }
-      const nextModelSelection: ModelSelection = {
-        instanceId: request.instanceId,
-        model: resolvedModel,
-      };
-      if (options.carryTranscript) {
-        // The target driver starts cold, so the transcript is seeded as an
-        // ordinary editable draft: the user can read and trim exactly what
-        // leaves the old session before sending it.
-        const transcript = buildProviderMigrationPrompt({
-          messages: activeThread.messages,
-          sourceLabel: request.sourceLabel,
-          targetLabel: request.targetLabel,
-        });
-        const existingPrompt = (
-          useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)?.prompt ?? ""
-        ).trim();
-        setComposerDraftPrompt(
-          composerDraftTarget,
-          existingPrompt.length > 0
-            ? `${transcript}
-
-${existingPrompt}`
-            : transcript,
-        );
-      }
+      setProviderMigrationRequest(null);
       setComposerDraftModelSelection(
         scopeThreadRef(activeThread.environmentId, activeThread.id),
         nextModelSelection,
         { explicit: true },
       );
       setStickyComposerModelSelection(nextModelSelection);
+      if (result.value.omissions.length > 0) {
+        toastManager.add({
+          type: "warning",
+          title: "Conversation transferred with omissions",
+          description:
+            "Some attachments or private provider data could not be carried over. Review the thread before continuing.",
+        });
+      }
       scheduleComposerFocus();
-    },
-    [
-      activeThread,
-      composerDraftTarget,
-      providerMigrationRequest,
-      providerStatuses,
-      setComposerDraftModelSelection,
-      setComposerDraftPrompt,
-      setStickyComposerModelSelection,
-      settings,
-    ],
-  );
+    } finally {
+      setProviderHandoffPending(false);
+    }
+  }, [
+    activeThread,
+    handoffThread,
+    providerMigrationRequest,
+    providerHandoffPending,
+    providerStatuses,
+    setComposerDraftModelSelection,
+    setStickyComposerModelSelection,
+    settings,
+  ]);
 
   const onProviderModelSelect = useCallback(
     (instanceId: ProviderInstanceId, model: string) => {
@@ -10373,35 +10397,35 @@ ${existingPrompt}`
             <AlertDialog
               open={providerMigrationRequest !== null}
               onOpenChange={(open) => {
-                if (!open) setProviderMigrationRequest(null);
+                if (!open && !providerHandoffPending) setProviderMigrationRequest(null);
               }}
             >
               <AlertDialogPopup>
                 <AlertDialogHeader>
                   <AlertDialogTitle>
-                    Move this thread to{" "}
+                    Transfer this thread to{" "}
                     {providerMigrationRequest?.targetLabel ?? "another provider"}?
                   </AlertDialogTitle>
                   <AlertDialogDescription>
-                    The {providerMigrationRequest?.sourceLabel ?? "current provider"} session ends
-                    here and {providerMigrationRequest?.targetLabel ?? "the new provider"} starts
-                    with no memory of it. Carry the transcript over to drop it in the composer,
-                    where you can read and trim it before sending.
+                    The conversation context will be sent to{" "}
+                    {providerMigrationRequest?.targetLabel ?? "the new provider"} before this thread
+                    switches providers. If the transfer fails, the{" "}
+                    {providerMigrationRequest?.sourceLabel ?? "current provider"} session stays
+                    available. Attachments and private provider data may be omitted.
                   </AlertDialogDescription>
                 </AlertDialogHeader>
                 <AlertDialogFooter>
-                  <AlertDialogClose render={<Button variant="outline" />}>Cancel</AlertDialogClose>
-                  <Button
-                    variant="outline"
-                    onClick={() => confirmProviderMigration({ carryTranscript: false })}
+                  <AlertDialogClose
+                    render={<Button variant="outline" disabled={providerHandoffPending} />}
                   >
-                    Move without transcript
-                  </Button>
+                    Cancel
+                  </AlertDialogClose>
                   <Button
                     variant="default"
-                    onClick={() => confirmProviderMigration({ carryTranscript: true })}
+                    disabled={providerHandoffPending}
+                    onClick={() => void confirmProviderMigration()}
                   >
-                    Carry the transcript
+                    {providerHandoffPending ? "Transferring…" : "Transfer conversation"}
                   </Button>
                 </AlertDialogFooter>
               </AlertDialogPopup>

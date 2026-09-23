@@ -4817,7 +4817,10 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           ? { autoCompactWindow: Number(claudeSettings.autoCompactWindow) }
           : {}),
       };
-      const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
+      const mcpSession = McpProviderSession.readMcpProviderSession(
+        input.threadId,
+        input.providerInstanceId,
+      );
       // The attachments dir grant lets the agent Read/copy pasted images at
       // the paths ProviderService injects into the turn text, without an
       // approval prompt. It is a leaf directory holding only attachment

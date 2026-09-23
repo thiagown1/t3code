@@ -18,6 +18,7 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import migration from "./Migrations/056_ThreadProviderHandoffs.ts";
+import sourceBindingMigration from "./Migrations/057_ThreadProviderHandoffSourceBindings.ts";
 import {
   layer as ThreadProviderHandoffStoreLive,
   ThreadProviderHandoffStore,
@@ -33,6 +34,7 @@ function makeStoreLayer<E, R>(sqlite: Layer.Layer<SqlClient.SqlClient, E, R>) {
       const sql = yield* SqlClient.SqlClient;
       yield* sql`PRAGMA foreign_keys = ON`;
       yield* migration;
+      yield* sourceBindingMigration;
     }),
   ).pipe(Layer.provideMerge(sqlite));
   return ThreadProviderHandoffStoreLive.pipe(Layer.provideMerge(migrated));
@@ -338,6 +340,12 @@ it.effect("restores prepared handoffs from disk without advancing recovery state
     yield* Effect.gen(function* () {
       const store = yield* ThreadProviderHandoffStore;
       yield* store.createPrepared(prepared);
+      yield* store.saveSourceBinding(prepared.record.handoffId, {
+        threadId: prepared.record.threadId,
+        provider: prepared.record.source.driver,
+        providerInstanceId: prepared.record.source.providerInstanceId,
+        resumeCursor: { privateCursor: "resume-me" },
+      });
     }).pipe(
       Effect.provide(makeStoreLayer(NodeSqliteClient.layer({ filename: dbPath }))),
       Effect.scoped,
@@ -350,6 +358,15 @@ it.effect("restores prepared handoffs from disk without advancing recovery state
       assert.deepEqual(firstRead, [prepared]);
       assert.deepEqual(secondRead, firstRead);
       assert.equal(firstRead[0]?.record.state, "prepared");
+      assert.deepEqual(
+        Option.getOrThrow(yield* store.getSourceBinding(prepared.record.handoffId)),
+        {
+          threadId: prepared.record.threadId,
+          provider: prepared.record.source.driver,
+          providerInstanceId: prepared.record.source.providerInstanceId,
+          resumeCursor: { privateCursor: "resume-me" },
+        },
+      );
     }).pipe(
       Effect.provide(makeStoreLayer(NodeSqliteClient.layer({ filename: dbPath }))),
       Effect.scoped,

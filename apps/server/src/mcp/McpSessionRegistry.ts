@@ -236,6 +236,19 @@ export const issueActiveMcpCredential = (
         .pipe(Effect.andThen(activeMcpSessionRegistry.issue(request)))
     : Effect.sync((): McpIssuedCredential | undefined => undefined);
 
+/** Issue a second credential while a handoff target is being prepared. */
+export const issueConcurrentMcpCredential = (
+  request: McpCredentialRequest,
+): Effect.Effect<McpIssuedCredential | undefined> =>
+  activeMcpSessionRegistry
+    ? activeMcpSessionRegistry.issue(request)
+    : Effect.sync((): McpIssuedCredential | undefined => undefined);
+
+export const revokeActiveMcpProviderSession = (providerSessionId: string): Effect.Effect<void> =>
+  activeMcpSessionRegistry
+    ? activeMcpSessionRegistry.revokeProviderSession(providerSessionId)
+    : Effect.void;
+
 /**
  * Refreshes the liveness of a thread's MCP credential. Called on every provider
  * turn so an active session is never mistaken for an abandoned one.

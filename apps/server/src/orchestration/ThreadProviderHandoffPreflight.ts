@@ -39,7 +39,7 @@ type PreflightInput = Pick<
   | "createdAt"
 >;
 
-function availableTarget(
+export function availableTarget(
   target: ThreadProviderHandoffProvider,
   providers: ReadonlyArray<ServerProvider>,
 ): boolean {

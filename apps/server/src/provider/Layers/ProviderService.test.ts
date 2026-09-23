@@ -1564,6 +1564,170 @@ it.effect(
 );
 
 routing.layer("ProviderServiceLive routing", (it) => {
+  const clearHandoffMocks = () => {
+    routing.codex.startSession.mockClear();
+    routing.codex.stopSession.mockClear();
+    routing.codex.sendTurn.mockClear();
+    routing.claude.startSession.mockClear();
+    routing.claude.stopSession.mockClear();
+    routing.claude.sendTurn.mockClear();
+  };
+  it.effect("keeps the source bound until the staged target completes its context turn", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+      const threadId = asThreadId("thread-staged-handoff-success");
+      yield* provider.startSession(threadId, {
+        threadId,
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        runtimeMode: "full-access",
+      });
+      yield* provider.stageHandoffTarget!(threadId, {
+        threadId,
+        provider: CLAUDE_AGENT_DRIVER,
+        providerInstanceId: claudeAgentInstanceId,
+        runtimeMode: "full-access",
+      });
+      yield* Effect.yieldNow;
+      const before = yield* directory.getBinding(threadId);
+      assert(Option.isSome(before));
+      assert.equal(before.value.providerInstanceId, codexInstanceId);
+      assert.equal(
+        routing.codex.stopSession.mock.calls.filter(([id]) => id === threadId).length,
+        0,
+      );
+      assert.deepEqual(
+        (yield* provider.listSessions())
+          .filter((session) => session.threadId === threadId)
+          .map((session) => session.provider),
+        [CODEX_DRIVER],
+      );
+
+      const turnId = asTurnId("turn-staged-context-success");
+      routing.claude.sendTurn.mockImplementationOnce(() =>
+        Effect.sync(() => {
+          routing.claude.emit({
+            type: "turn.completed",
+            eventId: asEventId("evt-staged-context-success"),
+            provider: CLAUDE_AGENT_DRIVER,
+            createdAt: "2026-01-01T00:00:00.000Z",
+            threadId,
+            turnId,
+          });
+          return { threadId, turnId };
+        }),
+      );
+      yield* provider.sendStagedHandoffContext!({ threadId, input: "Portable context" });
+      const stillSource = yield* directory.getBinding(threadId);
+      assert(Option.isSome(stillSource));
+      assert.equal(stillSource.value.providerInstanceId, codexInstanceId);
+      yield* provider.commitStagedHandoffTarget!(threadId);
+      const after = yield* directory.getBinding(threadId);
+      assert(Option.isSome(after));
+      assert.equal(after.value.providerInstanceId, claudeAgentInstanceId);
+      assert.equal(yield* routing.codex.hasSession(threadId), true);
+      yield* provider.finalizeStagedHandoffTarget!(threadId);
+      assert.equal(
+        routing.codex.stopSession.mock.calls.filter(([id]) => id === threadId).length,
+        1,
+      );
+      yield* provider.stopSession({ threadId });
+      clearHandoffMocks();
+    }),
+  );
+
+  it.effect("keeps the source usable when the staged context turn aborts", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+      const threadId = asThreadId("thread-staged-handoff-abort");
+      yield* provider.startSession(threadId, {
+        threadId,
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        runtimeMode: "full-access",
+      });
+      yield* provider.stageHandoffTarget!(threadId, {
+        threadId,
+        provider: CLAUDE_AGENT_DRIVER,
+        providerInstanceId: claudeAgentInstanceId,
+        runtimeMode: "full-access",
+      });
+      yield* Effect.yieldNow;
+      const turnId = asTurnId("turn-staged-context-abort");
+      routing.claude.sendTurn.mockImplementationOnce(() =>
+        Effect.sync(() => {
+          routing.claude.emit({
+            type: "turn.aborted",
+            eventId: asEventId("evt-staged-context-abort"),
+            provider: CLAUDE_AGENT_DRIVER,
+            createdAt: "2026-01-01T00:00:00.000Z",
+            threadId,
+            turnId,
+          });
+          return { threadId, turnId };
+        }),
+      );
+      const error = yield* Effect.flip(
+        provider.sendStagedHandoffContext!({ threadId, input: "Portable context" }),
+      );
+      assert.match(String(error), /target failed/i);
+      yield* provider.abortStagedHandoffTarget!(threadId);
+      const binding = yield* directory.getBinding(threadId);
+      assert(Option.isSome(binding));
+      assert.equal(binding.value.providerInstanceId, codexInstanceId);
+      assert.equal(yield* routing.codex.hasSession(threadId), true);
+      yield* provider.stopSession({ threadId });
+      clearHandoffMocks();
+    }),
+  );
+
+  it.effect("restores the source binding when a staged commit is rolled back", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+      const threadId = asThreadId("thread-staged-handoff-rollback");
+      yield* provider.startSession(threadId, {
+        threadId,
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        runtimeMode: "full-access",
+      });
+      yield* provider.stageHandoffTarget!(threadId, {
+        threadId,
+        provider: CLAUDE_AGENT_DRIVER,
+        providerInstanceId: claudeAgentInstanceId,
+        runtimeMode: "full-access",
+      });
+      yield* Effect.yieldNow;
+      const turnId = asTurnId("turn-staged-context-rollback");
+      routing.claude.sendTurn.mockImplementationOnce(() =>
+        Effect.sync(() => {
+          routing.claude.emit({
+            type: "turn.completed",
+            eventId: asEventId("evt-staged-context-rollback"),
+            provider: CLAUDE_AGENT_DRIVER,
+            createdAt: "2026-01-01T00:00:00.000Z",
+            threadId,
+            turnId,
+          });
+          return { threadId, turnId };
+        }),
+      );
+      yield* provider.sendStagedHandoffContext!({ threadId, input: "Portable context" });
+      yield* provider.commitStagedHandoffTarget!(threadId);
+      yield* provider.abortStagedHandoffTarget!(threadId);
+      const binding = yield* directory.getBinding(threadId);
+      assert(Option.isSome(binding));
+      assert.equal(binding.value.providerInstanceId, codexInstanceId);
+      assert.equal(yield* routing.codex.hasSession(threadId), true);
+      assert.equal(yield* routing.claude.hasSession(threadId), false);
+      yield* provider.stopSession({ threadId });
+      clearHandoffMocks();
+    }),
+  );
+
   it.effect.each([CODEX_DRIVER, CLAUDE_AGENT_DRIVER, CURSOR_DRIVER])(
     "rejects missing, file, and saved workspace paths before starting %s",
     (driver) =>

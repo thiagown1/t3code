@@ -56,6 +56,25 @@ export interface ProviderServiceShape {
     input: ProviderSessionStartInput,
   ) => Effect.Effect<ProviderSession, ProviderServiceError>;
 
+  /** Prepare another provider while keeping the current binding and session alive. */
+  readonly stageHandoffTarget?: (
+    threadId: ThreadId,
+    input: ProviderSessionStartInput,
+  ) => Effect.Effect<ProviderSession, ProviderServiceError>;
+  /** Send context to the staged provider and wait for its turn to finish. */
+  readonly sendStagedHandoffContext?: (
+    input: ProviderSendTurnInput,
+  ) => Effect.Effect<ProviderTurnStartResult, ProviderServiceError>;
+  readonly commitStagedHandoffTarget?: (
+    threadId: ThreadId,
+  ) => Effect.Effect<ProviderSession, ProviderServiceError>;
+  readonly finalizeStagedHandoffTarget?: (
+    threadId: ThreadId,
+  ) => Effect.Effect<void, ProviderServiceError>;
+  readonly abortStagedHandoffTarget?: (
+    threadId: ThreadId,
+  ) => Effect.Effect<void, ProviderServiceError>;
+
   /**
    * Send a provider turn.
    */

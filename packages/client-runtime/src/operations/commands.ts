@@ -1,6 +1,7 @@
 import {
   CommandId,
   ORCHESTRATION_WS_METHODS,
+  type ThreadProviderHandoffStartInput,
   type ClientOrchestrationCommand,
 } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
@@ -66,6 +67,11 @@ export type SetFirstMateRoutingEvaluationModeInput =
 export type OpenFirstMateDecisionInput = CommandInput<"firstmate.decision.open">;
 export type ResolveFirstMateDecisionInput = CommandInput<"firstmate.decision.resolve">;
 export type CancelFirstMateDecisionInput = CommandInput<"firstmate.decision.cancel">;
+export type HandoffThreadInput = ThreadProviderHandoffStartInput;
+
+export const handoffThread = Effect.fn("EnvironmentCommands.handoffThread")(
+  (input: HandoffThreadInput) => request(ORCHESTRATION_WS_METHODS.handoffThread, input),
+);
 
 type DispatchTag = typeof ORCHESTRATION_WS_METHODS.dispatchCommand;
 type CommandEffect = Effect.Effect<
