@@ -8,6 +8,7 @@ import {
   CheckIcon,
   ChevronRightIcon,
   CopyIcon,
+  PlayIcon,
   FileSpreadsheetIcon,
   FileTextIcon,
   GlobeIcon,
@@ -197,6 +198,11 @@ import {
 import { resolveLinkTarget } from "../browser/browserLinkTarget";
 import { PullRequestLinkPreview } from "./pullRequest/PullRequestLinkPreview";
 import { MermaidDiagram } from "./chat/MermaidDiagram";
+import {
+  isRunnableFenceLanguage,
+  RunInTerminalContext,
+  terminalInputForCodeBlock,
+} from "./chat/runInTerminal";
 
 interface ChatMarkdownProps {
   text: string;
@@ -943,6 +949,9 @@ function MarkdownCodeBlock({
 }) {
   const [copied, setCopied] = useState(false);
   const [wrapped, setWrapped] = useState(readInitialWordWrapSetting);
+  const runInTerminal = use(RunInTerminalContext);
+  const terminalInput =
+    runInTerminal && isRunnableFenceLanguage(language) ? terminalInputForCodeBlock(code) : null;
   const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const wrapLabel = wrapped ? "Disable line wrap" : "Wrap lines";
   const copyLabel = copied ? "Copied" : "Copy code";
@@ -1063,6 +1072,25 @@ function MarkdownCodeBlock({
             </TooltipTrigger>
             <TooltipPopup side="top">{copyLabel}</TooltipPopup>
           </Tooltip>
+          {runInTerminal && terminalInput ? (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-xs"
+                    className="chat-markdown-chrome-action"
+                    onClick={() => runInTerminal(terminalInput)}
+                    aria-label="Run in terminal"
+                  />
+                }
+              >
+                <PlayIcon className="size-3" />
+              </TooltipTrigger>
+              <TooltipPopup side="top">Run in terminal</TooltipPopup>
+            </Tooltip>
+          ) : null}
         </span>
       </div>
       {children}
