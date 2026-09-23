@@ -1152,6 +1152,15 @@ export function createServerEnvironmentAtoms<R, E>(
       scheduler: configScheduler,
       concurrency: configConcurrency,
     }),
+    // Write-only secret: the server answers with `{ configured }`, never the key.
+    firstMateOpenRouterKeyStatus: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:firstmate:openrouter-key-status",
+      tag: WS_METHODS.firstMateOpenRouterKeyStatus,
+    }),
+    setFirstMateOpenRouterKey: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:firstmate:openrouter-key-set",
+      tag: WS_METHODS.firstMateOpenRouterKeySet,
+    }),
     signalProcess: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:signal-process",
       tag: WS_METHODS.serverSignalProcess,

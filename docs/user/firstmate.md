@@ -40,6 +40,24 @@ question for you to answer in its own thread, and it will not come back to the
 inbox. Some questions stay in their thread regardless, such as forms with
 several questions or ones where you can pick more than one answer.
 
+## Review finished turns
+
+Agents often stop without asking anything: they report success, stop with work
+left, or ask a question in plain text. Turn on **Settings → New threads →
+FirstMate turn review** to have a cheap judge read every finished turn in a
+FirstMate project and act on it:
+
+- work that is clearly finished is marked **Done** (sending the thread a new
+  message reopens it);
+- work that clearly has more to do inside the original request gets a short
+  "continue" message, at most five times in a row;
+- anything else becomes a decision card with **Continue as proposed**, **Mark
+  done**, and **I'll answer in the thread**.
+
+Pick **Jev (OpenRouter)** and set an OpenRouter API key in the row below it, or
+pick **Cheap model** to use a model from your providers. The key stays on the
+server; settings only show whether one is set.
+
 ## Follow topics
 
 The **FirstMate** section lists every topic with its stage, the agent

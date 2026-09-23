@@ -214,6 +214,7 @@ const makeHarness = Effect.fn("makeFirstMateRoundSummaryHarness")(function* (
     generatePrContent: () => Effect.die("unused"),
     generateBranchName: () => Effect.die("unused"),
     generateThreadTitle: () => Effect.die("unused"),
+    generateTurnReview: () => Effect.die("unused"),
     generateRoundSummary: (input) =>
       Ref.update(summaryInputs, (recorded) => [...recorded, input]).pipe(
         Effect.andThen(

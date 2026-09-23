@@ -19,6 +19,7 @@ import {
   buildCommitMessagePrompt,
   buildPrContentPrompt,
   buildRoundSummaryPrompt,
+  buildTurnReviewPrompt,
   buildThreadTitlePrompt,
 } from "./TextGenerationPrompts.ts";
 import * as TextGeneration from "./TextGeneration.ts";
@@ -37,6 +38,7 @@ const OpenCodeTextGenerationOperation = Schema.Literals([
   "generateBranchName",
   "generateThreadTitle",
   "generateRoundSummary",
+  "generateTurnReview",
 ]);
 
 type OpenCodeTextGenerationOperation = typeof OpenCodeTextGenerationOperation.Type;
@@ -475,11 +477,24 @@ export const makeOpenCodeTextGeneration = Effect.fn("makeOpenCodeTextGeneration"
       return { summary: sanitizeRoundSummary(generated.summary) };
     });
 
+  const generateTurnReview: TextGeneration.TextGeneration["Service"]["generateTurnReview"] =
+    Effect.fn("OpenCodeTextGeneration.generateTurnReview")(function* (input) {
+      const { prompt, outputSchema } = buildTurnReviewPrompt({ state: input.state });
+      return yield* runOpenCodeJson({
+        operation: "generateTurnReview",
+        cwd: input.cwd,
+        prompt,
+        outputSchemaJson: outputSchema,
+        modelSelection: input.modelSelection,
+      });
+    });
+
   return {
     generateCommitMessage,
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
     generateRoundSummary,
+    generateTurnReview,
   } satisfies TextGeneration.TextGeneration["Service"];
 });

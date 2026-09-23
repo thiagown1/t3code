@@ -94,6 +94,25 @@ export interface RoundSummaryGenerationResult {
   summary: string;
 }
 
+export interface TurnReviewGenerationInput {
+  cwd: string;
+  /** Bounded JSON description of the finished turn (see FirstMateTurnReviewReactor). */
+  state: string;
+  /** What model and provider to use for generation. */
+  modelSelection: ModelSelection;
+}
+
+/**
+ * The judge's raw answer. Deliberately loose: callers validate it with
+ * `parseTurnReviewVerdict`, which turns anything off-contract into "needs the
+ * user" instead of an automatic action.
+ */
+export interface TurnReviewGenerationResult {
+  outcome: string;
+  confidence: number;
+  in_scope: number;
+}
+
 /**
  * TextGeneration - Service tag for commit and change request text generation.
  */
@@ -133,6 +152,11 @@ export class TextGeneration extends Context.Service<
     readonly generateRoundSummary: (
       input: RoundSummaryGenerationInput,
     ) => Effect.Effect<RoundSummaryGenerationResult, TextGenerationError>;
+
+    /** Judge whether a finished FirstMate-project turn is done, should continue, or needs the user. */
+    readonly generateTurnReview: (
+      input: TurnReviewGenerationInput,
+    ) => Effect.Effect<TurnReviewGenerationResult, TextGenerationError>;
   }
 >()("t3/textGeneration/TextGeneration") {}
 
@@ -141,7 +165,8 @@ type TextGenerationOp =
   | "generatePrContent"
   | "generateBranchName"
   | "generateThreadTitle"
-  | "generateRoundSummary";
+  | "generateRoundSummary"
+  | "generateTurnReview";
 
 const resolveInstance = (
   registry: ProviderInstanceRegistry.ProviderInstanceRegistry["Service"],
@@ -197,6 +222,10 @@ export const make = Effect.gen(function* () {
     generateRoundSummary: (input) =>
       resolveInstance(registry, "generateRoundSummary", input.modelSelection.instanceId).pipe(
         Effect.flatMap((textGeneration) => textGeneration.generateRoundSummary(input)),
+      ),
+    generateTurnReview: (input) =>
+      resolveInstance(registry, "generateTurnReview", input.modelSelection.instanceId).pipe(
+        Effect.flatMap((textGeneration) => textGeneration.generateTurnReview(input)),
       ),
   });
 });

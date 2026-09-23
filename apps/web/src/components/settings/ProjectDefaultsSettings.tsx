@@ -7,6 +7,8 @@ import {
 import { createModelSelection } from "@t3tools/shared/model";
 import { useNavigate } from "@tanstack/react-router";
 
+const FIRST_MATE_TURN_REVIEW_MODES = ["off", "jev", "model"] as const;
+
 import { useT3ProjectFileState } from "../../hooks/useT3ProjectFileScripts";
 import { getCustomModelOptionsByInstance } from "../../modelSelection";
 import {
@@ -25,6 +27,8 @@ import { TraitsPicker } from "../chat/TraitsPicker";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { toastManager } from "../ui/toast";
 import { Switch } from "../ui/switch";
+import { FirstMateOpenRouterKeyRow } from "./FirstMateOpenRouterKeyRow";
+import { FIRST_MATE_TURN_REVIEW_LABELS } from "./SettingInheritance";
 import type { ProjectSettingsCategory } from "./ProjectSettingsPanel";
 import { searchableSetting } from "./settingsSearch";
 import { useSettingsScope } from "./SettingsScopeContext";
@@ -76,6 +80,16 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
     firstMateSelection?.model,
   );
   const mixedFirstMateModel = useScopedSettingsMixed(["firstMateModelSelection"]);
+  const mixedTurnReview = useScopedSettingsMixed(["firstMateTurnReview"]);
+  const mixedTurnReviewModel = useScopedSettingsMixed(["firstMateTurnReviewModelSelection"]);
+  const turnReviewSelection =
+    settings.firstMateTurnReviewModelSelection ?? settings.textGenerationModelSelection;
+  const turnReviewModelOptions = getCustomModelOptionsByInstance(
+    settings,
+    providers,
+    turnReviewSelection.instanceId,
+    turnReviewSelection.model,
+  );
   const mixedPermissions = useScopedSettingsMixed(["defaultRuntimeMode"]);
   const PermissionIcon = runtimeModeConfig[settings.defaultRuntimeMode].icon;
   const mixedWorkspace = useScopedSettingsMixed(["defaultThreadEnvMode"]);
@@ -147,6 +161,19 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
       return;
     }
     updateSettings({ firstMateModelSelection: value });
+  };
+
+  const setTurnReviewModel = (value: ModelSelection | null) => {
+    const reason = value ? modelDisabledReason(value.instanceId, value.model) : null;
+    if (reason) {
+      toastManager.add({
+        type: "error",
+        title: "Turn review model not saved",
+        description: reason,
+      });
+      return;
+    }
+    updateSettings({ firstMateTurnReviewModelSelection: value });
   };
 
   return (
@@ -282,6 +309,94 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
               )
             }
           />
+          <SettingsRow
+            serverScoped
+            settingKeys={["firstMateTurnReview"]}
+            mixed={mixedTurnReview}
+            id="firstmate-turn-review"
+            title="FirstMate turn review"
+            description="When a thread in a FirstMate project finishes a turn, a cheap judge marks it done, asks it to continue, or opens a decision for you."
+            resetAction={
+              settings.firstMateTurnReview !== DEFAULT_SERVER_SETTINGS.firstMateTurnReview ? (
+                <SettingResetButton
+                  label="FirstMate turn review"
+                  onClick={() =>
+                    updateSettings({
+                      firstMateTurnReview: DEFAULT_SERVER_SETTINGS.firstMateTurnReview,
+                    })
+                  }
+                />
+              ) : null
+            }
+            control={
+              <Select
+                value={mixedTurnReview ? null : settings.firstMateTurnReview}
+                onValueChange={(value) => {
+                  if (value) updateSettings({ firstMateTurnReview: value });
+                }}
+              >
+                <SelectTrigger size="sm" aria-label="FirstMate turn review">
+                  <SelectValue>
+                    {mixedTurnReview
+                      ? "Mixed"
+                      : FIRST_MATE_TURN_REVIEW_LABELS[settings.firstMateTurnReview]}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectPopup align="end" alignItemWithTrigger={false}>
+                  {FIRST_MATE_TURN_REVIEW_MODES.map((mode) => (
+                    <SelectItem key={mode} value={mode}>
+                      {FIRST_MATE_TURN_REVIEW_LABELS[mode]}
+                    </SelectItem>
+                  ))}
+                </SelectPopup>
+              </Select>
+            }
+          />
+          {!mixedTurnReview && settings.firstMateTurnReview === "model" ? (
+            <SettingsRow
+              serverScoped
+              settingKeys={["firstMateTurnReviewModelSelection"]}
+              mixed={mixedTurnReviewModel}
+              id="firstmate-turn-review-model"
+              title="Turn review model"
+              description="Cheap model that judges finished turns."
+              status={
+                unavailable ||
+                mixedTurnReviewModel ||
+                settings.firstMateTurnReviewModelSelection !== null
+                  ? undefined
+                  : "Text generation model"
+              }
+              resetAction={
+                settings.firstMateTurnReviewModelSelection !== null ? (
+                  <SettingResetButton
+                    label="turn review model"
+                    onClick={() => setTurnReviewModel(null)}
+                  />
+                ) : null
+              }
+              control={
+                <ProviderModelPicker
+                  activeInstanceId={turnReviewSelection.instanceId}
+                  model={turnReviewSelection.model}
+                  lockedProvider={null}
+                  instanceEntries={entries}
+                  modelOptionsByInstance={turnReviewModelOptions}
+                  triggerVariant="outline"
+                  triggerClassName={SETTINGS_PICKER_TRIGGER_CLASSNAME}
+                  triggerAriaLabel="Turn review model"
+                  {...(mixedTurnReviewModel ? { triggerLabel: "Mixed" } : {})}
+                  getModelDisabledReason={modelDisabledReason}
+                  onInstanceModelChange={(instanceId, model) =>
+                    setTurnReviewModel(createModelSelection(instanceId, model))
+                  }
+                />
+              }
+            />
+          ) : null}
+          {!mixedTurnReview && settings.firstMateTurnReview === "jev" ? (
+            <FirstMateOpenRouterKeyRow environmentId={target?.environmentId ?? null} />
+          ) : null}
           <SettingsRow
             serverScoped
             settingKeys={["defaultRuntimeMode"]}

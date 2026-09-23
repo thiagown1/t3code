@@ -52,6 +52,8 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.serverRemoveKeybinding]: AuthOrchestrationOperateScope,
   [WS_METHODS.serverGetSettings]: AuthOrchestrationReadScope,
   [WS_METHODS.serverUpdateSettings]: AuthOrchestrationOperateScope,
+  [WS_METHODS.firstMateOpenRouterKeySet]: AuthOrchestrationOperateScope,
+  [WS_METHODS.firstMateOpenRouterKeyStatus]: AuthOrchestrationReadScope,
   [WS_METHODS.serverResolveEnvironmentBundleCredentials]: AuthOrchestrationReadScope,
   [WS_METHODS.serverPlanEnvironmentBundleApply]: AuthOrchestrationReadScope,
   [WS_METHODS.serverApplyEnvironmentBundle]: AuthOrchestrationOperateScope,

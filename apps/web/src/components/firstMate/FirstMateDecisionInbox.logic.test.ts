@@ -10,6 +10,7 @@ import {
   ProjectId,
   ProviderInstanceId,
   ThreadId,
+  TurnId,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -164,6 +165,29 @@ describe("FirstMate decision inbox model", () => {
       responsibleAgentId: "codex",
       threadId,
     });
+  });
+
+  it("shows a turn review card on the reviewed thread", () => {
+    const model = buildFirstMateDecisionInboxModel({
+      projects: [
+        project(
+          [
+            {
+              ...decision("review", false),
+              topicId: null,
+              source: { kind: "turn-review" as const, threadId, turnId: TurnId.make("turn-1") },
+            },
+          ],
+          [],
+        ),
+      ],
+      threads: [linkedThread],
+      scopedProjectKeys: null,
+    });
+
+    expect(model.items).toMatchObject([
+      { decisionId: "review", originKind: "thread", originTitle: "Implement inbox", threadId },
+    ]);
   });
 
   it("drops a card whose origin the client cannot name", () => {

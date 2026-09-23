@@ -26,6 +26,7 @@ import {
   buildCommitMessagePrompt,
   buildPrContentPrompt,
   buildRoundSummaryPrompt,
+  buildTurnReviewPrompt,
   buildThreadTitlePrompt,
 } from "./TextGenerationPrompts.ts";
 import {
@@ -422,11 +423,21 @@ export const makeAntigravityTextGeneration = Effect.fn("makeAntigravityTextGener
       return { summary: sanitizeRoundSummary(generated.summary) };
     });
 
+  const generateTurnReview: TextGeneration.TextGeneration["Service"]["generateTurnReview"] =
+    Effect.fn("AntigravityTextGeneration.generateTurnReview")(function* (input) {
+      return yield* runAntigravityJson({
+        operation: "generateTurnReview",
+        ...buildTurnReviewPrompt({ state: input.state }),
+        modelSelection: input.modelSelection,
+      });
+    });
+
   return {
     generateCommitMessage,
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
     generateRoundSummary,
+    generateTurnReview,
   } satisfies TextGeneration.TextGeneration["Service"];
 });

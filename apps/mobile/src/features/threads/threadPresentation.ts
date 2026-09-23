@@ -124,7 +124,9 @@ export function resolveThreadStatus(
           ? "Validating deploy"
           : thread.deliveryStatus === "waiting-activation"
             ? "Waiting for activation"
-            : null;
+            : thread.deliveryStatus === "done"
+              ? "Done"
+              : null;
   if (deliveryLabel) {
     return {
       kind: "delivery",

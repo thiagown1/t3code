@@ -25,6 +25,7 @@ import {
   buildCommitMessagePrompt,
   buildPrContentPrompt,
   buildRoundSummaryPrompt,
+  buildTurnReviewPrompt,
   buildThreadTitlePrompt,
 } from "./TextGenerationPrompts.ts";
 import {
@@ -106,7 +107,8 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
       | "generatePrContent"
       | "generateBranchName"
       | "generateThreadTitle"
-      | "generateRoundSummary",
+      | "generateRoundSummary"
+      | "generateTurnReview",
     value: unknown,
     detail: string,
   ): Effect.Effect<string, TextGenerationError> =>
@@ -137,7 +139,8 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
       | "generatePrContent"
       | "generateBranchName"
       | "generateThreadTitle"
-      | "generateRoundSummary";
+      | "generateRoundSummary"
+      | "generateTurnReview";
     cwd: string;
     prompt: string;
     outputSchemaJson: S;
@@ -433,11 +436,24 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
       return { summary: sanitizeRoundSummary(generated.summary) };
     });
 
+  const generateTurnReview: TextGeneration.TextGeneration["Service"]["generateTurnReview"] =
+    Effect.fn("ClaudeTextGeneration.generateTurnReview")(function* (input) {
+      const { prompt, outputSchema } = buildTurnReviewPrompt({ state: input.state });
+      return yield* runClaudeJson({
+        operation: "generateTurnReview",
+        cwd: input.cwd,
+        prompt,
+        outputSchemaJson: outputSchema,
+        modelSelection: input.modelSelection,
+      });
+    });
+
   return {
     generateCommitMessage,
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
     generateRoundSummary,
+    generateTurnReview,
   } satisfies TextGeneration.TextGeneration["Service"];
 });

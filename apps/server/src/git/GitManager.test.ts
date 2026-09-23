@@ -313,6 +313,7 @@ function createTextGeneration(
       Effect.succeed({
         summary: "Updated the workflow.",
       }),
+    generateTurnReview: () => Effect.succeed({ outcome: "done", confidence: 1, in_scope: 1 }),
     ...overrides,
   };
 
@@ -372,6 +373,7 @@ function createTextGeneration(
             }),
         ),
       ),
+    generateTurnReview: (input) => implementation.generateTurnReview(input),
   };
 }
 

@@ -407,6 +407,9 @@ export function applyServerSettingsPatch(
     ...(patch.firstMateModelSelection !== undefined
       ? { firstMateModelSelection: patch.firstMateModelSelection }
       : {}),
+    ...(patch.firstMateTurnReviewModelSelection !== undefined
+      ? { firstMateTurnReviewModelSelection: patch.firstMateTurnReviewModelSelection }
+      : {}),
     ...(automaticGitFetchInterval !== undefined ? { automaticGitFetchInterval } : {}),
     ...(providerHealthRefreshInterval !== undefined ? { providerHealthRefreshInterval } : {}),
   };

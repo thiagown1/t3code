@@ -642,6 +642,7 @@ export function deriveFirstMateTopicStatus(
   ) {
     return "waiting-user";
   }
+  if (facts.deliveryStatus === "done") return "completed";
   if (facts.deliveryStatus !== null) return facts.deliveryStatus;
   if (facts.sessionStatus === "error" || facts.sessionStatus === "interrupted") return "blocked";
   if (facts.backgroundLiveness !== null) return facts.backgroundLiveness;

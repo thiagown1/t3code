@@ -18,6 +18,7 @@ import {
   buildCommitMessagePrompt,
   buildPrContentPrompt,
   buildRoundSummaryPrompt,
+  buildTurnReviewPrompt,
   buildThreadTitlePrompt,
 } from "./TextGenerationPrompts.ts";
 import {
@@ -57,7 +58,8 @@ export const makeGrokTextGeneration = Effect.fn("makeGrokTextGeneration")(functi
       | "generatePrContent"
       | "generateBranchName"
       | "generateThreadTitle"
-      | "generateRoundSummary";
+      | "generateRoundSummary"
+      | "generateTurnReview";
     cwd: string;
     prompt: string;
     outputSchemaJson: S;
@@ -288,11 +290,24 @@ export const makeGrokTextGeneration = Effect.fn("makeGrokTextGeneration")(functi
       } satisfies TextGeneration.RoundSummaryGenerationResult;
     });
 
+  const generateTurnReview: TextGeneration.TextGeneration["Service"]["generateTurnReview"] =
+    Effect.fn("GrokTextGeneration.generateTurnReview")(function* (input) {
+      const { prompt, outputSchema } = buildTurnReviewPrompt({ state: input.state });
+      return yield* runGrokJson({
+        operation: "generateTurnReview",
+        cwd: input.cwd,
+        prompt,
+        outputSchemaJson: outputSchema,
+        modelSelection: input.modelSelection,
+      });
+    });
+
   return {
     generateCommitMessage,
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
     generateRoundSummary,
+    generateTurnReview,
   } satisfies TextGeneration.TextGeneration["Service"];
 });

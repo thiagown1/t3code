@@ -43,6 +43,7 @@ export type ThreadListV2Status =
   | "waiting-deploy"
   | "validating-deploy"
   | "waiting-activation"
+  | "done"
   | "ready";
 export type ThreadListV2SwipeAction = "archive" | "settle" | "unsettle" | "snooze" | "unsnooze";
 

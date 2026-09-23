@@ -17,6 +17,7 @@ import * as PullRequestSyncReactor from "../PullRequestSyncReactor.ts";
 import * as ThreadPullRequestReactor from "../ThreadPullRequestReactor.ts";
 import * as FirstMateRequestDecisionReactor from "../FirstMateRequestDecisionReactor.ts";
 import * as FirstMateRoundSummaryReactor from "../FirstMateRoundSummaryReactor.ts";
+import * as FirstMateTurnReviewReactor from "../FirstMateTurnReviewReactor.ts";
 import * as AgentAwarenessRelay from "../../relay/AgentAwarenessRelay.ts";
 import * as StorageCleanup from "../../storageCleanup.ts";
 
@@ -36,6 +37,7 @@ export const makeOrchestrationReactor = Effect.gen(function* () {
     yield* FirstMateRequestDecisionReactor.FirstMateRequestDecisionReactor;
   const firstMateRoundSummaryReactor =
     yield* FirstMateRoundSummaryReactor.FirstMateRoundSummaryReactor;
+  const firstMateTurnReviewReactor = yield* FirstMateTurnReviewReactor.FirstMateTurnReviewReactor;
   const agentAwarenessRelay = yield* AgentAwarenessRelay.AgentAwarenessRelay;
   const storageCleanup = yield* StorageCleanup.StorageCleanup;
 
@@ -52,6 +54,7 @@ export const makeOrchestrationReactor = Effect.gen(function* () {
     yield* firstMateRequestDecisionReactor.start();
     yield* pullRequestSyncReactor.start();
     yield* firstMateRoundSummaryReactor.start();
+    yield* firstMateTurnReviewReactor.start();
     yield* agentAwarenessRelay.start();
     yield* storageCleanup.start();
   });

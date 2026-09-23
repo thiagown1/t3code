@@ -139,6 +139,7 @@ export function buildThreadActionMenuItems(
                 id: "delivery-status:waiting-activation" as const,
                 label: "Waiting for activation",
               },
+              { id: "delivery-status:done" as const, label: "Done" },
               ...(state.deliveryStatus !== null
                 ? [{ id: "delivery-status:clear" as const, label: "Clear delivery status" }]
                 : []),

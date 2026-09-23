@@ -8,6 +8,7 @@ import {
   ProjectId,
   ProviderInstanceId,
   ThreadId,
+  TurnId,
   type FirstMateDecision,
   type OrchestrationCommand,
   type OrchestrationEvent,
@@ -18,6 +19,7 @@ import {
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import { FIRST_MATE_CONTINUE_MESSAGE } from "@t3tools/shared/firstMateTurnReview";
 
 import { processDecisionResolved } from "./FirstMateDecisionDeliveryReactor.ts";
 import type { OrchestrationEngineShape } from "./Services/OrchestrationEngine.ts";
@@ -562,6 +564,54 @@ describe("FirstMate decision delivery to a provider request", () => {
       const second = (yield* run())[0]!;
       expect(first.commandId).toEqual(second.commandId);
       expect(first.commandId).toContain(DECISION_ID);
+    }),
+  );
+});
+
+describe("FirstMate turn review delivery", () => {
+  const REVIEWED_THREAD_ID = ThreadId.make("thread-reviewed");
+  const reviewDecision = makeDecision({
+    topicId: null,
+    source: { kind: "turn-review", threadId: REVIEWED_THREAD_ID, turnId: TurnId.make("turn-9") },
+    question: "Should I also update the docs?",
+    options: [
+      { id: "continue", label: "Continue as proposed", description: "Queue a continue." },
+      { id: "mark-done", label: "Mark done", description: "Close the thread as done." },
+      { id: "answer-myself", label: "I'll answer in the thread", description: "Nothing." },
+    ],
+    recommendedOptionId: "continue",
+  });
+  const run = (selectedOptionId: string) =>
+    deliver({
+      decision: reviewDecision,
+      selectedOptionId,
+      liveThreads: [makeThread(REVIEWED_THREAD_ID, PROJECT_ID)],
+    });
+
+  it.effect("continue queues the fixed continue message on the reviewed thread", () =>
+    Effect.gen(function* () {
+      const dispatched = yield* run("continue");
+      expect(dispatched).toHaveLength(1);
+      expect(dispatched[0]).toMatchObject({
+        type: "thread.queued-message.enqueue",
+        threadId: REVIEWED_THREAD_ID,
+        dispatchTiming: "after-current-turn",
+        message: { text: FIRST_MATE_CONTINUE_MESSAGE },
+      });
+    }),
+  );
+
+  it.effect("mark done sets the thread's delivery status", () =>
+    Effect.gen(function* () {
+      expect(yield* run("mark-done")).toMatchObject([
+        { type: "thread.meta.update", threadId: REVIEWED_THREAD_ID, deliveryStatus: "done" },
+      ]);
+    }),
+  );
+
+  it.effect("answering myself only resolves the card", () =>
+    Effect.gen(function* () {
+      expect(yield* run("answer-myself")).toEqual([]);
     }),
   );
 });

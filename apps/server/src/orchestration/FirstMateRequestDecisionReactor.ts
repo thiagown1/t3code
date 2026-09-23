@@ -181,7 +181,7 @@ function pendingRequestDecisions(
 ): ReadonlyArray<FirstMateDecision & { readonly requestId: ApprovalRequestId }> {
   return workspace.decisions.flatMap((decision) =>
     decision.status === "pending" &&
-    decision.source.kind !== "firstmate" &&
+    (decision.source.kind === "user-input" || decision.source.kind === "approval") &&
     decision.source.threadId === threadId
       ? [{ ...decision, requestId: decision.source.requestId }]
       : [],

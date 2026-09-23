@@ -86,12 +86,23 @@ export const FirstMateRequestDecisionReceipt = Schema.Struct({
 });
 export type FirstMateRequestDecisionReceipt = typeof FirstMateRequestDecisionReceipt.Type;
 
+/** One finished turn a FirstMate turn review looked at, and what it did. */
+export const FirstMateTurnReviewReceipt = Schema.Struct({
+  type: Schema.Literal("firstmate.turn-review.settled"),
+  threadId: ThreadId,
+  turnId: TurnId,
+  outcome: Schema.Literals(["marked-done", "continued", "decision-opened", "skipped", "failed"]),
+  createdAt: IsoDateTime,
+});
+export type FirstMateTurnReviewReceipt = typeof FirstMateTurnReviewReceipt.Type;
+
 export const OrchestrationRuntimeReceipt = Schema.Union([
   CheckpointBaselineCapturedReceipt,
   CheckpointDiffFinalizedReceipt,
   TurnProcessingQuiescedReceipt,
   FirstMateRoundSummaryReceipt,
   FirstMateRequestDecisionReceipt,
+  FirstMateTurnReviewReceipt,
 ]);
 export type OrchestrationRuntimeReceipt = typeof OrchestrationRuntimeReceipt.Type;
 

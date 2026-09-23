@@ -978,6 +978,15 @@ export type BackgroundActivitySettings = typeof BackgroundActivitySettings.Type;
 export const ResponseStreamingMode = Schema.Literals(["turn", "paragraph", "token"]);
 export type ResponseStreamingMode = typeof ResponseStreamingMode.Type;
 
+/**
+ * Who reviews a finished turn in a FirstMate project.
+ * - `off`: nobody; threads stay as the agent left them.
+ * - `jev`: OpenRouter's Jev decision model (needs an OpenRouter API key).
+ * - `model`: a cheap text-generation model the user picks.
+ */
+export const FirstMateTurnReviewMode = Schema.Literals(["off", "jev", "model"]);
+export type FirstMateTurnReviewMode = typeof FirstMateTurnReviewMode.Type;
+
 const StorageRetentionDays = Schema.NullOr(
   Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 3650 })),
 );
@@ -1011,6 +1020,8 @@ export const PROJECT_SCOPED_SERVER_SETTING_KEYS = [
   "textGenerationModelSelection",
   "sourceControlWriterModelSelection",
   "firstMateModelSelection",
+  "firstMateTurnReview",
+  "firstMateTurnReviewModelSelection",
   "sourceControlWritingStyle",
   "pullRequestMergeMethod",
   "sidebarAutoSettleOnMerge",
@@ -1038,6 +1049,8 @@ export const ProjectSettingsOverrides = Schema.Struct({
   textGenerationModelSelection: Schema.optionalKey(ModelSelection),
   sourceControlWriterModelSelection: Schema.optionalKey(Schema.NullOr(ModelSelection)),
   firstMateModelSelection: Schema.optionalKey(Schema.NullOr(ModelSelection)),
+  firstMateTurnReview: Schema.optionalKey(FirstMateTurnReviewMode),
+  firstMateTurnReviewModelSelection: Schema.optionalKey(Schema.NullOr(ModelSelection)),
   sourceControlWritingStyle: Schema.optionalKey(SourceControlWritingStyleSettings),
   pullRequestMergeMethod: Schema.optionalKey(Schema.NullOr(PullRequestMergeMethod)),
   sidebarAutoSettleOnMerge: Schema.optionalKey(Schema.Boolean),
@@ -1211,6 +1224,14 @@ export const ServerSettings = Schema.Struct({
   ),
   /** Model for the FirstMate chat; `null` uses the default new-thread model. */
   firstMateModelSelection: Schema.NullOr(ModelSelection).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+  /** Who reviews a finished turn in a FirstMate project. */
+  firstMateTurnReview: FirstMateTurnReviewMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed("off" as const)),
+  ),
+  /** Model for turn review in `model` mode; `null` uses the text generation model. */
+  firstMateTurnReviewModelSelection: Schema.NullOr(ModelSelection).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
   /**
@@ -1501,6 +1522,8 @@ export const ServerSettingsPatch = Schema.Struct({
   ),
   sourceControlWriterModelSelection: Schema.optionalKey(Schema.NullOr(ModelSelection)),
   firstMateModelSelection: Schema.optionalKey(Schema.NullOr(ModelSelection)),
+  firstMateTurnReview: Schema.optionalKey(FirstMateTurnReviewMode),
+  firstMateTurnReviewModelSelection: Schema.optionalKey(Schema.NullOr(ModelSelection)),
   pullRequestMergeMethod: Schema.optionalKey(Schema.NullOr(PullRequestMergeMethod)),
   observability: Schema.optionalKey(
     Schema.Struct({

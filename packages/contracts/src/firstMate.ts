@@ -84,6 +84,15 @@ export const FirstMateDecisionSource = Schema.Union([
     kind: Schema.Literal("firstmate"),
     sourceId: TrimmedNonEmptyString,
   }),
+  /**
+   * Raised by the turn review when it cannot settle a finished turn on its
+   * own. The answer acts on `threadId` (continue it or mark it done).
+   */
+  Schema.Struct({
+    kind: Schema.Literal("turn-review"),
+    threadId: ThreadId,
+    turnId: TurnId,
+  }),
 ]);
 export type FirstMateDecisionSource = typeof FirstMateDecisionSource.Type;
 
@@ -355,3 +364,28 @@ export const FirstMateMachineAlertSummary = Schema.Struct({
   critical: NonNegativeInt,
 });
 export type FirstMateMachineAlertSummary = typeof FirstMateMachineAlertSummary.Type;
+
+/**
+ * The environment's OpenRouter key for FirstMate turn review. Write-only:
+ * clients can set or clear it and learn whether one is configured, never read it.
+ */
+export const FirstMateOpenRouterKeySetInput = Schema.Struct({
+  key: Schema.NullOr(Schema.String),
+});
+export type FirstMateOpenRouterKeySetInput = typeof FirstMateOpenRouterKeySetInput.Type;
+
+export const FirstMateOpenRouterKeyStatus = Schema.Struct({
+  configured: Schema.Boolean,
+});
+export type FirstMateOpenRouterKeyStatus = typeof FirstMateOpenRouterKeyStatus.Type;
+
+export class FirstMateOpenRouterKeyError extends Schema.TaggedError<FirstMateOpenRouterKeyError>()(
+  "FirstMateOpenRouterKeyError",
+  {
+    detail: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `Could not update the OpenRouter API key: ${this.detail}`;
+  }
+}

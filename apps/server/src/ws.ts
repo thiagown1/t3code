@@ -64,6 +64,7 @@ import {
   type ServerLifecycleStreamEvent,
   type FilesystemBrowseFailure,
   FilesystemBrowseError,
+  FirstMateOpenRouterKeyError,
   AssetWorkspaceContextNotFoundError,
   AssetWorkspaceContextResolutionError,
   AssetPullRequestImageFetchError,
@@ -125,6 +126,7 @@ import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import * as ServerSettings from "./serverSettings.ts";
+import * as OpenRouterApiKey from "./firstMate/OpenRouterApiKey.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import { withTerminalOutputWindow } from "./terminal/OutputProtocol.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
@@ -603,6 +605,7 @@ const makeWsRpcLayer = (
       const config = yield* ServerConfig.ServerConfig;
       const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
       const serverSettings = yield* ServerSettings.ServerSettingsService;
+      const openRouterApiKey = yield* OpenRouterApiKey.OpenRouterApiKey;
       const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
       const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
       const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
@@ -2577,6 +2580,21 @@ const makeWsRpcLayer = (
               "rpc.aggregate": "server",
             },
           ),
+        [WS_METHODS.firstMateOpenRouterKeySet]: ({ key }) =>
+          observeRpcEffect(
+            WS_METHODS.firstMateOpenRouterKeySet,
+            openRouterApiKey.set(key).pipe(
+              Effect.mapError(
+                (error) => new FirstMateOpenRouterKeyError({ detail: error.message }),
+              ),
+              Effect.andThen(openRouterApiKey.status),
+            ),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.firstMateOpenRouterKeyStatus]: (_input) =>
+          observeRpcEffect(WS_METHODS.firstMateOpenRouterKeyStatus, openRouterApiKey.status, {
+            "rpc.aggregate": "server",
+          }),
         [WS_METHODS.serverResolveEnvironmentBundleCredentials]: ({ credentialRefs }) =>
           observeRpcEffect(
             WS_METHODS.serverResolveEnvironmentBundleCredentials,

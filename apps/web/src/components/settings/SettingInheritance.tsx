@@ -25,6 +25,12 @@ interface InheritanceLayer {
   readonly set: boolean;
 }
 
+export const FIRST_MATE_TURN_REVIEW_LABELS = {
+  off: "Off",
+  jev: "Jev (OpenRouter)",
+  model: "Cheap model",
+} as const;
+
 const WRITING_STYLE_LABELS: Record<string, string> = {
   repo_conventions: "Repository conventions",
   conventional_commits: "Conventional Commits",
@@ -40,7 +46,8 @@ function formatValue(key: keyof ServerSettings, value: unknown): string {
         ? "Never"
         : key === "defaultModelSelection"
           ? "Automatic"
-          : key === "sourceControlWriterModelSelection"
+          : key === "sourceControlWriterModelSelection" ||
+              key === "firstMateTurnReviewModelSelection"
             ? "Text generation model"
             : key === "firstMateModelSelection"
               ? "Default model"
@@ -60,6 +67,9 @@ function formatValue(key: keyof ServerSettings, value: unknown): string {
       return PULL_REQUEST_MERGE_METHOD_LABELS[
         value as keyof typeof PULL_REQUEST_MERGE_METHOD_LABELS
       ];
+    }
+    if (key === "firstMateTurnReview" && value in FIRST_MATE_TURN_REVIEW_LABELS) {
+      return FIRST_MATE_TURN_REVIEW_LABELS[value as keyof typeof FIRST_MATE_TURN_REVIEW_LABELS];
     }
     return value === "" ? "Empty" : value;
   }

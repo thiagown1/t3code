@@ -1203,7 +1203,9 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                           ? "Waiting for deploy"
                           : thread.deliveryStatus === "validating-deploy"
                             ? "Validating deploy"
-                            : "Waiting for activation",
+                            : thread.deliveryStatus === "done"
+                              ? "Done"
+                              : "Waiting for activation",
                     icon: "delivery" as const,
                     className: "text-violet-700 dark:text-violet-300",
                   }

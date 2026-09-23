@@ -277,6 +277,11 @@ import {
 import { UsagePricing, UsageReadError, UsageSummary, UsageSummaryInput } from "./usage.ts";
 import { ServerSettings, ServerSettingsError, ServerSettingsPatch } from "./settings.ts";
 import {
+  FirstMateOpenRouterKeyError,
+  FirstMateOpenRouterKeySetInput,
+  FirstMateOpenRouterKeyStatus,
+} from "./firstMate.ts";
+import {
   ProjectCloneActionInput,
   ProjectCloneActionResult,
   ProjectCloneListEvent,
@@ -393,6 +398,8 @@ export const WS_METHODS = {
   serverRemoveKeybinding: "server.removeKeybinding",
   serverGetSettings: "server.getSettings",
   serverUpdateSettings: "server.updateSettings",
+  firstMateOpenRouterKeySet: "firstMate.openRouterKey.set",
+  firstMateOpenRouterKeyStatus: "firstMate.openRouterKey.status",
   serverResolveEnvironmentBundleCredentials: "server.resolveEnvironmentBundleCredentials",
   serverPlanEnvironmentBundleApply: "server.planEnvironmentBundleApply",
   serverApplyEnvironmentBundle: "server.applyEnvironmentBundle",
@@ -612,6 +619,18 @@ const WsServerUpdateSettingsRpc = Rpc.make(WS_METHODS.serverUpdateSettings, {
   payload: Schema.Struct({ patch: ServerSettingsPatch }),
   success: ServerSettings,
   error: Schema.Union([ServerSettingsError, EnvironmentAuthorizationError]),
+});
+
+const WsFirstMateOpenRouterKeySetRpc = Rpc.make(WS_METHODS.firstMateOpenRouterKeySet, {
+  payload: FirstMateOpenRouterKeySetInput,
+  success: FirstMateOpenRouterKeyStatus,
+  error: Schema.Union([FirstMateOpenRouterKeyError, EnvironmentAuthorizationError]),
+});
+
+const WsFirstMateOpenRouterKeyStatusRpc = Rpc.make(WS_METHODS.firstMateOpenRouterKeyStatus, {
+  payload: Schema.Struct({}),
+  success: FirstMateOpenRouterKeyStatus,
+  error: EnvironmentAuthorizationError,
 });
 
 const WsServerResolveEnvironmentBundleCredentialsRpc = Rpc.make(
@@ -1496,6 +1515,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerRemoveKeybindingRpc,
   WsServerGetSettingsRpc,
   WsServerUpdateSettingsRpc,
+  WsFirstMateOpenRouterKeySetRpc,
+  WsFirstMateOpenRouterKeyStatusRpc,
   WsServerResolveEnvironmentBundleCredentialsRpc,
   WsServerPlanEnvironmentBundleApplyRpc,
   WsServerApplyEnvironmentBundleRpc,

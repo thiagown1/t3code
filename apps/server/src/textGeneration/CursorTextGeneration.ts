@@ -16,6 +16,7 @@ import {
   buildCommitMessagePrompt,
   buildPrContentPrompt,
   buildRoundSummaryPrompt,
+  buildTurnReviewPrompt,
   buildThreadTitlePrompt,
 } from "./TextGenerationPrompts.ts";
 import {
@@ -57,7 +58,8 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
       | "generatePrContent"
       | "generateBranchName"
       | "generateThreadTitle"
-      | "generateRoundSummary";
+      | "generateRoundSummary"
+      | "generateTurnReview";
     cwd: string;
     prompt: string;
     outputSchemaJson: S;
@@ -286,11 +288,24 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
       } satisfies TextGeneration.RoundSummaryGenerationResult;
     });
 
+  const generateTurnReview: TextGeneration.TextGeneration["Service"]["generateTurnReview"] =
+    Effect.fn("CursorTextGeneration.generateTurnReview")(function* (input) {
+      const { prompt, outputSchema } = buildTurnReviewPrompt({ state: input.state });
+      return yield* runCursorJson({
+        operation: "generateTurnReview",
+        cwd: input.cwd,
+        prompt,
+        outputSchemaJson: outputSchema,
+        modelSelection: input.modelSelection,
+      });
+    });
+
   return {
     generateCommitMessage,
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
     generateRoundSummary,
+    generateTurnReview,
   } satisfies TextGeneration.TextGeneration["Service"];
 });

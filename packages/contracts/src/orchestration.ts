@@ -868,12 +868,14 @@ export type ThreadPullRequestKey = typeof ThreadPullRequestKey.Type;
 
 /** Operator-owned delivery gate after the agent turn is complete. This is
  * deliberately separate from the provider session lifecycle: none of these
- * states performs a deploy, changes a feature flag, or implies validation. */
+ * states performs a deploy, changes a feature flag, or implies validation.
+ * `done` marks work reviewed as finished; a new user turn clears it. */
 export const ThreadDeliveryStatus = Schema.Literals([
   "waiting-ci",
   "waiting-deploy",
   "validating-deploy",
   "waiting-activation",
+  "done",
 ]);
 export type ThreadDeliveryStatus = typeof ThreadDeliveryStatus.Type;
 

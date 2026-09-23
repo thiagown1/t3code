@@ -14,6 +14,7 @@ import {
   ProjectId,
   ProviderInteractionMode,
   RuntimeMode,
+  ThreadDeliveryStatus,
   ThreadLinkedPullRequest,
   ThreadTitleState,
   ThreadId,
@@ -42,9 +43,7 @@ export const ProjectionThread = Schema.Struct({
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   archivedAt: Schema.NullOr(IsoDateTime),
-  deliveryStatus: Schema.NullOr(
-    Schema.Literals(["waiting-ci", "waiting-deploy", "validating-deploy", "waiting-activation"]),
-  ),
+  deliveryStatus: Schema.NullOr(ThreadDeliveryStatus),
   settledOverride: Schema.NullOr(Schema.Literals(["settled", "active"])),
   settledAt: Schema.NullOr(IsoDateTime),
   unsettledAt: Schema.NullOr(IsoDateTime),

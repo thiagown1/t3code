@@ -17,6 +17,7 @@ import * as ThreadSettlementReactor from "../ThreadSettlementReactor.ts";
 import * as PullRequestSyncReactor from "../PullRequestSyncReactor.ts";
 import * as ThreadPullRequestReactor from "../ThreadPullRequestReactor.ts";
 import * as FirstMateRoundSummaryReactor from "../FirstMateRoundSummaryReactor.ts";
+import * as FirstMateTurnReviewReactor from "../FirstMateTurnReviewReactor.ts";
 import { OrchestrationReactor } from "../Services/OrchestrationReactor.ts";
 import { makeOrchestrationReactor } from "./OrchestrationReactor.ts";
 import * as AgentAwarenessRelay from "../../relay/AgentAwarenessRelay.ts";
@@ -155,6 +156,15 @@ describe("OrchestrationReactor", () => {
           }),
         ),
         Layer.provideMerge(
+          Layer.succeed(FirstMateTurnReviewReactor.FirstMateTurnReviewReactor, {
+            start: () => {
+              started.push("first-mate-turn-review-reactor");
+              return Effect.void;
+            },
+            drain: Effect.void,
+          }),
+        ),
+        Layer.provideMerge(
           Layer.succeed(AgentAwarenessRelay.AgentAwarenessRelay, {
             publishThread: () => Effect.void,
             start: () => {
@@ -183,6 +193,7 @@ describe("OrchestrationReactor", () => {
       "firstmate-request-decision-reactor",
       "pull-request-sync-reactor",
       "first-mate-round-summary-reactor",
+      "first-mate-turn-review-reactor",
       "agent-awareness-relay",
       "storage-cleanup",
     ]);

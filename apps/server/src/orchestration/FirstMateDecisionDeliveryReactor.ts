@@ -33,6 +33,7 @@ import {
   type ProjectId,
 } from "@t3tools/contracts";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
+import { TURN_REVIEW_OPTION_IDS } from "@t3tools/shared/firstMateTurnReview";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -44,6 +45,10 @@ import * as Stream from "effect/Stream";
 
 import { forkParked } from "../serverActivation.ts";
 import { firstMateRequestReply } from "./firstMateRequestDecisions.ts";
+import {
+  turnReviewContinueCommand,
+  turnReviewMarkDoneCommand,
+} from "./firstMateTurnReviewCommands.ts";
 import * as OrchestrationEngine from "./Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "./Services/ProjectionSnapshotQuery.ts";
 import { openRequests, THREAD_REQUEST_ACTIVITY_KINDS } from "./threadOpenRequests.ts";
@@ -209,6 +214,28 @@ export const processDecisionResolved = Effect.fn("processDecisionResolved")(func
 
   const option = decision.options.find((entry) => entry.id === selectedOptionId);
   if (option === undefined) return yield* skip("unknown-option");
+
+  if (decision.source.kind === "turn-review") {
+    // A turn review card acts on the reviewed thread itself: the options are
+    // actions, not an answer an agent has to read.
+    const thread = yield* snapshots.getThreadShellById(decision.source.threadId);
+    if (Option.isNone(thread)) return yield* skip("source-not-a-live-thread");
+    if (thread.value.projectId !== projectId) return yield* skip("source-in-another-project");
+    const threadId = decision.source.threadId;
+    if (selectedOptionId === TURN_REVIEW_OPTION_IDS.continue) {
+      yield* engine.dispatch(
+        turnReviewContinueCommand({
+          threadId,
+          key: decisionId,
+          createdAt: DateTime.formatIso(yield* DateTime.now),
+        }),
+      );
+    } else if (selectedOptionId === TURN_REVIEW_OPTION_IDS.markDone) {
+      yield* engine.dispatch(turnReviewMarkDoneCommand({ threadId, key: decisionId }));
+    }
+    // "I'll answer in the thread" is fully handled by resolving the card.
+    return;
+  }
 
   if (decision.source.kind !== "firstmate") {
     return yield* deliverToProviderRequest({

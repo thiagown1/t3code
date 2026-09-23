@@ -72,6 +72,7 @@ const STATUS_LABEL_BY_STATUS: Partial<
     label: "Waiting for activation",
     className: "text-foreground-secondary",
   },
+  done: { label: "Done", className: "text-foreground-secondary" },
 };
 
 function threadTimeLabel(thread: EnvironmentThreadShell): string {

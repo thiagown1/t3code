@@ -93,6 +93,10 @@ import * as PullRequestSyncReactor from "./orchestration/PullRequestSyncReactor.
 import * as ThreadPullRequestReactor from "./orchestration/ThreadPullRequestReactor.ts";
 import * as FirstMateRequestDecisionReactor from "./orchestration/FirstMateRequestDecisionReactor.ts";
 import * as FirstMateRoundSummaryReactor from "./orchestration/FirstMateRoundSummaryReactor.ts";
+import * as FirstMateTurnReviewReactor from "./orchestration/FirstMateTurnReviewReactor.ts";
+import * as JevDecisions from "./firstMate/JevDecisions.ts";
+import * as OpenRouterApiKey from "./firstMate/OpenRouterApiKey.ts";
+import * as TurnReviewJudge from "./firstMate/TurnReviewJudge.ts";
 import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
 import { hasCloudPublicConfig } from "./cloud/publicConfig.ts";
 import { ProviderRegistryLive } from "./provider/Layers/ProviderRegistry.ts";
@@ -263,6 +267,13 @@ const ReactorLayerLive = Layer.empty.pipe(
   Layer.provideMerge(ThreadPullRequestReactor.layer),
   Layer.provideMerge(FirstMateRequestDecisionReactor.layer),
   Layer.provideMerge(FirstMateRoundSummaryReactor.layer),
+  Layer.provideMerge(
+    FirstMateTurnReviewReactor.layer.pipe(
+      Layer.provide(TurnReviewJudge.layer),
+      Layer.provide(JevDecisions.layer),
+      Layer.provide(OpenRouterApiKey.layer.pipe(Layer.provide(ServerSecretStore.layer))),
+    ),
+  ),
   Layer.provideMerge(AgentAwarenessRelay.layer.pipe(Layer.provide(ServerSecretStore.layer))),
   Layer.provideMerge(RuntimeReceiptBusLive),
 );
@@ -515,6 +526,7 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   Layer.provideMerge(
     Layer.mergeAll(Keybindings.layer, EnvironmentTheme.layer, UsageLimitSources.layer),
   ),
+  Layer.provideMerge(OpenRouterApiKey.layer),
   Layer.provideMerge(ProviderRegistryLive),
   // The instance registry is the new routing keystone — text generation,
   // adapter lookup, and runtime ingestion all resolve `ProviderInstanceId`
