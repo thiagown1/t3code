@@ -164,7 +164,7 @@ const legalTransitions: Readonly<
   requested: new Set(["validating", "failed", "cancelled"]),
   validating: new Set(["compacting", "prepared", "failed", "cancelled"]),
   compacting: new Set(["prepared", "failed", "cancelled"]),
-  prepared: new Set(["target-starting", "failed", "cancelled"]),
+  prepared: new Set(["target-starting", "failed", "cancelled", "unknown"]),
   "target-starting": new Set(["target-ready", "failed", "unknown"]),
   "target-ready": new Set(["committing", "failed", "unknown"]),
   committing: new Set(["committed", "failed", "unknown"]),

@@ -324,6 +324,23 @@ it.layer(memoryLayer)("ThreadProviderHandoffStore", (it) => {
       assert.deepEqual(yield* store.createPrepared(replacement), replacement);
     }),
   );
+
+  it.effect("can quarantine a prepared handoff whose source binding changed during restart", () =>
+    Effect.gen(function* () {
+      const store = yield* ThreadProviderHandoffStore;
+      const prepared = makePrepared({ handoffId: "handoff-unknown", threadId: "thread-unknown" });
+      yield* store.createPrepared(prepared);
+      const unknown = yield* store.transition({
+        handoffId: prepared.record.handoffId,
+        expectedState: "prepared",
+        expectedEnvelopeHash: prepared.envelope.envelopeHash,
+        nextState: "unknown",
+        updatedAt: "2026-09-16T12:00:01.000Z",
+        errorCode: "startup-recovery-unresolved",
+      });
+      assert.equal(unknown.record.state, "unknown");
+    }),
+  );
 });
 
 it.effect("restores prepared handoffs from disk without advancing recovery state", () =>
