@@ -254,13 +254,7 @@ function validateNoPendingWork(
   const latest = latestUserMessage(thread);
   const queued =
     latest !== null &&
-    (latest.turnId === null ||
-      thread.latestTurn === null ||
-      [
-        thread.latestTurn.requestedAt,
-        thread.latestTurn.startedAt,
-        thread.latestTurn.completedAt,
-      ].every((value) => value === null || value < latest.createdAt));
+    (thread.latestTurn === null || latest.createdAt > thread.latestTurn.requestedAt);
   if (!queued) return;
   if (latest?.text.trim().toLowerCase() === "/compact") fail("compaction-active");
   fail("queued-after-current-turn");

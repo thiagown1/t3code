@@ -430,6 +430,22 @@ describe("prepareThreadProviderHandoff", () => {
     );
   });
 
+  it("accepts the completed turn's real user message without a projected turn ID", () => {
+    const current = thread();
+    expect(
+      prepare(
+        snapshot({
+          thread: {
+            ...current,
+            messages: current.messages.map((message) =>
+              message.role === "user" ? { ...message, turnId: null } : message,
+            ),
+          },
+        }),
+      ).threadId,
+    ).toBe(THREAD_ID);
+  });
+
   it("blocks a running projected turn even if its provider session looks ready", () => {
     expectBlocked("session-active", () =>
       prepare(
