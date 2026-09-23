@@ -19,7 +19,7 @@ import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstab
 import { OpenRouterApiKey } from "./OpenRouterApiKey.ts";
 
 /** The alpha endpoint. One constant so moving it is a one-line change. */
-export const JEV_DECISIONS_URL = "https://openrouter.ai/api/v1/api/alpha/decisions";
+export const JEV_DECISIONS_URL = "https://openrouter.ai/api/alpha/decisions";
 export const JEV_MODEL = "typesafe/jev-1.13";
 
 export type JevQuestion =
