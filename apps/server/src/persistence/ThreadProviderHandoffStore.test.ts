@@ -18,6 +18,7 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import migration from "./Migrations/903_ThreadProviderHandoffs.ts";
+import sourceBindingMigration from "./Migrations/905_ThreadProviderHandoffSourceBindings.ts";
 import {
   layer as ThreadProviderHandoffStoreLive,
   ThreadProviderHandoffStore,
@@ -33,6 +34,7 @@ function makeStoreLayer<E, R>(sqlite: Layer.Layer<SqlClient.SqlClient, E, R>) {
       const sql = yield* SqlClient.SqlClient;
       yield* sql`PRAGMA foreign_keys = ON`;
       yield* migration;
+      yield* sourceBindingMigration;
     }),
   ).pipe(Layer.provideMerge(sqlite));
   return ThreadProviderHandoffStoreLive.pipe(Layer.provideMerge(migrated));
@@ -322,6 +324,22 @@ it.layer(memoryLayer)("ThreadProviderHandoffStore", (it) => {
       assert.deepEqual(yield* store.createPrepared(replacement), replacement);
     }),
   );
+  it.effect("can quarantine a prepared handoff whose source binding changed during restart", () =>
+    Effect.gen(function* () {
+      const store = yield* ThreadProviderHandoffStore;
+      const prepared = makePrepared({ handoffId: "handoff-unknown", threadId: "thread-unknown" });
+      yield* store.createPrepared(prepared);
+      const unknown = yield* store.transition({
+        handoffId: prepared.record.handoffId,
+        expectedState: "prepared",
+        expectedEnvelopeHash: prepared.envelope.envelopeHash,
+        nextState: "unknown",
+        updatedAt: "2026-09-16T12:00:01.000Z",
+        errorCode: "startup-recovery-unresolved",
+      });
+      assert.equal(unknown.record.state, "unknown");
+    }),
+  );
 });
 
 it.effect("restores prepared handoffs from disk without advancing recovery state", () =>
@@ -338,6 +356,12 @@ it.effect("restores prepared handoffs from disk without advancing recovery state
     yield* Effect.gen(function* () {
       const store = yield* ThreadProviderHandoffStore;
       yield* store.createPrepared(prepared);
+      yield* store.saveSourceBinding(prepared.record.handoffId, {
+        threadId: prepared.record.threadId,
+        provider: prepared.record.source.driver,
+        providerInstanceId: prepared.record.source.providerInstanceId,
+        resumeCursor: { privateCursor: "resume-me" },
+      });
     }).pipe(
       Effect.provide(makeStoreLayer(NodeSqliteClient.layer({ filename: dbPath }))),
       Effect.scoped,
@@ -350,6 +374,15 @@ it.effect("restores prepared handoffs from disk without advancing recovery state
       assert.deepEqual(firstRead, [prepared]);
       assert.deepEqual(secondRead, firstRead);
       assert.equal(firstRead[0]?.record.state, "prepared");
+      assert.deepEqual(
+        Option.getOrThrow(yield* store.getSourceBinding(prepared.record.handoffId)),
+        {
+          threadId: prepared.record.threadId,
+          provider: prepared.record.source.driver,
+          providerInstanceId: prepared.record.source.providerInstanceId,
+          resumeCursor: { privateCursor: "resume-me" },
+        },
+      );
     }).pipe(
       Effect.provide(makeStoreLayer(NodeSqliteClient.layer({ filename: dbPath }))),
       Effect.scoped,

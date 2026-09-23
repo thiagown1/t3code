@@ -34,18 +34,34 @@ export function withAgentDeviceEnvironment(
   };
 }
 
-const sessionsByThread = new Map<ThreadId, McpProviderSessionConfig>();
+const sessionsByThread = new Map<ThreadId, Map<ProviderInstanceId, McpProviderSessionConfig>>();
 
 export function setMcpProviderSession(config: McpProviderSessionConfig): void {
-  sessionsByThread.set(config.threadId, config);
+  const sessions = sessionsByThread.get(config.threadId) ?? new Map();
+  sessions.set(config.providerInstanceId, config);
+  sessionsByThread.set(config.threadId, sessions);
 }
 
-export function readMcpProviderSession(threadId: ThreadId): McpProviderSessionConfig | undefined {
-  return sessionsByThread.get(threadId);
+export function readMcpProviderSession(
+  threadId: ThreadId,
+  providerInstanceId?: ProviderInstanceId,
+): McpProviderSessionConfig | undefined {
+  const sessions = sessionsByThread.get(threadId);
+  if (providerInstanceId !== undefined) return sessions?.get(providerInstanceId);
+  return sessions?.size === 1 ? sessions.values().next().value : undefined;
 }
 
-export function clearMcpProviderSession(threadId: ThreadId): void {
-  sessionsByThread.delete(threadId);
+export function clearMcpProviderSession(
+  threadId: ThreadId,
+  providerInstanceId?: ProviderInstanceId,
+): void {
+  if (providerInstanceId === undefined) {
+    sessionsByThread.delete(threadId);
+    return;
+  }
+  const sessions = sessionsByThread.get(threadId);
+  sessions?.delete(providerInstanceId);
+  if (sessions?.size === 0) sessionsByThread.delete(threadId);
 }
 
 export function clearAllMcpProviderSessions(): void {

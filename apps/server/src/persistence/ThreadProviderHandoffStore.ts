@@ -17,6 +17,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 
 import { PersistenceDecodeError, PersistenceSqlError } from "./Errors.ts";
+import type { ProviderRuntimeBinding } from "../provider/Services/ProviderSessionDirectory.ts";
 
 export const ThreadProviderHandoffStored = Schema.Struct({
   record: ThreadProviderHandoffRecord,
@@ -92,6 +93,13 @@ export class ThreadProviderHandoffStore extends Context.Service<
       ReadonlyArray<ThreadProviderHandoffStored>,
       ThreadProviderHandoffStoreError
     >;
+    readonly saveSourceBinding: (
+      handoffId: string,
+      binding: ProviderRuntimeBinding,
+    ) => Effect.Effect<void, ThreadProviderHandoffStoreError>;
+    readonly getSourceBinding: (
+      handoffId: string,
+    ) => Effect.Effect<Option.Option<ProviderRuntimeBinding>, ThreadProviderHandoffStoreError>;
   }
 >()("t3/persistence/ThreadProviderHandoffStore") {}
 
@@ -137,6 +145,8 @@ const decodeStored = Schema.decodeUnknownEffect(ThreadProviderHandoffStored);
 const decodeTransitionInput = Schema.decodeUnknownEffect(
   TransitionThreadProviderHandoffInputSchema,
 );
+const encodeUnknownJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
+const decodeUnknownJson = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
 const isStoreConflictError = Schema.is(ThreadProviderHandoffStoreConflictError);
 const isStoreNotFoundError = Schema.is(ThreadProviderHandoffStoreNotFoundError);
 const isPersistenceDecodeError = Schema.is(PersistenceDecodeError);
@@ -154,7 +164,7 @@ const legalTransitions: Readonly<
   requested: new Set(["validating", "failed", "cancelled"]),
   validating: new Set(["compacting", "prepared", "failed", "cancelled"]),
   compacting: new Set(["prepared", "failed", "cancelled"]),
-  prepared: new Set(["target-starting", "failed", "cancelled"]),
+  prepared: new Set(["target-starting", "failed", "cancelled", "unknown"]),
   "target-starting": new Set(["target-ready", "failed", "unknown"]),
   "target-ready": new Set(["committing", "failed", "unknown"]),
   committing: new Set(["committed", "failed", "unknown"]),
@@ -457,11 +467,44 @@ export const make = Effect.gen(function* () {
       Effect.mapError(mapStoreError("ThreadProviderHandoffStore.listRecoverable")),
     );
 
+  const saveSourceBinding: ThreadProviderHandoffStore["Service"]["saveSourceBinding"] = (
+    handoffId,
+    binding,
+  ) =>
+    encodeUnknownJson(binding).pipe(
+      Effect.flatMap(
+        (bindingJson) => sql`
+          INSERT INTO thread_provider_handoff_source_bindings (handoff_id, binding_json)
+          VALUES (${handoffId}, ${bindingJson})
+          ON CONFLICT(handoff_id) DO NOTHING
+        `,
+      ),
+      Effect.asVoid,
+      Effect.mapError(mapStoreError("ThreadProviderHandoffStore.saveSourceBinding", handoffId)),
+    );
+
+  const getSourceBinding: ThreadProviderHandoffStore["Service"]["getSourceBinding"] = (handoffId) =>
+    sql<{ binding_json: string }>`
+        SELECT binding_json FROM thread_provider_handoff_source_bindings
+        WHERE handoff_id = ${handoffId}
+      `.pipe(
+      Effect.flatMap((rows) =>
+        rows.length === 0
+          ? Effect.succeed(Option.none())
+          : decodeUnknownJson(rows[0]!.binding_json).pipe(
+              Effect.map((value) => Option.some(value as ProviderRuntimeBinding)),
+            ),
+      ),
+      Effect.mapError(mapStoreError("ThreadProviderHandoffStore.getSourceBinding", handoffId)),
+    );
+
   return ThreadProviderHandoffStore.of({
     createPrepared,
     getByHandoffId,
     transition,
     listRecoverable,
+    saveSourceBinding,
+    getSourceBinding,
   });
 });
 

@@ -46,6 +46,7 @@ import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import * as ProviderService from "./provider/Services/ProviderService.ts";
 import * as ProviderSessionDirectory from "./provider/Services/ProviderSessionDirectory.ts";
 import * as ProviderSessionReaper from "./provider/Services/ProviderSessionReaper.ts";
+import * as ThreadProviderHandoffStore from "./persistence/ThreadProviderHandoffStore.ts";
 import { forkParked } from "./serverActivation.ts";
 import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
@@ -897,6 +898,60 @@ export const autoPullProjects = Effect.fn("autoPullProjects")(function* (
   );
 });
 
+/** An interrupted handoff is rolled back before ordinary session reconciliation. */
+export const reconcileProviderHandoffs = Effect.gen(function* () {
+  const store = yield* ThreadProviderHandoffStore.make;
+  const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+  const engine = yield* OrchestrationEngine.OrchestrationEngineService;
+  const crypto = yield* Crypto.Crypto;
+  for (const handoff of yield* store.listRecoverable()) {
+    const { record } = handoff;
+    const binding = Option.getOrUndefined(yield* directory.getBinding(record.threadId));
+    const backup = Option.getOrUndefined(yield* store.getSourceBinding(record.handoffId));
+    const isSource = binding?.providerInstanceId === record.source.providerInstanceId;
+    const isTarget = binding?.providerInstanceId === record.target.providerInstanceId;
+    let recovered = isSource;
+    if (isTarget && backup?.providerInstanceId === record.source.providerInstanceId) {
+      yield* directory.upsert(backup);
+      yield* engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.make(yield* crypto.randomUUIDv4),
+        threadId: record.threadId,
+        modelSelection: {
+          instanceId: record.source.providerInstanceId,
+          model: record.source.model,
+        },
+      });
+      const now = DateTime.formatIso(yield* DateTime.now);
+      yield* engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make(yield* crypto.randomUUIDv4),
+        threadId: record.threadId,
+        session: {
+          threadId: record.threadId,
+          status: "ready",
+          providerName: backup.provider,
+          providerInstanceId: record.source.providerInstanceId,
+          runtimeMode: backup.runtimeMode ?? "full-access",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      });
+      recovered = true;
+    }
+    yield* store.transition({
+      handoffId: record.handoffId,
+      expectedState: record.state,
+      expectedEnvelopeHash: handoff.envelope.envelopeHash,
+      nextState: recovered ? "failed" : "unknown",
+      updatedAt: DateTime.formatIso(yield* DateTime.now),
+      errorCode: recovered ? "startup-rollback" : "startup-recovery-unresolved",
+    });
+  }
+});
+
 /** @public Service construction is part of the canonical Effect module API. */
 export const make = (options?: StartupOptions) =>
   Effect.gen(function* () {
@@ -969,6 +1024,7 @@ export const make = (options?: StartupOptions) =>
         }),
       );
 
+      yield* runStartupPhase("provider-handoffs.reconcile", reconcileProviderHandoffs);
       yield* runStartupPhase("provider-sessions.reconcile", reconcileProviderSessions);
       yield* runStartupPhase("worktree-setups.reconcile", reconcileWorktreeSetups);
 

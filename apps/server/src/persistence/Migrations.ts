@@ -79,6 +79,7 @@ import Migration0901 from "./Migrations/901_ProjectionProjectsFirstMate.ts";
 import Migration0902 from "./Migrations/902_ProjectionThreadsDeliveryStatusReconciliation.ts";
 import Migration0903 from "./Migrations/903_ThreadProviderHandoffs.ts";
 import Migration0904 from "./Migrations/904_PullRequestSupervision.ts";
+import Migration0905 from "./Migrations/905_ThreadProviderHandoffSourceBindings.ts";
 
 /**
  * Every migration, in execution order. The id is what the ledger records; the
@@ -144,6 +145,7 @@ const migrationEntries: ReadonlyArray<MigrationEntry> = [
   [902, "ProjectionThreadsDeliveryStatusReconciliation", Migration0902],
   [903, "ThreadProviderHandoffs", Migration0903],
   [904, "PullRequestSupervision", Migration0904],
+  [905, "ThreadProviderHandoffSourceBindings", Migration0905],
 ];
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

@@ -75,6 +75,14 @@ returns to the remembered selection.
 
 Leaving reasoning level or service tier unset uses the provider's own configuration.
 
+## Change providers in an existing thread
+
+On web and desktop, choose a model from another provider in the composer and confirm
+**Transfer conversation**. T3 Code sends the saved conversation context to the new provider
+before changing the thread's provider. Wait for the transfer to finish before sending another
+message. If the new provider cannot accept the context, the original provider remains available.
+The confirmation reports when attachments or private provider data cannot be transferred.
+
 ## Quote an assistant response
 
 On web and desktop, select text within one assistant response and choose

@@ -785,7 +785,10 @@ export const makeAntigravityAdapter = Effect.fn("makeAntigravityAdapter")(functi
           .withProcess(
             stopOwned,
             Effect.gen(function* () {
-              const mcp = McpProviderSession.readMcpProviderSession(input.threadId);
+              const mcp = McpProviderSession.readMcpProviderSession(
+                input.threadId,
+                input.providerInstanceId,
+              );
               // The attachments dir grant lets the agent read pasted files at
               // the paths ProviderService injects into the turn text. It is a
               // leaf directory holding only uploads.

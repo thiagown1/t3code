@@ -50,6 +50,31 @@ export const ThreadProviderHandoffProvider = Schema.Struct({
 });
 export type ThreadProviderHandoffProvider = typeof ThreadProviderHandoffProvider.Type;
 
+export const ThreadProviderHandoffStartInput = Schema.Struct({
+  threadId: ThreadId,
+  target: ThreadProviderHandoffProvider,
+});
+export type ThreadProviderHandoffStartInput = typeof ThreadProviderHandoffStartInput.Type;
+
+export const ThreadProviderHandoffStartResult = Schema.Struct({
+  handoffId: TrimmedNonEmptyString,
+  state: Schema.Literal("committed"),
+  omissions: Schema.Array(Schema.Struct({ kind: TrimmedNonEmptyString, count: NonNegativeInt })),
+});
+export type ThreadProviderHandoffStartResult = typeof ThreadProviderHandoffStartResult.Type;
+
+export class ThreadProviderHandoffRpcError extends Schema.TaggedError<ThreadProviderHandoffRpcError>()(
+  "ThreadProviderHandoffRpcError",
+  {
+    code: Schema.Literals(["preflight", "target", "commit", "unknown"]),
+    detail: TrimmedNonEmptyString,
+  },
+) {
+  override get message(): string {
+    return this.detail;
+  }
+}
+
 export const ThreadProviderHandoffAttachment = Schema.Struct({
   sourceAttachmentId: StableReference,
   type: TrimmedNonEmptyString.check(Schema.isMaxLength(100)),
