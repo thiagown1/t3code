@@ -109,6 +109,36 @@ To incorporate upstream changes, fetch `upstream/main`, integrate it on a dedica
 the fork tests plus this installer build before promoting the exact commit to the fork's release
 branch. Never point an installed FirstMate build at an unvalidated official or feature-branch feed.
 
+## Fork VPS builds
+
+`.github/workflows/cli-archive-fork.yml` (manual dispatch, choose the ref) builds the
+self-contained Linux CLI archive and publishes it as the prerelease `cli-<version>-vps.<run>`.
+`t3 update` does not know about these releases. A VPS follows them with `scripts/vps/`:
+
+- `t3.service` runs `/opt/t3/current/t3 serve`; `current` is a symlink to a versioned directory.
+- `t3-update.sh`, run every 15 minutes by `t3-update.timer`, installs the release with the highest
+  run number that has an archive for the machine's architecture. It verifies `SHA256SUMS` and the
+  binary's `--version`, repoints `current`, restarts `t3.service` and rolls back when `/health`
+  does not answer within a minute. A release that failed is not retried. It keeps the running
+  version and the one before it and deletes older directories.
+- While `t3.service` has child processes (provider sessions, terminals), the update waits, for at
+  most 24 hours (`T3_UPDATE_MAX_DEFER_HOURS`), because the restart ends them.
+
+Publishing a release is therefore a deployment to every VPS that runs the timer. Install as the
+service user, with `/opt/t3` owned by that user and lingering enabled (`loginctl enable-linger`):
+
+```sh
+install -m 755 scripts/vps/t3-update.sh ~/.local/bin/t3-update
+install -m 644 scripts/vps/t3.service scripts/vps/t3-update.service scripts/vps/t3-update.timer \
+  ~/.config/systemd/user/
+systemctl --user daemon-reload && systemctl --user enable --now t3.service t3-update.timer
+```
+
+`journalctl --user -u t3-update` shows each decision. `t3-update --force` installs now without
+waiting for idle. To roll back by hand, first `systemctl --user stop t3-update.timer` (otherwise
+it reinstalls the newer release), then point `/opt/t3/current` at the previous directory and
+restart `t3.service`.
+
 ## Required release credentials
 
 Stable releases require these GitHub Actions secrets in addition to the platform and deployment

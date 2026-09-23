@@ -1,0 +1,17 @@
+# ~/.config/systemd/user/t3.service
+[Unit]
+Description=T3 Code server
+Documentation=https://github.com/thiagown1/t3code
+After=network-online.target
+
+[Service]
+# /opt/t3/current is a symlink to the installed archive; t3-update repoints it and restarts
+# this unit. The archive is self-contained: no Node on PATH is used.
+ExecStart=/opt/t3/current/t3 serve --host 127.0.0.1 --port 3773 --base-dir %h/.t3
+Restart=on-failure
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target
