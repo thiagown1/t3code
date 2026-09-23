@@ -5,8 +5,15 @@ import {
   scopedThreadKey,
 } from "@t3tools/client-runtime/environment";
 import { settlePromise, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
+import { threadCleanupConfirmationMessage } from "@t3tools/client-runtime/state/orchestration";
 import { canSnooze, threadWokeAt } from "@t3tools/client-runtime/state/thread-settled";
-import { EnvironmentId, type ScopedThreadRef, ThreadId } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  type ScopedThreadRef,
+  ThreadId,
+  type ThreadCleanupPreview,
+} from "@t3tools/contracts";
+import { resolveWorktreeCleanup } from "@t3tools/shared/projectSettings";
 import * as Cause from "effect/Cause";
 import * as Schema from "effect/Schema";
 import { AsyncResult } from "effect/unstable/reactivity";
@@ -16,6 +23,8 @@ import { useCallback, useMemo, useRef } from "react";
 import { getFallbackThreadIdAfterDelete, pinOrderKeyBetween } from "../components/Sidebar.logic";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { terminalEnvironment } from "../state/terminal";
+import { appAtomRegistry } from "../rpc/atomRegistry";
+import { environmentServerConfigsAtom } from "../state/server";
 import { threadEnvironment } from "../state/threads";
 import { vcsEnvironment } from "../state/vcs";
 import { useNewThreadHandler } from "./useHandleNewThread";
@@ -28,6 +37,7 @@ import {
   readEnvironmentSupportsActiveReorder,
   readEnvironmentSupportsSettlement,
   readEnvironmentSupportsSnooze,
+  readEnvironmentSupportsThreadCleanupPreview,
   readEnvironmentThreadRefs,
   readProject,
   readThreadShell,
@@ -40,6 +50,8 @@ import { formatWorktreePathForDisplay, getOrphanedWorktreePathForThread } from "
 import { stackedThreadToast, toastManager } from "../components/ui/toast";
 import { useClientSettings } from "./useSettings";
 import { useAtomCommand } from "../state/use-atom-command";
+import { useAtomQueryRunner } from "../state/use-atom-query-runner";
+import { orchestrationEnvironment } from "../state/orchestration";
 
 export class ThreadArchiveBlockedError extends Schema.TaggedError<ThreadArchiveBlockedError>()(
   "ThreadArchiveBlockedError",
@@ -157,6 +169,25 @@ export async function requestThreadUnpinConfirmation(input: {
   );
 }
 
+export async function confirmThreadCleanup(input: {
+  readonly preview: ThreadCleanupPreview | null;
+  readonly action: "archive" | "tombstone";
+  readonly title: string;
+  readonly confirm:
+    | ((
+        message: string,
+        options: { readonly variant: "default" | "destructive" },
+      ) => Promise<boolean>)
+    | null;
+}) {
+  if (input.confirm === null) return AsyncResult.success(false);
+  return settlePromise(() =>
+    input.confirm!(threadCleanupConfirmationMessage(input.preview, input), {
+      variant: input.action === "tombstone" ? "destructive" : "default",
+    }),
+  );
+}
+
 /** Report navigation separately so a completed deletion can still finish worktree cleanup. */
 export async function navigateAfterThreadDeletion(navigate: () => Promise<void>) {
   const result = await settlePromise(navigate);
@@ -183,6 +214,10 @@ export function useThreadActions() {
   const deleteThreadMutation = useAtomCommand(threadEnvironment.delete, {
     reportFailure: false,
   });
+  const previewThreadCleanupQuery = useAtomQueryRunner(
+    orchestrationEnvironment.threadCleanupPreview,
+    { reportFailure: false, refresh: true },
+  );
   const settleThreadMutation = useAtomCommand(threadEnvironment.settle, {
     reportFailure: false,
   });
@@ -246,6 +281,28 @@ export function useThreadActions() {
     const currentRouteParams = router.state.matches[router.state.matches.length - 1]?.params ?? {};
     return resolveThreadRouteRef(currentRouteParams);
   }, [router]);
+
+  const requestThreadCleanupConfirmation = useCallback(
+    async (
+      target: ScopedThreadRef,
+      input: { readonly action: "archive" | "tombstone"; readonly title: string },
+    ) => {
+      const localApi = readLocalApi();
+      const preview = readEnvironmentSupportsThreadCleanupPreview(target.environmentId)
+        ? await previewThreadCleanupQuery({
+            environmentId: target.environmentId,
+            input: { threadId: target.threadId },
+          })
+        : AsyncResult.success(null);
+      if (preview._tag === "Failure") return preview;
+      return confirmThreadCleanup({
+        ...input,
+        preview: preview.value,
+        confirm: localApi?.dialogs.confirm ?? null,
+      });
+    },
+    [previewThreadCleanupQuery],
+  );
 
   const archiveThread = useCallback(
     async (target: ScopedThreadRef, opts: { onArchived?: () => void } = {}) => {
@@ -356,7 +413,13 @@ export function useThreadActions() {
       const canDeleteWorktree = orphanedWorktreePath !== null && threadProject !== null;
       const localApi = readLocalApi();
       let shouldDeleteWorktree = false;
-      if (canDeleteWorktree && localApi) {
+      const environmentSettings = appAtomRegistry
+        .get(environmentServerConfigsAtom)
+        .get(threadRef.environmentId)?.settings;
+      const automaticWorktreeCleanup = environmentSettings
+        ? resolveWorktreeCleanup(environmentSettings, thread.projectId).worktreeOnDelete
+        : false;
+      if (canDeleteWorktree && localApi && !automaticWorktreeCleanup) {
         const confirmationResult = await settlePromise(() =>
           localApi.dialogs.confirm(
             [
@@ -724,20 +787,14 @@ export function useThreadActions() {
 
   const confirmAndDeleteThread = useCallback(
     async (target: ScopedThreadRef) => {
-      const localApi = readLocalApi();
       const resolved = resolveThreadTarget(target);
 
-      if (confirmThreadDelete && localApi) {
+      if (confirmThreadDelete) {
         const title = resolved?.thread.title ?? "this thread";
-        const confirmationResult = await settlePromise(() =>
-          localApi.dialogs.confirm(
-            [
-              `Delete thread "${title}"?`,
-              "This permanently clears conversation history for this thread.",
-            ].join("\n"),
-            { variant: "destructive" },
-          ),
-        );
+        const confirmationResult = await requestThreadCleanupConfirmation(target, {
+          action: "tombstone",
+          title,
+        });
         if (confirmationResult._tag === "Failure") {
           return confirmationResult;
         }
@@ -748,7 +805,7 @@ export function useThreadActions() {
 
       return deleteThread(target);
     },
-    [confirmThreadDelete, deleteThread, resolveThreadTarget],
+    [confirmThreadDelete, deleteThread, requestThreadCleanupConfirmation, resolveThreadTarget],
   );
 
   return useMemo(
@@ -757,6 +814,7 @@ export function useThreadActions() {
       unarchiveThread,
       deleteThread,
       confirmAndDeleteThread,
+      requestThreadCleanupConfirmation,
       settleThread,
       unsettleThread,
       snoozeThread,
@@ -770,6 +828,7 @@ export function useThreadActions() {
     [
       archiveThread,
       confirmAndDeleteThread,
+      requestThreadCleanupConfirmation,
       confirmAndUnpinThread,
       deleteThread,
       pinThread,

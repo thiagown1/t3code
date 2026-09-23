@@ -26,6 +26,22 @@ the records with `ForwardCompatibleArray`, so one undecodable record is dropped 
 the whole message. The field is optional on `OrchestrationMessage`, both turn-start commands, and
 `ThreadMessageSentPayload`. The decider and projector carry it through untouched.
 
+### Parallel-thread snapshots
+
+`/parallel <objective>` creates a separate thread and stores its source link and
+fork snapshot as the forward-compatible unknown context kind `parallel-thread`.
+The first user message contains the matching canonical reference, so provider
+projection includes the JSON payload while normal message persistence keeps it
+available after restart. The payload is bounded below the unknown-record limit and
+contains only completed user/assistant text, attachment metadata, the active plan,
+the fork point, and source timestamps. It never copies attachment bytes, pending
+approvals, processes, credentials, or runtime locks.
+The legacy `/paralelo` spelling remains accepted as an alias.
+
+The web client reads the source id from that record to render persistent return
+navigation. Comparing the recorded source `updatedAt` with the current source shell
+marks the snapshot stale; later source changes never mutate the child context.
+
 ## Identity namespaces
 
 - `ComposerContextId`: durable payload identity. Branded. Values match `[a-z0-9_-]+` and do not

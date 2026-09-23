@@ -1,3 +1,4 @@
+import { requestCustomSnooze } from "../components/CustomSnoozeDialog";
 import { scopeProjectRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
 import {
   type AtomCommandResult,
@@ -6,7 +7,7 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import { canSnooze, effectiveSnoozed } from "@t3tools/client-runtime/state/thread-settled";
-import type { ScopedThreadRef, ThreadId } from "@t3tools/contracts";
+import type { ScopedThreadRef, ThreadDeliveryStatus, ThreadId } from "@t3tools/contracts";
 import { useRouter } from "@tanstack/react-router";
 import { useCallback, useMemo } from "react";
 
@@ -23,6 +24,7 @@ import {
   readEnvironmentSupportsSettlement,
   readEnvironmentSupportsSnooze,
   readEnvironmentSupportsTitleRegeneration,
+  readEnvironmentSupportsDeliveryStatus,
   readThreadShell,
   useProjects,
 } from "../state/entities";
@@ -39,6 +41,7 @@ import { useCopyToClipboard } from "./useCopyToClipboard";
 import { useNewThreadHandler } from "./useHandleNewThread";
 import { useClientSettings } from "./useSettings";
 import { useThreadActions } from "./useThreadActions";
+import { useThreadBundleExport } from "./useThreadBundleExport";
 
 function failureToast(title: string, error: unknown) {
   toastManager.add(
@@ -89,11 +92,13 @@ export function useThreadActionMenu(input: {
     confirmAndUnpinThread,
     archiveThread,
     deleteThread,
+    requestThreadCleanupConfirmation,
   } = useThreadActions();
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
   });
   const handleNewThread = useNewThreadHandler();
+  const exportThreadBundle = useThreadBundleExport();
   const markThreadUnread = useUiStateStore((s) => s.markThreadUnread);
   const confirmThreadDelete = useClientSettings((s) => s.confirmThreadDelete);
   const confirmThreadArchive = useClientSettings((s) => s.confirmThreadArchive);
@@ -134,17 +139,22 @@ export function useThreadActionMenu(input: {
           snooze: readEnvironmentSupportsSnooze(threadRef.environmentId),
           pinning: readEnvironmentSupportsPinning(threadRef.environmentId),
           titleRegeneration: readEnvironmentSupportsTitleRegeneration(threadRef.environmentId),
+          deliveryStatus: readEnvironmentSupportsDeliveryStatus(threadRef.environmentId),
         };
         const isRegeneratingTitle = thread.titleRegeneration != null;
         const snoozePresets = resolveSnoozePresets(now, timestampFormat);
         const items = buildThreadActionMenuItems({
           branch: thread.branch ?? null,
+          // The chat header has no project-scoped thread list behind the
+          // menu, so the "Filter by project" affordance is sidebar-only.
+          projectFilter: null,
           isPinned: thread.pinnedAt != null,
           isSettled: supports.settlement && thread.settledOverride === "settled",
           isSnoozed: supports.snooze && effectiveSnoozed(thread, { now: now.toISOString() }),
           canSnoozeNow: canSnooze(thread, { now: now.toISOString() }),
           isRegeneratingTitle,
           isRunning: thread.session?.status === "running" && thread.session.activeTurnId != null,
+          deliveryStatus: thread.deliveryStatus ?? null,
           supports,
           snoozePresets,
         });
@@ -152,7 +162,10 @@ export function useThreadActionMenu(input: {
         if (clicked._tag === "Failure" || clicked.value === null) return;
         const action: ThreadActionMenuId = clicked.value;
         if (action.startsWith("snooze:")) {
-          const preset = snoozePresets.find((candidate) => `snooze:${candidate.id}` === action);
+          const preset =
+            action === "snooze:custom"
+              ? await requestCustomSnooze()
+              : snoozePresets.find((candidate) => `snooze:${candidate.id}` === action);
           if (!preset) return;
           const result = await snoozeThread(threadRef, preset.snoozedUntil);
           if (result._tag === "Failure") {
@@ -178,6 +191,19 @@ export function useThreadActionMenu(input: {
               },
             }),
           );
+          return;
+        }
+        if (action.startsWith("delivery-status:")) {
+          const value = action.slice("delivery-status:".length);
+          const deliveryStatus: ThreadDeliveryStatus | null =
+            value === "clear" ? null : (value as ThreadDeliveryStatus);
+          const result = await updateThreadMetadata({
+            environmentId: threadRef.environmentId,
+            input: { threadId: threadRef.threadId, deliveryStatus },
+          });
+          if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+            failureToast("Failed to update delivery status", squashAtomCommandFailure(result));
+          }
           return;
         }
         const reportFailure = async (
@@ -276,11 +302,15 @@ export function useThreadActionMenu(input: {
           case "copy-thread-id":
             copyThreadIdToClipboard(thread.id, { threadId: thread.id });
             return;
+          case "export-thread-bundle":
+            await exportThreadBundle(threadRef);
+            return;
           case "archive": {
             if (confirmThreadArchive) {
-              const confirmed = await settlePromise(() =>
-                api.dialogs.confirm(`Archive thread "${thread.title}"?`),
-              );
+              const confirmed = await requestThreadCleanupConfirmation(threadRef, {
+                action: "archive",
+                title: thread.title,
+              });
               if (confirmed._tag === "Failure" || !confirmed.value) return;
             }
             let didArchive = false;
@@ -299,15 +329,10 @@ export function useThreadActionMenu(input: {
           }
           case "delete": {
             if (confirmThreadDelete) {
-              const confirmed = await settlePromise(() =>
-                api.dialogs.confirm(
-                  [
-                    `Delete thread "${thread.title}"?`,
-                    "This permanently clears conversation history for this thread.",
-                  ].join("\n"),
-                  { variant: "destructive" },
-                ),
-              );
+              const confirmed = await requestThreadCleanupConfirmation(threadRef, {
+                action: "tombstone",
+                title: thread.title,
+              });
               if (confirmed._tag === "Failure" || !confirmed.value) return;
             }
             const deleted = await deleteThread(threadRef);
@@ -337,6 +362,8 @@ export function useThreadActionMenu(input: {
       copyPathToClipboard,
       copyThreadIdToClipboard,
       deleteThread,
+      requestThreadCleanupConfirmation,
+      exportThreadBundle,
       handleNewThread,
       logicalProjectKeyByPhysicalKey,
       markThreadUnread,

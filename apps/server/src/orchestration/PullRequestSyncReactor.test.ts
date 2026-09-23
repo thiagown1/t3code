@@ -1,9 +1,16 @@
+import { layerTest as serverConfigLayerTest } from "../config.ts";
+import { ServerEnvironmentIdentity } from "../environment/ServerEnvironment.ts";
+import { EnvironmentId } from "@t3tools/contracts";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { supervisePrLink } from "./PrSupervisionSweep.ts";
 import {
+  EventId,
   ProjectId,
   ProviderInstanceId,
   PullRequestOperationError,
   ThreadId,
   type OrchestrationCommand,
+  type OrchestrationEvent,
   type OrchestrationProjectShell,
   type OrchestrationShellSnapshot,
   type OrchestrationThreadShell,
@@ -13,11 +20,12 @@ import {
   type ThreadPullRequestLink,
   type ThreadPullRequestSnapshot,
 } from "@t3tools/contracts";
-import { assert, describe, it } from "@effect/vitest";
+import { assert, describe, expect, it } from "@effect/vitest";
 import * as Crypto from "effect/Crypto";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
@@ -31,6 +39,7 @@ import {
 } from "./Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
 import * as PullRequestSyncReactor from "./PullRequestSyncReactor.ts";
+import { resolveAutoSettlementAt } from "./ThreadSettlementPolicy.ts";
 
 const NOW = "2026-08-28T12:00:00.000Z";
 const PROJECT_ID = ProjectId.make("sync-project");
@@ -152,6 +161,8 @@ function makeSummary(
 }
 
 interface HarnessOptions {
+  readonly archivedSnapshot?: () => Effect.Effect<OrchestrationShellSnapshot>;
+  readonly onDispatch?: (command: SyncCommand | LinkCommand) => Effect.Effect<void>;
   readonly invalidate?: PullRequestService["Service"]["invalidate"];
   readonly snapshot: OrchestrationShellSnapshot;
   readonly summary?: (
@@ -165,6 +176,7 @@ interface HarnessOptions {
 const makeHarness = Effect.fn("makePullRequestSyncHarness")(function* (options: HarnessOptions) {
   const activation = yield* Deferred.make<void>();
   const snapshots = yield* Ref.make(options.snapshot);
+  const events = yield* PubSub.unbounded<OrchestrationEvent>();
   const snapshotReads = yield* Queue.unbounded<void>();
   const syncCommands = yield* Ref.make<ReadonlyArray<SyncCommand>>([]);
   const linkCommands = yield* Ref.make<ReadonlyArray<LinkCommand>>([]);
@@ -188,11 +200,13 @@ const makeHarness = Effect.fn("makePullRequestSyncHarness")(function* (options: 
   const dispatch: OrchestrationEngineShape["dispatch"] = (command) => {
     if (command.type === "thread.pull-request-link.sync") {
       return Ref.update(syncCommands, (recorded) => [...recorded, command]).pipe(
+        Effect.andThen(options.onDispatch?.(command) ?? Effect.void),
         Effect.as({ sequence: 1 }),
       );
     }
     if (command.type === "thread.pull-request.link") {
       return Ref.update(linkCommands, (recorded) => [...recorded, command]).pipe(
+        Effect.andThen(options.onDispatch?.(command) ?? Effect.void),
         Effect.as({ sequence: 1 }),
       );
     }
@@ -200,9 +214,14 @@ const makeHarness = Effect.fn("makePullRequestSyncHarness")(function* (options: 
   };
 
   const dependencies = Layer.mergeAll(
+    Layer.succeed(ServerEnvironmentIdentity, {
+      getEnvironmentId: Effect.succeed(EnvironmentId.make("test-environment")),
+    }),
     Layer.mock(ProjectionSnapshotQuery)({
       getShellSnapshot: () =>
         Queue.offer(snapshotReads, undefined).pipe(Effect.andThen(Ref.get(snapshots))),
+      getArchivedShellSnapshot:
+        options.archivedSnapshot ?? (() => Effect.succeed(makeSnapshot([]))),
     }),
     Layer.mock(PullRequestService)({
       summary,
@@ -213,6 +232,9 @@ const makeHarness = Effect.fn("makePullRequestSyncHarness")(function* (options: 
       readEvents: () => Stream.empty,
       dispatch,
       streamDomainEvents: Stream.empty,
+      subscribeDomainEvents: PubSub.subscribe(events).pipe(
+        Effect.map((subscription) => Stream.fromSubscription(subscription)),
+      ),
       latestSequence: Effect.succeed(0),
     }),
     Layer.succeed(ServerActivation, Deferred.await(activation)),
@@ -220,6 +242,7 @@ const makeHarness = Effect.fn("makePullRequestSyncHarness")(function* (options: 
   );
 
   return {
+    events,
     activation,
     snapshots,
     snapshotReads,
@@ -227,7 +250,11 @@ const makeHarness = Effect.fn("makePullRequestSyncHarness")(function* (options: 
     linkCommands,
     summaryCalls,
     stackCalls,
-    layer: PullRequestSyncReactor.layer.pipe(Layer.provide(dependencies)),
+    layer: PullRequestSyncReactor.layer.pipe(
+      Layer.provide(dependencies),
+      Layer.provide(serverConfigLayerTest("/test", { prefix: "pr-supervision-" })),
+      Layer.provide(NodeServices.layer),
+    ),
   };
 });
 
@@ -274,6 +301,42 @@ function applySync(
 }
 
 describe("PullRequestSyncReactor", () => {
+  it.effect("syncs a newly linked merged PR without waiting for the periodic sweep", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* TestClock.setTime(Date.parse(NOW));
+        const fixture = yield* makeHarness({
+          snapshot: makeSnapshot([makeThread("one")]),
+          summary: (input) =>
+            Effect.succeed(makeSummary(input, { state: "merged", mergedAt: NOW })),
+        });
+        yield* Effect.gen(function* () {
+          const reactor = yield* startAndSweep(fixture);
+          const link = makeLink(42);
+          yield* Ref.set(
+            fixture.snapshots,
+            makeSnapshot([makeThread("one", { pullRequests: [link] })]),
+          );
+          yield* PubSub.publish(fixture.events, {
+            type: "thread.pull-request-linked",
+            sequence: 2,
+            eventId: EventId.make("linked"),
+            aggregateKind: "thread",
+            aggregateId: ThreadId.make("one"),
+            occurredAt: NOW,
+            commandId: null,
+            causationEventId: null,
+            correlationId: null,
+            metadata: {},
+            payload: { threadId: ThreadId.make("one"), link, updatedAt: NOW },
+          });
+          yield* Queue.take(fixture.snapshotReads);
+          yield* reactor.drain;
+          assert.strictEqual((yield* Ref.get(fixture.syncCommands))[0]?.snapshot.state, "merged");
+        }).pipe(Effect.provide(fixture.layer));
+      }),
+    ),
+  );
   it.effect("retries a failed stack read after the summary becomes terminal", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -303,6 +366,7 @@ describe("PullRequestSyncReactor", () => {
         yield* Effect.gen(function* () {
           const reactor = yield* startAndSweep(fixture);
           const commands = yield* Ref.get(fixture.syncCommands);
+          assert.deepStrictEqual(commands, []);
           yield* Ref.update(fixture.snapshots, (snapshot) => applySync(snapshot, commands));
           yield* sweepAgain(fixture, reactor);
           assert.strictEqual(attempts, 2);
@@ -310,6 +374,85 @@ describe("PullRequestSyncReactor", () => {
             kind: "native",
             ...nativeStack,
           });
+        }).pipe(Effect.provide(fixture.layer));
+      }),
+    ),
+  );
+
+  it.effect("retries a failed sibling link before publishing a terminal snapshot", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* TestClock.setTime(Date.parse(NOW));
+        let failSibling = true;
+        const fixture = yield* makeHarness({
+          snapshot: makeSnapshot([
+            makeThread("one", { pullRequests: [makeLink(7, { state: "closed" })] }),
+          ]),
+          summary: (input) =>
+            Effect.succeed(makeSummary(input, { state: "merged", mergedAt: NOW })),
+          stack: () =>
+            Effect.succeed({
+              id: "stack",
+              number: 7,
+              url: "https://github.com/owner/repository/stacks/7",
+              base: "main",
+              layers: [
+                { number: 7, headBranch: "feature", state: "merged" },
+                { number: 8, headBranch: "sibling", state: "open" },
+              ],
+            }),
+          onDispatch: (command) =>
+            command.type === "thread.pull-request.link" && failSibling
+              ? Effect.die("temporary link failure")
+              : Effect.void,
+        });
+        yield* Effect.gen(function* () {
+          const reactor = yield* startAndSweep(fixture);
+          assert.deepStrictEqual(yield* Ref.get(fixture.syncCommands), []);
+          failSibling = false;
+          yield* sweepAgain(fixture, reactor);
+          assert.strictEqual((yield* Ref.get(fixture.syncCommands))[0]?.snapshot.state, "merged");
+          assert.strictEqual((yield* Ref.get(fixture.linkCommands)).at(-1)?.number, 8);
+        }).pipe(Effect.provide(fixture.layer));
+      }),
+    ),
+  );
+
+  it.effect("concurrent stack reads persist a shared sibling once before syncing both roots", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const readsReady = yield* Deferred.make<void>();
+        let reads = 0;
+        let linked = false;
+        const fixture = yield* makeHarness({
+          snapshot: makeSnapshot([makeThread("one", { pullRequests: [makeLink(7), makeLink(8)] })]),
+          stack: () =>
+            Effect.gen(function* () {
+              if (++reads === 2) yield* Deferred.succeed(readsReady, undefined);
+              yield* Deferred.await(readsReady);
+              return {
+                id: "stack",
+                number: 7,
+                url: "https://github.com/owner/repository/stacks/7",
+                base: "main",
+                layers: [{ number: 9, headBranch: "sibling", state: "open" as const }],
+              };
+            }),
+          onDispatch: (command) =>
+            Effect.gen(function* () {
+              if (command.type === "thread.pull-request.link") {
+                yield* Effect.yieldNow;
+                assert.strictEqual(linked, false);
+                linked = true;
+              } else {
+                assert.strictEqual(linked, true);
+              }
+            }),
+        });
+        yield* Effect.gen(function* () {
+          yield* startAndSweep(fixture);
+          assert.strictEqual((yield* Ref.get(fixture.linkCommands)).length, 1);
+          assert.strictEqual((yield* Ref.get(fixture.syncCommands)).length, 2);
         }).pipe(Effect.provide(fixture.layer));
       }),
     ),
@@ -344,7 +487,15 @@ describe("PullRequestSyncReactor", () => {
         const fixture = yield* makeHarness({
           snapshot: makeSnapshot([makeThread("one", { pullRequests: [makeLink(42)] })]),
           summary: (input) =>
-            Effect.succeed(makeSummary(input, { title: "Ship it", isDraft: true })),
+            Effect.succeed(
+              makeSummary(input, {
+                title: "Ship it",
+                isDraft: true,
+                headSha: "abc123def456",
+                checksState: "pending",
+                checks: [{ name: "CI", status: "pending", description: null, url: null }],
+              }),
+            ),
         });
 
         yield* Effect.gen(function* () {
@@ -371,12 +522,15 @@ describe("PullRequestSyncReactor", () => {
                   state: "open",
                   title: "Ship it",
                   headBranch: "feature",
+                  headSha: "abc123def456",
                   baseBranch: "main",
                   isDraft: true,
                   updatedAt: "2026-08-27T00:00:00.000Z",
                   syncedAt: NOW,
                   closedAt: null,
                   mergedAt: null,
+                  checksState: "pending",
+                  checks: [{ name: "CI", status: "pending", description: null, url: null }],
                 },
                 stack: null,
               },
@@ -614,7 +768,7 @@ describe("PullRequestSyncReactor", () => {
     ),
   );
 
-  it.effect("polls open pull requests on settled threads every fifteen minutes", () =>
+  it.effect("keeps polling open pull requests after the agent session settles", () =>
     Effect.scoped(
       Effect.gen(function* () {
         yield* TestClock.setTime(Date.parse(NOW));
@@ -631,15 +785,20 @@ describe("PullRequestSyncReactor", () => {
         yield* Effect.gen(function* () {
           const reactor = yield* startAndSweep(fixture);
           assert.strictEqual((yield* Ref.get(fixture.summaryCalls)).length, 1);
-
-          yield* sweepAgain(fixture, reactor);
-          assert.strictEqual((yield* Ref.get(fixture.summaryCalls)).length, 1);
-
-          for (let index = 0; index < 13; index += 1) yield* sweepAgain(fixture, reactor);
-          assert.strictEqual((yield* Ref.get(fixture.summaryCalls)).length, 1);
+          const firstCommands = yield* Ref.get(fixture.syncCommands);
+          yield* Ref.update(fixture.snapshots, (snapshot) => applySync(snapshot, firstCommands));
 
           yield* sweepAgain(fixture, reactor);
           assert.strictEqual((yield* Ref.get(fixture.summaryCalls)).length, 2);
+          assert.strictEqual((yield* Ref.get(fixture.syncCommands)).length, 1);
+
+          yield* sweepAgain(fixture, reactor);
+          assert.strictEqual((yield* Ref.get(fixture.summaryCalls)).length, 3);
+          assert.strictEqual((yield* Ref.get(fixture.syncCommands)).length, 2);
+          assert.strictEqual(
+            (yield* Ref.get(fixture.syncCommands)).at(-1)?.snapshot.syncedAt,
+            "2026-08-28T12:02:00.000Z",
+          );
         }).pipe(Effect.provide(fixture.layer));
       }),
     ),
@@ -656,20 +815,38 @@ describe("PullRequestSyncReactor", () => {
           base: "main",
           layers: [
             { number: 41, headBranch: "layer-1", state: "merged" },
-            { number: 42, headBranch: "layer-2", state: "open" },
+            { number: 42, headBranch: "layer-2", state: "merged" },
             { number: 43, headBranch: "layer-3", state: "open" },
           ],
         };
+        let thread = makeThread("one", {
+          pullRequests: [
+            makeLink(42, { state: "open" }),
+            makeLink(41, { state: "merged" }, { source: "stack-dismissed" }),
+          ],
+        });
         const fixture = yield* makeHarness({
-          snapshot: makeSnapshot([
-            makeThread("one", {
-              pullRequests: [
-                makeLink(42),
-                makeLink(41, { state: "merged" }, { source: "stack-dismissed" }),
-              ],
-            }),
-          ]),
+          snapshot: makeSnapshot([thread]),
+          summary: (input) =>
+            Effect.succeed(makeSummary(input, { state: "merged", mergedAt: NOW })),
           stack: () => Effect.succeed(stack),
+          onDispatch: (command) =>
+            Effect.sync(() => {
+              thread =
+                command.type === "thread.pull-request.link"
+                  ? { ...thread, pullRequests: [...thread.pullRequests, makeLink(command.number)] }
+                  : applySync(makeSnapshot([thread]), [command]).threads[0]!;
+              // Every projected event may wake settlement, including the terminal root update.
+              assert.isNull(
+                resolveAutoSettlementAt({
+                  thread,
+                  pullRequest: null,
+                  now: NOW,
+                  autoSettleAfterDays: null,
+                  autoSettleOnMerge: true,
+                }),
+              );
+            }),
         });
 
         yield* Effect.gen(function* () {
@@ -728,3 +905,433 @@ describe("PullRequestSyncReactor", () => {
     ),
   );
 });
+const supervisedTestLink = () => ({
+  ...makeLink(42, null),
+  supervision: {
+    owner: "firstmate:00000000-0000-4000-8000-000000000001",
+    environmentKey: "environment-a",
+    lockSha: "a".repeat(40),
+    headSha: "b".repeat(40),
+    state: "watching" as const,
+    baseRef: "main",
+    headRef: "feature",
+    resumes: 0,
+    lastResumeKey: null,
+    lastReason: null,
+    expiresAt: "2999-01-01T00:00:00.000Z",
+  },
+});
+
+it.effect("a copied database cannot acquire, wake or release the original environment's PR", () =>
+  Effect.gen(function* () {
+    for (const state of ["pending", "watching", "stopping", "blocked"] as const) {
+      const link = supervisedTestLink();
+      yield* supervisePrLink(
+        { dispatch: () => Effect.die("must not dispatch") },
+        makeThread("copied-owner"),
+        makeProject(),
+        { ...link, supervision: { ...link.supervision, state } },
+        NOW,
+        "different-environment",
+        () => Effect.die("must not call adapter"),
+      );
+    }
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("pending enrollment is recovered before any automatic model turn", () =>
+  Effect.gen(function* () {
+    const commands: Array<OrchestrationCommand> = [];
+    const operations: string[] = [];
+    const link = supervisedTestLink();
+    yield* supervisePrLink(
+      {
+        dispatch: (command) => {
+          commands.push(command);
+          return Effect.succeed({ sequence: 1 });
+        },
+      },
+      makeThread("owner"),
+      makeProject(),
+      { ...link, supervision: { ...link.supervision, state: "pending" } },
+      NOW,
+      "environment-a",
+      (input) => {
+        operations.push(input.operation);
+        return Effect.succeed({
+          schema: "firstmate-pr-supervision/v1" as const,
+          enrolled: true,
+          lockSha: "a".repeat(40),
+          headSha: "b".repeat(40),
+        });
+      },
+    );
+    expect(operations).toEqual(["enroll"]);
+    expect(commands).toHaveLength(1);
+    expect(commands[0]).toMatchObject({ action: "enrolled" });
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("supervision resumes the linked original thread only after writer authorization", () =>
+  Effect.gen(function* () {
+    const commands: Array<OrchestrationCommand> = [];
+    const operations: string[] = [];
+    yield* supervisePrLink(
+      {
+        dispatch: (command) => {
+          commands.push(command);
+          return Effect.succeed({ sequence: 1 });
+        },
+      },
+      makeThread("original-owner"),
+      makeProject(),
+      supervisedTestLink(),
+      NOW,
+      "environment-a",
+      (input) => {
+        operations.push(input.operation);
+        return Effect.succeed(
+          input.operation === "enroll"
+            ? {
+                schema: "firstmate-pr-supervision/v1" as const,
+                enrolled: true,
+                lockSha: "a".repeat(40),
+                headSha: "b".repeat(40),
+              }
+            : {
+                schema: "firstmate-pr-supervision/v1" as const,
+                state: "needs_work",
+                writerAuthorized: true,
+                headSha: "a".repeat(40),
+                gateCheckId: 20,
+              },
+        );
+      },
+    );
+    expect(operations).toEqual(["observe"]);
+    expect(commands).toHaveLength(1);
+    expect(commands[0]).toMatchObject({
+      type: "thread.pull-request.supervise",
+      action: "wake",
+      threadId: "original-owner",
+    });
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect(
+  "a same-branch push advances the enrolled revision before any gate can wake the model",
+  () =>
+    Effect.gen(function* () {
+      const commands: Array<OrchestrationCommand> = [];
+      const observedInputs: Array<{ headSha?: string }> = [];
+      yield* supervisePrLink(
+        {
+          dispatch: (command) => {
+            commands.push(command);
+            return Effect.succeed({ sequence: 1 });
+          },
+        },
+        makeThread("owner"),
+        makeProject(),
+        supervisedTestLink(),
+        NOW,
+        "environment-a",
+        (input) => {
+          observedInputs.push(input);
+          return Effect.succeed({
+            schema: "firstmate-pr-supervision/v1" as const,
+            state: "revision_changed",
+            writerAuthorized: true,
+            headSha: "c".repeat(40),
+          });
+        },
+      );
+      expect(observedInputs).toEqual([expect.objectContaining({ headSha: "b".repeat(40) })]);
+      expect(commands).toHaveLength(1);
+      expect(commands[0]).toMatchObject({
+        action: "revised",
+        lockSha: "a".repeat(40),
+        headSha: "c".repeat(40),
+      });
+    }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("supervision never calls an adapter while a user approval is pending", () =>
+  Effect.gen(function* () {
+    let called = false;
+    yield* supervisePrLink(
+      {
+        dispatch: () => {
+          throw new Error("must not dispatch");
+        },
+      },
+      makeThread("owner", { hasPendingApprovals: true }),
+      makeProject(),
+      supervisedTestLink(),
+      NOW,
+      "environment-a",
+      () => {
+        called = true;
+        return Effect.succeed({ schema: "firstmate-pr-supervision/v1" as const });
+      },
+    );
+    expect(called).toBe(false);
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("reconciled gate IDs with identical evidence cannot spend another resume", () =>
+  Effect.gen(function* () {
+    const commands: Array<OrchestrationCommand> = [];
+    const link = supervisedTestLink();
+    let lastResumeKey: string | null = null;
+    for (const gateCheckId of [20, 21]) {
+      yield* supervisePrLink(
+        {
+          dispatch: (command) => {
+            commands.push(command);
+            if (command.type === "thread.pull-request.supervise")
+              lastResumeKey = command.resumeKey ?? null;
+            return Effect.succeed({ sequence: 1 });
+          },
+        },
+        makeThread("owner"),
+        makeProject(),
+        { ...link, supervision: { ...link.supervision, lastResumeKey } },
+        NOW,
+        "environment-a",
+        (input) =>
+          Effect.succeed(
+            input.operation === "enroll"
+              ? {
+                  schema: "firstmate-pr-supervision/v1" as const,
+                  enrolled: true,
+                  lockSha: "a".repeat(40),
+                  headSha: "b".repeat(40),
+                }
+              : {
+                  schema: "firstmate-pr-supervision/v1" as const,
+                  state: "needs_work",
+                  writerAuthorized: true,
+                  headSha: "a".repeat(40),
+                  baseSha: "b".repeat(40),
+                  reason: "Gate failed",
+                  gateSummary: "Unit test failure",
+                  gateCheckId,
+                },
+          ),
+      );
+    }
+    expect(commands).toHaveLength(1);
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("pending evidence and missing writer authority never wake a model", () =>
+  Effect.gen(function* () {
+    for (const receipt of [
+      { state: "waiting", writerAuthorized: true, headSha: "a".repeat(40) },
+      { state: "needs_work", writerAuthorized: false, headSha: "a".repeat(40) },
+    ]) {
+      const commands: Array<OrchestrationCommand> = [];
+      yield* supervisePrLink(
+        {
+          dispatch: (command) => {
+            commands.push(command);
+            return Effect.succeed({ sequence: 1 });
+          },
+        },
+        makeThread("owner"),
+        makeProject(),
+        supervisedTestLink(),
+        NOW,
+        "environment-a",
+        (input) =>
+          Effect.succeed(
+            input.operation === "enroll"
+              ? {
+                  schema: "firstmate-pr-supervision/v1" as const,
+                  enrolled: true,
+                  lockSha: "a".repeat(40),
+                  headSha: "b".repeat(40),
+                }
+              : { schema: "firstmate-pr-supervision/v1" as const, ...receipt },
+          ),
+      );
+      expect(commands).toEqual([]);
+    }
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("exhausted supervision releases ownership without another model call", () =>
+  Effect.gen(function* () {
+    const operations: string[] = [];
+    const commands: Array<OrchestrationCommand> = [];
+    const link = supervisedTestLink();
+    link.supervision.resumes = 3;
+    yield* supervisePrLink(
+      {
+        dispatch: (command) => {
+          commands.push(command);
+          return Effect.succeed({ sequence: 1 });
+        },
+      },
+      makeThread("owner"),
+      makeProject(),
+      link,
+      NOW,
+      "environment-a",
+      (input) => {
+        operations.push(input.operation);
+        return Effect.succeed({ schema: "firstmate-pr-supervision/v1" as const, released: true });
+      },
+    );
+    expect(operations).toEqual(["release"]);
+    expect(commands[0]).toMatchObject({
+      action: "released",
+      reason: "Three automatic resumptions exhausted.",
+    });
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("cleanup recovers a lost enrollment receipt without acquiring a new writer", () =>
+  Effect.gen(function* () {
+    const operations: string[] = [];
+    const commands: Array<OrchestrationCommand> = [];
+    const link = supervisedTestLink();
+    const { lockSha: _lost, ...pending } = link.supervision;
+    yield* supervisePrLink(
+      {
+        dispatch: (command) => {
+          commands.push(command);
+          return Effect.succeed({ sequence: 1 });
+        },
+      },
+      makeThread("owner"),
+      makeProject(),
+      { ...link, supervision: { ...pending, state: "stopping" } },
+      NOW,
+      "environment-a",
+      (input) => {
+        operations.push(input.operation);
+        if (input.operation === "inspect")
+          return Effect.succeed({
+            schema: "firstmate-pr-supervision/v1" as const,
+            lockSha: "b".repeat(40),
+          });
+        expect(input.lockSha).toBe("b".repeat(40));
+        return Effect.succeed({ schema: "firstmate-pr-supervision/v1" as const, released: true });
+      },
+    );
+    expect(operations).toEqual(["inspect", "release"]);
+    expect(commands).toHaveLength(1);
+    expect(commands[0]).toMatchObject({ action: "released" });
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("missing writer acquisition proof blocks observation and resumption", () =>
+  Effect.gen(function* () {
+    const commands: Array<OrchestrationCommand> = [];
+    const { lockSha: _missing, ...state } = supervisedTestLink().supervision;
+    yield* supervisePrLink(
+      {
+        dispatch: (command) => {
+          commands.push(command);
+          return Effect.succeed({ sequence: 1 });
+        },
+      },
+      makeThread("owner"),
+      makeProject(),
+      { ...supervisedTestLink(), supervision: state },
+      NOW,
+      "environment-a",
+      () => Effect.die("must not observe without acquisition proof"),
+    );
+    expect(commands).toHaveLength(1);
+    expect(commands[0]).toMatchObject({ action: "blocked" });
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("slow supervision does not hold up an explicit host refresh", () =>
+  Effect.gen(function* () {
+    const started = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    const fixture = yield* makeHarness({
+      snapshot: makeSnapshot([makeThread("refresh", { pullRequests: [makeLink(42)] })]),
+      archivedSnapshot: () =>
+        Deferred.succeed(started, undefined).pipe(
+          Effect.andThen(Deferred.await(release)),
+          Effect.as(makeSnapshot([])),
+        ),
+    });
+    yield* Effect.gen(function* () {
+      const reactor = yield* PullRequestSyncReactor.PullRequestSyncReactor;
+      yield* reactor.start();
+      yield* Deferred.succeed(fixture.activation, undefined);
+      yield* Deferred.await(started);
+      yield* reactor.requestSync({
+        host: "github.com",
+        repository: "owner/repository",
+        number: 42,
+      });
+      yield* reactor.drain;
+      expect((yield* Ref.get(fixture.summaryCalls)).length).toBeGreaterThan(0);
+      yield* Deferred.succeed(release, undefined);
+    }).pipe(Effect.provide(fixture.layer));
+  }).pipe(Effect.scoped),
+);
+
+it.effect("an archived supervised thread releases its exact writer without a model turn", () =>
+  Effect.gen(function* () {
+    const operations: string[] = [];
+    const commands: Array<OrchestrationCommand> = [];
+    yield* supervisePrLink(
+      {
+        dispatch: (command) => {
+          commands.push(command);
+          return Effect.succeed({ sequence: 1 });
+        },
+      },
+      makeThread("archived", { archivedAt: NOW }),
+      makeProject(),
+      supervisedTestLink(),
+      NOW,
+      "environment-a",
+      (input) => {
+        operations.push(input.operation);
+        expect(input.lockSha).toBe("a".repeat(40));
+        return Effect.succeed({ schema: "firstmate-pr-supervision/v1" as const, released: true });
+      },
+    );
+    expect(operations).toEqual(["release"]);
+    expect(commands[0]).toMatchObject({ action: "released", reason: "Thread archived." });
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("a rejected release retains ownership until inspection proves this owner is absent", () =>
+  Effect.gen(function* () {
+    for (const remaining of ["b".repeat(40), null]) {
+      const commands: Array<OrchestrationCommand> = [];
+      const link = supervisedTestLink();
+      yield* supervisePrLink(
+        {
+          dispatch: (command) => {
+            commands.push(command);
+            return Effect.succeed({ sequence: 1 });
+          },
+        },
+        makeThread("owner"),
+        makeProject(),
+        { ...link, supervision: { ...link.supervision, state: "stopping" } },
+        NOW,
+        "environment-a",
+        (input) =>
+          Effect.succeed(
+            input.operation === "release"
+              ? { schema: "firstmate-pr-supervision/v1" as const, released: false }
+              : { schema: "firstmate-pr-supervision/v1" as const, lockSha: remaining },
+          ),
+      );
+      expect(commands).toHaveLength(remaining === null ? 1 : 0);
+      if (remaining === null) expect(commands[0]).toMatchObject({ action: "released" });
+    }
+  }).pipe(Effect.provide(NodeServices.layer)),
+);

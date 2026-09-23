@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vite-plus/test";
 import { EventId, type OrchestrationThreadActivity, TurnId } from "@t3tools/contracts";
 
-import { deriveLatestContextWindowSnapshot, formatContextWindowTokens } from "./contextWindow";
+import {
+  deriveLatestContextWindowSnapshot,
+  deriveContextCompactionHistory,
+  formatContextWindowExactTokens,
+  formatContextWindowPercentage,
+  formatContextWindowTokens,
+  presentContextWindow,
+} from "./contextWindow";
 
 function makeActivity(id: string, kind: string, payload: unknown): OrchestrationThreadActivity {
   return {
@@ -82,5 +89,105 @@ describe("contextWindow", () => {
 
     expect(snapshot?.usedTokens).toBe(81_659);
     expect(snapshot?.totalProcessedTokens).toBe(748_126);
+  });
+
+  it("presents compact values separately from exact provider measurements", () => {
+    const snapshot = deriveLatestContextWindowSnapshot([
+      makeActivity("activity-1", "context-window.updated", {
+        usedTokens: 81_659,
+        totalProcessedTokens: 748_126,
+        maxTokens: 258_400,
+        lastInputTokens: 75_123,
+        lastCachedInputTokens: 70_000,
+        lastOutputTokens: 4_321,
+        lastReasoningOutputTokens: 2_222,
+      }),
+    ]);
+
+    expect(snapshot).not.toBeNull();
+    expect(formatContextWindowTokens(snapshot!.usedTokens)).toBe("82k");
+    expect(formatContextWindowExactTokens(snapshot!.usedTokens)).toBe("81,659");
+    expect(formatContextWindowPercentage(snapshot!.usedPercentage)).toBe("31.6%");
+    expect(presentContextWindow(snapshot!)).toEqual({
+      compactValue: "31.6% · 82k / 258k",
+      activeTokens: "81,659",
+      maximumTokens: "258,400",
+      usedPercentage: "31.6%",
+      totalProcessedTokens: "748,126",
+      lastInputTokens: "75,123",
+      lastCachedInputTokens: "70,000",
+      lastOutputTokens: "4,321",
+      lastReasoningOutputTokens: "2,222",
+      source: "Provider telemetry",
+      updatedAt: "2026-03-23T00:00:00.000Z",
+    });
+  });
+
+  it("marks values the provider omitted instead of estimating them", () => {
+    const snapshot = deriveLatestContextWindowSnapshot([
+      makeActivity("activity-1", "context-window.updated", { usedTokens: 4_200 }),
+    ]);
+
+    expect(presentContextWindow(snapshot!)).toMatchObject({
+      compactValue: "4.2k active",
+      activeTokens: "4,200",
+      maximumTokens: "Not reported",
+      usedPercentage: "Not reported",
+      totalProcessedTokens: "Not reported",
+      lastInputTokens: "Not reported",
+      lastCachedInputTokens: "Not reported",
+      lastOutputTokens: "Not reported",
+      lastReasoningOutputTokens: "Not reported",
+    });
+  });
+
+  it("reconstructs exact compaction history and distinguishes manual requests", () => {
+    const history = deriveContextCompactionHistory([
+      makeActivity("compaction-native", "context-compaction", {
+        state: "compacted",
+        beforeTokens: 190_000,
+        afterTokens: 40_000,
+      }),
+      {
+        ...makeActivity("compaction-manual", "context-compaction", {
+          state: "compacted",
+          requestId: "message-compact",
+          beforeTokens: 210_123,
+          afterTokens: 31_456,
+        }),
+        createdAt: "2026-03-24T00:00:00.000Z",
+      },
+      makeActivity("compaction-malformed", "context-compaction", {
+        beforeTokens: -1,
+        afterTokens: "unknown",
+      }),
+    ]);
+
+    expect(history).toEqual([
+      {
+        id: "compaction-malformed",
+        createdAt: "2026-03-23T00:00:00.000Z",
+        method: "provider-native",
+        beforeTokens: null,
+        afterTokens: null,
+        detail: null,
+      },
+      {
+        id: "compaction-manual",
+        createdAt: "2026-03-24T00:00:00.000Z",
+        method: "manual",
+        beforeTokens: 210_123,
+        afterTokens: 31_456,
+        detail: null,
+      },
+      {
+        id: "compaction-native",
+        createdAt: "2026-03-23T00:00:00.000Z",
+        method: "provider-native",
+        beforeTokens: 190_000,
+        afterTokens: 40_000,
+        detail: null,
+      },
+    ]);
   });
 });

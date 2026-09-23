@@ -10,10 +10,14 @@ import type {
 import {
   isImportedAgentSessionMessageId,
   OrchestrationCheckpointSummary,
+  THREAD_QUEUED_MESSAGE_ACTIVITY_KINDS,
   OrchestrationMessage,
   OrchestrationSession,
   OrchestrationThread,
+  FirstMateEvent,
+  WORKTREE_SETUP_ACTIVITY_KIND,
 } from "@t3tools/contracts";
+import { createEmptyFirstMateWorkspace, projectFirstMateEvent } from "@t3tools/shared/firstMate";
 import {
   legacyLinkedPullRequestOf,
   legacyThreadPullRequestKey,
@@ -74,9 +78,29 @@ function retainThreadActivities(activities: OrchestrationThread["activities"]) {
       pending.delete(requestId);
     }
   }
+  // A queued message is pending work, not history: pruning its enqueue record
+  // would take the message out of the thread's queue by accident.
+  const queued = new Map<string, OrchestrationThread["activities"][number]>();
+  for (const activity of activities) {
+    if (!Predicate.isObject(activity.payload)) continue;
+    const queuedMessageId = activity.payload.queuedMessageId;
+    if (typeof queuedMessageId !== "string") continue;
+    if (activity.kind === THREAD_QUEUED_MESSAGE_ACTIVITY_KINDS.enqueued) {
+      queued.set(queuedMessageId, activity);
+    } else if (activity.kind === THREAD_QUEUED_MESSAGE_ACTIVITY_KINDS.closed) {
+      queued.delete(queuedMessageId);
+    }
+  }
+  for (const activity of queued.values()) pending.set(activity.id, activity);
   const pendingActivities = new Set(pending.values());
   return activities.filter(
-    (activity, index) => index >= recentStart || pendingActivities.has(activity),
+    (activity, index) =>
+      index >= recentStart ||
+      pendingActivities.has(activity) ||
+      // The worktree setup record is upserted under one id for the thread's
+      // whole life and is the only durable copy of a running setup; an async
+      // setup script can outlast a chatty first turn.
+      activity.kind === WORKTREE_SETUP_ACTIVITY_KIND,
   );
 }
 
@@ -339,6 +363,7 @@ export function projectEvent(
             faviconPath: payload.faviconPath ?? null,
             projectIcon: payload.projectIcon ?? null,
             scripts: payload.scripts,
+            firstMate: createEmptyFirstMateWorkspace(payload.projectId, payload.createdAt),
             createdAt: payload.createdAt,
             updatedAt: payload.updatedAt,
             deletedAt: null,
@@ -404,6 +429,27 @@ export function projectEvent(
         })),
       );
 
+    case "firstmate.domain-event":
+      if (event.aggregateKind !== "project") return Effect.succeed(nextBase);
+      return decodeForEvent(FirstMateEvent, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => {
+          const project = nextBase.projects.find((entry) => entry.id === event.aggregateId);
+          if (!project) return nextBase;
+          const firstMate = projectFirstMateEvent(
+            project.firstMate ?? createEmptyFirstMateWorkspace(project.id, project.createdAt),
+            { ...payload, occurredAt: event.occurredAt },
+          );
+          return {
+            ...nextBase,
+            projects: nextBase.projects.map((entry) =>
+              entry.id === project.id
+                ? { ...entry, firstMate, updatedAt: event.occurredAt }
+                : entry,
+            ),
+          };
+        }),
+      );
+
     case "thread.created":
       return Effect.gen(function* () {
         const payload = yield* decodeForEvent(
@@ -429,6 +475,7 @@ export function projectEvent(
             createdAt: payload.createdAt,
             updatedAt: payload.updatedAt,
             archivedAt: null,
+            deliveryStatus: null,
             settledOverride: null,
             settledAt: null,
             unsettledAt: null,
@@ -482,6 +529,7 @@ export function projectEvent(
           ...nextBase,
           threads: updateThread(nextBase.threads, payload.threadId, {
             archivedAt: null,
+            deliveryStatus: null,
             updatedAt: payload.updatedAt,
           }),
         })),
@@ -607,6 +655,7 @@ export function projectEvent(
             ...nextBase,
             threads: updateThread(nextBase.threads, payload.threadId, {
               ...(payload.title !== undefined ? { title: payload.title } : {}),
+              ...(payload.titleState !== undefined ? { titleState: payload.titleState } : {}),
               ...(payload.titleRegeneration !== undefined
                 ? { titleRegeneration: payload.titleRegeneration }
                 : {}),
@@ -620,6 +669,9 @@ export function projectEvent(
                 : {}),
               ...(payload.branchPullRequest !== undefined
                 ? { branchPullRequest: payload.branchPullRequest }
+                : {}),
+              ...(payload.deliveryStatus !== undefined
+                ? { deliveryStatus: payload.deliveryStatus }
                 : {}),
               ...legacyLinkPatch,
               updatedAt: payload.updatedAt,

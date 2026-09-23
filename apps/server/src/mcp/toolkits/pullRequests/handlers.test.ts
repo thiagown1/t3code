@@ -10,6 +10,9 @@ import {
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Crypto from "effect/Crypto";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { layerTest as serverConfigLayerTest } from "../../../config.ts";
+import { ServerEnvironmentIdentity } from "../../../environment/ServerEnvironment.ts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -184,6 +187,35 @@ const makeHarness = Effect.fn("makePullRequestsToolkitHarness")(function* (
 });
 
 describe("pull request toolkit handlers", () => {
+  it.effect("a missing adapter rejects enrollment before persisting an owner", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({ thread: makeThread([makeLink(42)]) });
+      const result = yield* harness
+        .call("supervise_pull_request", {
+          repository: "t3tools/t3code",
+          number: 42,
+          action: "start",
+          baseRef: "main",
+          headRef: "feature",
+        })
+        .pipe(Effect.flip);
+      expect(result).toMatchObject({
+        _tag: "PullRequestLinkFailedError",
+        cause: "This repository has no reviewed PR supervision adapter.",
+      });
+      expect(yield* Ref.get(harness.commands)).toEqual([]);
+    }).pipe(
+      Effect.provideService(ServerEnvironmentIdentity, {
+        getEnvironmentId: Effect.succeed(EnvironmentId.make("test-environment")),
+      }),
+      Effect.provide(
+        serverConfigLayerTest("/test", { prefix: "missing-adapter-" }).pipe(
+          Layer.provideMerge(NodeServices.layer),
+        ),
+      ),
+    ),
+  );
+
   it.effect("refuses a credential without the pull-requests capability", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness();

@@ -8,11 +8,13 @@ This document covers the unified release workflow for stable and nightly desktop
 
 - Workflow: `.github/workflows/release.yml`
 - Triggers:
-  - manual `workflow_dispatch` with `channel=stable`, the normal way to ship stable
+  - manual `workflow_dispatch` with `channel=stable`, the normal way to ship stable. Stable
+    and nightly dispatches must select `main`; preview may select any branch. The channel defaults
+    to preview so an omitted selection cannot publish a stable release.
   - push tag matching `v*.*.*` for a stable release of an explicit commit
   - scheduled nightly check every 30 minutes
   - manual `workflow_dispatch` with `channel=nightly`
-  - manual `workflow_dispatch` with `channel=preview`, the maintainers' test train. It exercises the whole release flow (build, sign, notarize, smoke, publish) for a commit that end users must never receive, which is how an unmerged branch or a risky change gets a real release run before it lands. It builds the triggering commit with nightly's versioning under the `preview` prerelease identifier (`0.0.41-preview.<date>.<run>`) and publishes a GitHub prerelease plus the npm packages under the `preview` dist-tag. Nothing ever selects preview on its own: it is not on the schedule, no default npm dist-tag points at it, its desktop builds carry no update feed, and no updater manifest (`latest*.yml`, `nightly*.yml`, blockmaps) is attached, so a stable or nightly install cannot be offered one. The only ways onto it are downloading the release by hand, `npx t3@preview`, `T3CODE_CHANNEL=preview` for the install scripts, or `t3 update --channel preview` from a terminal; each prints a warning, and the CLI asks for confirmation when the running build is not itself a preview. The release itself is named as a maintainer test build and its body is a warning rather than generated notes: a changelog of unmerged branch history is not a changelog, and nightly and stable notes are unaffected because each series resolves its previous tag within its own channel. The hosted web app, AUR, and Discord announcements are skipped. Keep it; it costs nothing when idle.
+  - manual `workflow_dispatch` with `channel=preview`, the maintainers' test train. It exercises the whole release flow (build, sign, notarize, smoke, publish) for a commit that end users must never receive, which is how an unmerged branch or a risky change gets a real release run before it lands. It builds the triggering commit with nightly's versioning under the `preview` prerelease identifier (`0.0.41-preview.<date>.<run>`) and publishes a GitHub prerelease plus the npm packages under the `preview` dist-tag. Preview is not on the schedule, no default npm dist-tag points at it, its desktop builds carry no update feed, and no updater manifest (`latest*.yml`, `nightly*.yml`, blockmaps) is attached, so a stable or nightly install cannot be offered one. The only ways onto it are downloading the release by hand, `npx t3@preview`, `T3CODE_CHANNEL=preview` for the install scripts, or `t3 update --channel preview` from a terminal; each prints a warning, and the CLI asks for confirmation when the running build is not itself a preview. The release itself is named as a maintainer test build and its body is a warning rather than generated notes: a changelog of unmerged branch history is not a changelog, and nightly and stable notes are unaffected because each series resolves its previous tag within its own channel. The hosted web app, AUR, and Discord announcements are skipped. Keep it; it costs nothing when idle.
 - A manual stable release builds the commit of the latest published nightly, not `main` HEAD.
   Nightly is the release candidate: verify the nightly, then promote it. Merges to `main` keep
   landing while you verify and never leak into the stable build.
@@ -49,6 +51,63 @@ This document covers the unified release workflow for stable and nightly desktop
   - stable releases are aliased to the `latest` hosted app channel
   - nightly releases are aliased to the `nightly` hosted app channel
 - Signing is optional and auto-detected per platform from secrets.
+
+## Pull request macOS previews
+
+Labeling a PR `preview:mac` publishes a signed, notarized Apple Silicon DMG with T3 Connect enabled
+to the rolling `desktop-preview` prerelease, and works for fork PRs. The label is a one-shot request
+for the commit it is applied to: the trusted workflow removes it once the build is in hand, and later
+pushes do not build until a maintainer applies it again. Every signed preview is therefore a
+per-commit maintainer decision, which matters because the result carries the Developer ID signature.
+Vouching a contributor lets their labeled commits be signed; it is not a standing grant. The build is
+split so the Developer ID certificate never shares a job with PR code:
+
+- `.github/workflows/desktop-macos-preview.yml` runs on `pull_request` with no secrets and builds
+  only the JS bundle from the PR (the same `js-bundle` artifact `release.yml` produces).
+- `.github/workflows/desktop-macos-preview-publish.yml` runs on `workflow_run` from `main`. It
+  refuses unless the PR is open, still labeled, its head is the built commit, and the author is a
+  bot, a collaborator, or listed in `.github/VOUCHED.td` (read from the default branch, so a PR cannot vouch
+  for itself). It then packages and signs the bundle through `release-desktop.yml` checked out at
+  `main`, so packaging, native helpers, and the Electron/desktop dependencies come from `main`, not
+  the PR. Only the version and the public T3 Connect identifiers in `.env.example` are read from the
+  PR commit, as data, so the signed app's passkey entitlement matches the bundle. A PR that changes
+  packaging must use the `channel=preview` release train above instead.
+
+Before handing the bundle to the signing runner, the trusted workflow validates its ZIP entries
+and accepts only regular files under `server/dist` and `desktop/dist-electron`, plus the directory
+entries that lead to those roots. The artifact cannot
+overwrite packaging code or installed dependencies. The bundle is copied into the app, never executed,
+on the signing runner. The
+`pull_request_target` cleanup job in the publish workflow removes the download when the PR closes, or
+when the label is removed by hand before a build consumed it, and never checks out PR code.
+
+## FirstMate fork desktop builds
+
+The FirstMate fork uses an explicit packaging flavor rather than repackaging the official desktop
+identity. Build the local Windows x64 installer from the exact commit being validated with:
+
+```powershell
+pnpm dist:desktop:firstmate:win:x64
+```
+
+This produces `T3-Code-FirstMate-<version>-x64.exe` with app id
+`com.t3tools.t3code.firstmate`, product name `T3 Code FirstMate`, Electron user data under
+`t3code-firstmate`, and server state under `~/.t3-firstmate`. It can therefore coexist with an
+official installation without reading or migrating its live database implicitly.
+
+The flavor ignores `GITHUB_REPOSITORY` and `T3CODE_DESKTOP_UPDATE_REPOSITORY`. A FirstMate update
+feed is embedded only when `T3CODE_FIRSTMATE_DESKTOP_UPDATE_REPOSITORY=owner/repository` is set for
+the build. Keep that variable absent for local validation artifacts. Publishing a release and
+installing an artifact remain separate operator actions.
+
+Before first use, back up the source installation and move portable state through the reviewed
+Environment Bundle and Thread Bundle flows. Do not copy a live `state.sqlite`, credential files,
+provider processes, approvals, tokens, or browser data into `~/.t3-firstmate`. Import bundles only
+after reviewing their dry runs in the isolated installation.
+
+To incorporate upstream changes, fetch `upstream/main`, integrate it on a dedicated branch, and run
+the fork tests plus this installer build before promoting the exact commit to the fork's release
+branch. Never point an installed FirstMate build at an unvalidated official or feature-branch feed.
 
 ## Required release credentials
 

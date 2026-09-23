@@ -14,7 +14,14 @@
  *
  * @module RuntimeReceiptBus
  */
-import { CheckpointRef, IsoDateTime, NonNegativeInt, ThreadId, TurnId } from "@t3tools/contracts";
+import {
+  CheckpointRef,
+  FirstMateTopicId,
+  IsoDateTime,
+  NonNegativeInt,
+  ThreadId,
+  TurnId,
+} from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
@@ -49,10 +56,42 @@ export const TurnProcessingQuiescedReceipt = Schema.Struct({
 });
 export type TurnProcessingQuiescedReceipt = typeof TurnProcessingQuiescedReceipt.Type;
 
+/**
+ * One pass of the FirstMate round summariser over a finished turn. `outcome`
+ * is reported for every pass, including the cheap ones that never reach a
+ * model, so a test can wait on the decision instead of on a summary appearing.
+ */
+export const FirstMateRoundSummaryReceipt = Schema.Struct({
+  type: Schema.Literal("firstmate.round-summary.settled"),
+  threadId: ThreadId,
+  turnId: TurnId,
+  topicId: Schema.NullOr(FirstMateTopicId),
+  outcome: Schema.Literals(["recorded", "skipped", "failed"]),
+  createdAt: IsoDateTime,
+});
+export type FirstMateRoundSummaryReceipt = typeof FirstMateRoundSummaryReceipt.Type;
+
+/**
+ * One reconcile pass over a delegated thread's pending provider requests. The
+ * counts are reported for every pass, including the ones that change nothing,
+ * so a test can wait on the pass rather than on a card appearing.
+ */
+export const FirstMateRequestDecisionReceipt = Schema.Struct({
+  type: Schema.Literal("firstmate.request-decision.settled"),
+  threadId: ThreadId,
+  openedCount: NonNegativeInt,
+  cancelledCount: NonNegativeInt,
+  outcome: Schema.Literals(["reconciled", "skipped", "failed"]),
+  createdAt: IsoDateTime,
+});
+export type FirstMateRequestDecisionReceipt = typeof FirstMateRequestDecisionReceipt.Type;
+
 export const OrchestrationRuntimeReceipt = Schema.Union([
   CheckpointBaselineCapturedReceipt,
   CheckpointDiffFinalizedReceipt,
   TurnProcessingQuiescedReceipt,
+  FirstMateRoundSummaryReceipt,
+  FirstMateRequestDecisionReceipt,
 ]);
 export type OrchestrationRuntimeReceipt = typeof OrchestrationRuntimeReceipt.Type;
 

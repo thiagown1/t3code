@@ -69,6 +69,16 @@ function commandToAggregateRef(command: OrchestrationCommand): {
     case "project.create":
     case "project.meta.update":
     case "project.delete":
+    case "firstmate.supervisor.link":
+    case "firstmate.topic.create":
+    case "firstmate.topic.select":
+    case "firstmate.topic.update":
+    case "firstmate.topic.delegate":
+    case "firstmate.routing-evaluation-mode.set":
+    case "firstmate.routing.record":
+    case "firstmate.decision.open":
+    case "firstmate.decision.resolve":
+    case "firstmate.decision.cancel":
       return {
         aggregateKind: "project",
         aggregateId: command.projectId,
@@ -203,7 +213,9 @@ const makeOrchestrationEngine = Effect.gen(function* () {
         }
 
         if (
-          envelope.command.type === "thread.auto-settle" &&
+          (envelope.command.type === "thread.auto-settle" ||
+            (envelope.command.type === "thread.pull-request.supervise" &&
+              envelope.command.action === "wake")) &&
           threadBackgroundLiveness.getThreadBackgroundLiveness(envelope.command.threadId) !== null
         ) {
           return yield* new OrchestrationCommandInvariantError({

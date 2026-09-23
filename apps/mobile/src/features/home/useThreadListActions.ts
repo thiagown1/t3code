@@ -1,13 +1,14 @@
 import type { ThreadMoveDestination } from "../threads/threadOrder";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { canSnooze, effectiveSnoozed } from "@t3tools/client-runtime/state/thread-settled";
+import { threadCleanupConfirmationMessage } from "@t3tools/client-runtime/state/orchestration";
 import * as Cause from "effect/Cause";
 import * as Haptics from "expo-haptics";
 import { useCallback, useRef } from "react";
-import { Alert } from "react-native";
+import { Alert, Platform } from "react-native";
 
 import { withThreadDismissal } from "./thread-dismissal";
-import { showConfirmDialog } from "../../components/ConfirmDialogHost";
+import { showConfirmDialog, showTextInputDialog } from "../../components/ConfirmDialogHost";
 import { scopedThreadKey } from "../../lib/scopedEntities";
 import { refreshArchivedThreadsForEnvironment } from "../archive/useArchivedThreadSnapshots";
 import { pinOrderKeyBetween } from "@t3tools/client-runtime/state/thread-sort";
@@ -16,6 +17,8 @@ import { environmentServerConfigsAtom } from "../../state/server";
 import { environmentThreadShells, threadEnvironment } from "../../state/threads";
 import { queuedThreadKeysAtom } from "../../state/use-thread-outbox";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { useAtomQueryRunner } from "../../state/use-atom-query-runner";
+import { orchestrationEnvironment } from "../../state/orchestration";
 import {
   beginPendingThreadOrder,
   getPendingThreadOrder,
@@ -27,6 +30,7 @@ import {
   threadDropLifecycle,
 } from "../threads/threadOrder";
 import { getThreadListV2OrderedSection } from "../threads/threadListV2";
+import { resolveThreadTitleRename } from "../threads/thread-title-rename";
 
 /** Version skew: never send settle/unsettle to a server that predates them
     (capability defaults false on decode for older servers). */
@@ -64,6 +68,15 @@ function environmentSupportsTitleRegeneration(
   return (
     appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities
       .threadTitleRegeneration === true
+  );
+}
+
+function environmentSupportsThreadCleanupPreview(
+  environmentId: EnvironmentThreadShell["environmentId"],
+) {
+  return (
+    appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities
+      .threadCleanupPreview === true
   );
 }
 
@@ -196,34 +209,53 @@ function useThreadActionExecutor(
 function useConfirmDeleteThread(
   executeAction: (action: ThreadListAction, thread: EnvironmentThreadShell) => Promise<boolean>,
 ) {
+  const previewThreadCleanup = useAtomQueryRunner(orchestrationEnvironment.threadCleanupPreview, {
+    reportFailure: false,
+    refresh: true,
+  });
   return useCallback(
     (thread: EnvironmentThreadShell) => {
       const title = "Delete thread?";
-      const message = `“${thread.title}” will be permanently deleted, including its terminal history.`;
-      if (process.env.EXPO_OS === "ios") {
-        Alert.alert(title, message, [
-          { text: "Cancel", style: "cancel" },
-          {
-            text: "Delete",
-            style: "destructive",
-            onPress: () => {
-              void executeAction("delete", thread);
+      void (async () => {
+        const preview = environmentSupportsThreadCleanupPreview(thread.environmentId)
+          ? await previewThreadCleanup({
+              environmentId: thread.environmentId,
+              input: { threadId: thread.id },
+            })
+          : null;
+        if (preview?._tag === "Failure") {
+          Alert.alert("Could not inspect cleanup", actionFailureMessage("delete", preview.cause));
+          return;
+        }
+        const message = threadCleanupConfirmationMessage(preview?.value ?? null, {
+          action: "tombstone",
+          title: thread.title,
+        });
+        if (process.env.EXPO_OS === "ios") {
+          Alert.alert(title, message, [
+            { text: "Cancel", style: "cancel" },
+            {
+              text: "Remove from T3",
+              style: "destructive",
+              onPress: () => {
+                void executeAction("delete", thread);
+              },
             },
+          ]);
+          return;
+        }
+        showConfirmDialog({
+          title,
+          message,
+          confirmText: "Remove from T3",
+          destructive: true,
+          onConfirm: () => {
+            void executeAction("delete", thread);
           },
-        ]);
-        return;
-      }
-      showConfirmDialog({
-        title,
-        message,
-        confirmText: "Delete",
-        destructive: true,
-        onConfirm: () => {
-          void executeAction("delete", thread);
-        },
-      });
+        });
+      })();
     },
-    [executeAction],
+    [executeAction, previewThreadCleanup],
   );
 }
 
@@ -240,6 +272,7 @@ export function useThreadListActions(): {
     thread: EnvironmentThreadShell,
     direction: ThreadMoveDestination,
   ) => Promise<boolean>;
+  readonly renameThread: (thread: EnvironmentThreadShell) => void;
   readonly regenerateThreadTitle: (thread: EnvironmentThreadShell) => Promise<boolean>;
 } {
   const executeAction = useThreadActionExecutor();
@@ -474,6 +507,50 @@ export function useThreadListActions(): {
     },
     [updateThreadMetadata],
   );
+  const renameThread = useCallback(
+    (thread: EnvironmentThreadShell) => {
+      const commit = (title: string) => {
+        const resolution = resolveThreadTitleRename({ title, originalTitle: thread.title });
+        if (resolution.action === "reject-empty") {
+          Alert.alert("Could not rename thread", "Thread title cannot be empty.");
+          return;
+        }
+        if (resolution.action === "noop") return;
+        selectionHaptic();
+        void updateThreadMetadata({
+          environmentId: thread.environmentId,
+          input: { threadId: thread.id, title: resolution.title },
+        }).then((result) => {
+          if (result._tag === "Success") return;
+          const error = Cause.squash(result.cause);
+          Alert.alert(
+            "Could not rename thread",
+            error instanceof Error && error.message.trim().length > 0
+              ? error.message
+              : "The thread could not be renamed.",
+          );
+        });
+      };
+
+      if (Platform.OS === "ios") {
+        Alert.prompt(
+          "Rename thread",
+          undefined,
+          (title) => commit(title ?? ""),
+          "plain-text",
+          thread.title,
+        );
+        return;
+      }
+      showTextInputDialog({
+        title: "Rename thread",
+        initialValue: thread.title,
+        confirmText: "Rename",
+        onConfirm: commit,
+      });
+    },
+    [updateThreadMetadata],
+  );
 
   // Plan against the complete section so filtering does not change a move.
   const reorderPinnedMutation = useAtomCommand(threadEnvironment.reorderPin, {
@@ -653,6 +730,7 @@ export function useThreadListActions(): {
     pinThread,
     unpinThread,
     moveThread,
+    renameThread,
     regenerateThreadTitle,
   };
 }

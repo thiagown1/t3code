@@ -186,7 +186,11 @@ export function resolveProactiveTurnDiffAction(input: {
   ) {
     return "ignore";
   }
-  return "open";
+  const changedLines = input.checkpoint.files.reduce(
+    (total, file) => total + file.additions + file.deletions,
+    0,
+  );
+  return input.checkpoint.files.length >= 3 || changedLines >= 50 ? "open" : "ignore";
 }
 
 export function codexArtifactTemplatePromptToAppend(
@@ -250,6 +254,11 @@ export function toolGroupConsumesUpwardNavigation(target: EventTarget | null): b
   }
   return false;
 }
+
+export {
+  findRecordedWorktreeSetup,
+  resolveVisibleWorktreeSetup,
+} from "@t3tools/client-runtime/worktree-setup";
 
 export function resolveDraftHeroState(input: {
   isLocalDraftThread: boolean;
@@ -405,7 +414,7 @@ export function resolveThreadSwitchTimeline<T extends readonly unknown[]>(input:
 
 export function resolveDraftPromotionNavigationTarget(input: {
   serverThreadRef: ScopedThreadRef | null;
-  serverThread: Pick<Thread, "latestTurn" | "session"> | null | undefined;
+  serverThread: Pick<Thread, "latestTurn" | "session" | "messages"> | null | undefined;
   backgroundSubmissionPending: boolean;
 }): ScopedThreadRef | null {
   if (input.backgroundSubmissionPending) {
@@ -415,9 +424,13 @@ export function resolveDraftPromotionNavigationTarget(input: {
   const turnStarted = input.serverThread?.latestTurn?.startedAt != null;
   const startupStopped =
     sessionStatus === "error" || sessionStatus === "stopped" || sessionStatus === "interrupted";
-  // Keep local preparation feedback mounted until the server can render the
-  // running turn or its startup error on the canonical thread route.
-  return turnStarted || startupStopped ? input.serverThreadRef : null;
+  // A worktree bootstrap persists the user message before the turn, so the
+  // thread route can render the send and the live setup by itself. Otherwise
+  // keep the draft mounted until the server can render the running turn or
+  // its startup error.
+  const messagePersisted =
+    input.serverThread?.messages.some((message) => message.role === "user") ?? false;
+  return turnStarted || startupStopped || messagePersisted ? input.serverThreadRef : null;
 }
 
 export function scheduleEnvironmentReconnectWarning(showWarning: () => void): () => void {
@@ -487,6 +500,7 @@ export function buildLocalDraftThread(
     createdAt: draftThread.createdAt,
     updatedAt: draftThread.createdAt,
     archivedAt: null,
+    deliveryStatus: null,
     settledOverride: null,
     settledAt: null,
     deletedAt: null,
@@ -597,16 +611,14 @@ export function resolveComposerProviderSelection(input: {
   };
 }
 
-/** Keep restored drafts and every plan control on the selected instance's supported mode. */
+/** Keep restored drafts and every interaction control on the selected instance's supported mode. */
 export function resolveComposerInteractionMode(input: {
+  /** Retained while older settings payloads still carry the retired beta flag. */
   planModeEnabled: boolean;
   provider: Pick<ServerProvider, "showInteractionModeToggle"> | null | undefined;
   interactionMode: ProviderInteractionMode;
 }): { enabled: boolean; interactionMode: ProviderInteractionMode } {
-  const enabled =
-    input.planModeEnabled &&
-    input.provider != null &&
-    input.provider.showInteractionModeToggle !== false;
+  const enabled = input.provider != null && input.provider.showInteractionModeToggle !== false;
   return {
     enabled,
     interactionMode: enabled ? input.interactionMode : "default",
@@ -1402,4 +1414,67 @@ export function restorePlanFollowUpComposer(input: {
     prompt: input.snapshot.prompt,
     detectTrigger: true,
   });
+}
+
+const PROVIDER_MIGRATION_TRANSCRIPT_MAX_CHARS = 24_000;
+const PROVIDER_MIGRATION_MESSAGE_MAX_CHARS = 4_000;
+
+/**
+ * A driver switch abandons the source provider session, so nothing the target
+ * driver receives comes from the old conversation. This renders the visible
+ * transcript as plain text the user can read, trim, and send as the first turn
+ * on the target driver. It is deliberately lossy and never throws: an escape
+ * hatch that fails on a long thread is not an escape hatch.
+ */
+export function buildProviderMigrationPrompt(input: {
+  messages: ReadonlyArray<Pick<ChatMessage, "role" | "text" | "streaming">>;
+  sourceLabel: string;
+  targetLabel: string;
+  maxChars?: number;
+}): string {
+  const maxChars = input.maxChars ?? PROVIDER_MIGRATION_TRANSCRIPT_MAX_CHARS;
+  const rendered = input.messages
+    .filter((message) => !message.streaming && message.text.trim().length > 0)
+    .map((message) => {
+      const text = message.text.trim();
+      const body =
+        text.length > PROVIDER_MIGRATION_MESSAGE_MAX_CHARS
+          ? `${text.slice(0, PROVIDER_MIGRATION_MESSAGE_MAX_CHARS)}\n[… message truncated …]`
+          : text;
+      return `## ${message.role}\n${body}`;
+    });
+
+  // The opening ask is what the rest of the thread refers back to, so it
+  // survives truncation even when the tail is what fits.
+  const first = rendered[0];
+  const tail: string[] = [];
+  let used = first?.length ?? 0;
+  let omitted = 0;
+  for (let index = rendered.length - 1; index >= 1; index -= 1) {
+    const entry = rendered[index]!;
+    if (used + entry.length > maxChars) {
+      omitted = index;
+      break;
+    }
+    used += entry.length;
+    tail.unshift(entry);
+  }
+
+  const parts = [
+    ...(first ? [first] : []),
+    ...(omitted > 0 ? [`## note\n[… ${omitted} earlier message(s) omitted …]`] : []),
+    ...tail,
+  ];
+
+  return [
+    `This thread moved from ${input.sourceLabel} to ${input.targetLabel}. The previous provider session does not carry over, so the conversation so far is reproduced below.`,
+    "",
+    "---",
+    "",
+    ...(parts.length > 0 ? [parts.join("\n\n")] : ["(no transcript available)"]),
+    "",
+    "---",
+    "",
+    "Continue from here.",
+  ].join("\n");
 }

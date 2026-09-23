@@ -20,7 +20,89 @@ const decodeServerSettingsPatch = Schema.decodeUnknownSync(ServerSettingsPatch);
 const encodeServerSettings = Schema.encodeSync(ServerSettings);
 const decodeClaudeSettings = Schema.decodeUnknownSync(ClaudeSettings);
 
+describe("storage cleanup settings", () => {
+  it("keeps cleanup disabled for existing installations", () => {
+    expect(decodeServerSettings({}).worktreeCleanup).toBeNull();
+    expect(decodeServerSettings({}).storageCleanup).toEqual({
+      worktreeAfterDays: null,
+      worktreeOnMerge: false,
+      worktreeOnDelete: false,
+      worktreeUnchanged: false,
+      browserArtifactsAfterDays: null,
+      logsAfterDays: null,
+    });
+  });
+
+  it("accepts eight-day retention and disabling one rule without resetting others", () => {
+    expect(decodeServerSettingsPatch({ storageCleanup: { worktreeAfterDays: 8 } })).toEqual({
+      storageCleanup: { worktreeAfterDays: 8 },
+    });
+    expect(decodeServerSettingsPatch({ storageCleanup: { worktreeAfterDays: null } })).toEqual({
+      storageCleanup: { worktreeAfterDays: null },
+    });
+  });
+
+  it("accepts partial custom patches but requires complete stored project rules", () => {
+    expect(
+      decodeServerSettingsPatch({
+        worktreeCleanup: { mode: "custom", rules: { worktreeAfterDays: 8 } },
+      }),
+    ).toEqual({ worktreeCleanup: { mode: "custom", rules: { worktreeAfterDays: 8 } } });
+    expect(() =>
+      decodeServerSettings({
+        projectSettingsOverrides: {
+          project: { worktreeCleanup: { mode: "custom", rules: { worktreeAfterDays: 8 } } },
+        },
+      }),
+    ).toThrow();
+  });
+
+  it.each([0, -1, 1.5, 3651])("rejects invalid retention %s", (days) => {
+    expect(() =>
+      decodeServerSettingsPatch({ storageCleanup: { browserArtifactsAfterDays: days } }),
+    ).toThrow();
+  });
+});
+
+describe("ClientSettings rich text composer", () => {
+  it("enables rich text for new and existing settings without a saved preference", () => {
+    expect(decodeClientSettings({}).composerRichTextEnabled).toBe(true);
+    expect(decodeClientSettings({ sendShortcut: "mod-enter" }).composerRichTextEnabled).toBe(true);
+  });
+
+  it("preserves an explicit opt-out through patches and persistence", () => {
+    const preference = { composerRichTextEnabled: false };
+    expect(decodeClientSettingsPatch(preference)).toEqual(preference);
+    expect(encodeClientSettings(decodeClientSettings(preference))).toMatchObject(preference);
+  });
+});
+
 describe("ServerSettings default permissions", () => {
+  it("defaults portable capability access to no configured profile", () => {
+    expect(decodeServerSettings({}).capabilityProfile).toBeNull();
+    expect(DEFAULT_SERVER_SETTINGS.capabilityProfile).toBeNull();
+  });
+
+  it("decodes a secret-free capability profile patch as a whole replacement", () => {
+    const capabilityProfile = {
+      schemaVersion: 1 as const,
+      profileId: "workstation",
+      name: "Workstation",
+      capabilities: [
+        {
+          capabilityId: "firebase.logs.read",
+          state: "enabled" as const,
+          credentialRef: { kind: "environment-variable" as const, id: "FIREBASE_PROFILE" },
+        },
+      ],
+    };
+
+    expect(decodeServerSettingsPatch({ capabilityProfile }).capabilityProfile).toEqual(
+      capabilityProfile,
+    );
+    expect(decodeServerSettingsPatch({ capabilityProfile: null }).capabilityProfile).toBeNull();
+  });
+
   it("keeps full access for settings saved before a default was configured", () => {
     expect(decodeServerSettings({}).defaultRuntimeMode).toBe("full-access");
     expect(DEFAULT_SERVER_SETTINGS.defaultRuntimeMode).toBe("full-access");
@@ -214,8 +296,8 @@ describe("ClientSettings notifications", () => {
 });
 
 describe("ClientSettings default diff file state", () => {
-  it("keeps files expanded when existing settings omit the preference", () => {
-    expect(decodeClientSettings({}).diffFilesCollapsed).toBe(false);
+  it("keeps files collapsed when existing settings omit the preference", () => {
+    expect(decodeClientSettings({}).diffFilesCollapsed).toBe(true);
   });
 
   it.each([true, false])("preserves a saved collapsed preference of %s", (diffFilesCollapsed) => {
@@ -256,6 +338,34 @@ describe("ClientSettings load balancing", () => {
     expect(decodeClientSettingsPatch({ loadBalancingEnabled }).loadBalancingEnabled).toBe(
       loadBalancingEnabled,
     );
+  });
+});
+
+describe("ClientSettings machine health thresholds", () => {
+  it("defaults to no per-environment overrides", () => {
+    expect(decodeClientSettings({}).machineHealthThresholds).toEqual({});
+  });
+
+  it("preserves bounded per-environment thresholds", () => {
+    const machineHealthThresholds = {
+      local: { attentionPercent: 75, criticalPercent: 92 },
+    };
+    expect(decodeClientSettings({ machineHealthThresholds }).machineHealthThresholds).toEqual(
+      machineHealthThresholds,
+    );
+    expect(decodeClientSettingsPatch({ machineHealthThresholds }).machineHealthThresholds).toEqual(
+      machineHealthThresholds,
+    );
+  });
+
+  it("rejects percentages outside the supported bounds", () => {
+    expect(() =>
+      decodeClientSettings({
+        machineHealthThresholds: {
+          local: { attentionPercent: 0, criticalPercent: 100 },
+        },
+      }),
+    ).toThrow();
   });
 });
 
@@ -526,6 +636,30 @@ describe("ClientSettings context window meter", () => {
     expect(
       decodeClientSettingsPatch({ contextWindowMeterEnabled: true }).contextWindowMeterEnabled,
     ).toBe(true);
+  });
+});
+
+describe("ClientSettings send shortcut", () => {
+  it("defaults to Enter and validates the supported choices", () => {
+    expect(decodeClientSettings({}).sendShortcut).toBe("enter");
+    for (const sendShortcut of ["enter", "mod-enter-multiline", "mod-enter"]) {
+      expect(decodeClientSettings({ sendShortcut }).sendShortcut).toBe(sendShortcut);
+      expect(decodeClientSettingsPatch({ sendShortcut }).sendShortcut).toBe(sendShortcut);
+    }
+    expect(() => decodeClientSettingsPatch({ sendShortcut: "invalid" })).toThrow();
+  });
+});
+
+describe("ClientSettings follow-up behavior", () => {
+  it("defaults to queue and accepts either behavior", () => {
+    expect(decodeClientSettings({}).followUpBehavior).toBe("queue");
+    for (const followUpBehavior of ["queue", "steer"]) {
+      expect(decodeClientSettings({ followUpBehavior }).followUpBehavior).toBe(followUpBehavior);
+      expect(decodeClientSettingsPatch({ followUpBehavior }).followUpBehavior).toBe(
+        followUpBehavior,
+      );
+    }
+    expect(() => decodeClientSettingsPatch({ followUpBehavior: "invalid" })).toThrow();
   });
 });
 

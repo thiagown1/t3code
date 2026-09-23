@@ -1035,6 +1035,11 @@ export function createServerEnvironmentAtoms<R, E>(
       tag: WS_METHODS.subscribeResourceTelemetry,
       idleTtlMs: 0,
     }),
+    resourceTelemetrySummary: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+      label: "environment-data:server:resource-telemetry-summary",
+      tag: WS_METHODS.subscribeResourceTelemetrySummary,
+      idleTtlMs: 0,
+    }),
     resourceTelemetryHistory: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:server:resource-telemetry-history",
       tag: WS_METHODS.serverGetResourceTelemetryHistory,
@@ -1071,6 +1076,55 @@ export function createServerEnvironmentAtoms<R, E>(
             input.cwd ?? null,
             input.refreshModels ?? false,
           ]),
+      },
+    }),
+    resolveEnvironmentBundleCredentials: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:resolve-environment-bundle-credentials",
+      tag: WS_METHODS.serverResolveEnvironmentBundleCredentials,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId, input }) => JSON.stringify([environmentId, input.credentialRefs]),
+      },
+    }),
+    planEnvironmentBundleApply: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:plan-environment-bundle-apply",
+      tag: WS_METHODS.serverPlanEnvironmentBundleApply,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId, input }) =>
+          JSON.stringify([environmentId, input.current.bundleId, input.incoming]),
+      },
+    }),
+    applyEnvironmentBundle: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:apply-environment-bundle",
+      tag: WS_METHODS.serverApplyEnvironmentBundle,
+      concurrency: {
+        mode: "serial",
+        key: ({ environmentId }) => String(environmentId),
+      },
+    }),
+    exportThreadBundle: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:export-thread-bundle",
+      tag: WS_METHODS.serverExportThreadBundle,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId, input }) => JSON.stringify([environmentId, input.threadIds]),
+      },
+    }),
+    planThreadBundleImport: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:plan-thread-bundle-import",
+      tag: WS_METHODS.serverPlanThreadBundleImport,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId, input }) => JSON.stringify([environmentId, input.bundle.bundleId]),
+      },
+    }),
+    importThreadBundle: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:import-thread-bundle",
+      tag: WS_METHODS.serverImportThreadBundle,
+      concurrency: {
+        mode: "serial",
+        key: ({ environmentId }) => String(environmentId),
       },
     }),
     updateProvider: createEnvironmentRpcCommand(runtime, {

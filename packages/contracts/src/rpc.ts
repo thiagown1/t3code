@@ -24,6 +24,30 @@ import {
   HostPowerSnapshot,
 } from "./background.ts";
 import {
+  EnvironmentBundleApplyError,
+  EnvironmentBundleApplyInput,
+  EnvironmentBundleApplyPlan,
+  EnvironmentBundleApplyPlanInput,
+  EnvironmentBundleApplyResult,
+  EnvironmentBundleCredentialResolutions,
+} from "./environmentBundle.ts";
+import { PortableCredentialReference } from "./capabilityProfile.ts";
+import {
+  ThreadBundle,
+  ThreadBundleExportError,
+  ThreadBundleExportInput,
+  ThreadBundleImportApplyInput,
+  ThreadBundleImportError,
+  ThreadBundleImportPlan,
+  ThreadBundleImportPlanInput,
+  ThreadBundleImportResult,
+} from "./threadBundle.ts";
+import {
+  ThreadProviderHandoffRpcError,
+  ThreadProviderHandoffStartInput,
+  ThreadProviderHandoffStartResult,
+} from "./threadProviderHandoff.ts";
+import {
   FilesystemBrowseInput,
   FilesystemBrowseResult,
   FilesystemBrowseError,
@@ -113,6 +137,7 @@ import {
   PullRequestDetail,
   PullRequestDiffFileContentsInput,
   PullRequestDiffFileContentsResult,
+  PullRequestFilesViewedResult,
   PullRequestInvalidateInput,
   PullRequestListInput,
   PullRequestListResult,
@@ -131,6 +156,7 @@ import {
   PullRequestReviewerRequestInput,
   PullRequestLabelCandidateList,
   PullRequestLabelChangeInput,
+  PullRequestSetFilesViewedInput,
   PullRequestSubmitReviewInput,
   PullRequestThreadCommentsInput,
   PullRequestThreadCommentsResult,
@@ -241,6 +267,7 @@ import {
   ResourceTelemetryHistoryInput,
   ResourceTelemetryRetryResult,
   ResourceTelemetrySnapshot,
+  ResourceTelemetrySummary,
 } from "./resourceTelemetry.ts";
 import {
   UsageLimitSourceError,
@@ -249,6 +276,14 @@ import {
 } from "./providerUsageLimits.ts";
 import { UsagePricing, UsageReadError, UsageSummary, UsageSummaryInput } from "./usage.ts";
 import { ServerSettings, ServerSettingsError, ServerSettingsPatch } from "./settings.ts";
+import {
+  ProjectCloneActionInput,
+  ProjectCloneActionResult,
+  ProjectCloneListEvent,
+  ProjectCloneStartInput,
+  ProjectCloneStartResult,
+  ProjectCloneSubscribeInput,
+} from "./projectClone.ts";
 import {
   SourceControlCloneRepositoryInput,
   SourceControlCloneRepositoryResult,
@@ -358,6 +393,12 @@ export const WS_METHODS = {
   serverRemoveKeybinding: "server.removeKeybinding",
   serverGetSettings: "server.getSettings",
   serverUpdateSettings: "server.updateSettings",
+  serverResolveEnvironmentBundleCredentials: "server.resolveEnvironmentBundleCredentials",
+  serverPlanEnvironmentBundleApply: "server.planEnvironmentBundleApply",
+  serverApplyEnvironmentBundle: "server.applyEnvironmentBundle",
+  serverExportThreadBundle: "server.exportThreadBundle",
+  serverPlanThreadBundleImport: "server.planThreadBundleImport",
+  serverImportThreadBundle: "server.importThreadBundle",
   serverDiscoverSourceControl: "server.discoverSourceControl",
   serverGetTraceDiagnostics: "server.getTraceDiagnostics",
   serverGetProcessDiagnostics: "server.getProcessDiagnostics",
@@ -388,6 +429,8 @@ export const WS_METHODS = {
   pullRequestsActivity: "pullRequests.activity",
   pullRequestsThreadComments: "pullRequests.threadComments",
   pullRequestsDiffFileContents: "pullRequests.diffFileContents",
+  pullRequestsFilesViewed: "pullRequests.filesViewed",
+  pullRequestsSetFilesViewed: "pullRequests.setFilesViewed",
   pullRequestsRunAction: "pullRequests.runAction",
   pullRequestsUpdate: "pullRequests.update",
   pullRequestsComment: "pullRequests.comment",
@@ -407,6 +450,10 @@ export const WS_METHODS = {
   sourceControlLookupRepository: "sourceControl.lookupRepository",
   sourceControlCloneRepository: "sourceControl.cloneRepository",
   sourceControlPublishRepository: "sourceControl.publishRepository",
+  projectCloneStart: "projectClone.start",
+  projectCloneCancel: "projectClone.cancel",
+  projectCloneRetry: "projectClone.retry",
+  subscribeProjectClones: "subscribeProjectClones",
 
   // Streaming subscriptions
   subscribeVcsStatus: "subscribeVcsStatus",
@@ -422,6 +469,7 @@ export const WS_METHODS = {
   subscribeAuthAccess: "subscribeAuthAccess",
   subscribeBackgroundPolicy: "subscribeBackgroundPolicy",
   subscribeResourceTelemetry: "subscribeResourceTelemetry",
+  subscribeResourceTelemetrySummary: "subscribeResourceTelemetrySummary",
 } as const;
 
 const WsServerUpsertKeybindingRpc = Rpc.make(WS_METHODS.serverUpsertKeybinding, {
@@ -564,6 +612,50 @@ const WsServerUpdateSettingsRpc = Rpc.make(WS_METHODS.serverUpdateSettings, {
   payload: Schema.Struct({ patch: ServerSettingsPatch }),
   success: ServerSettings,
   error: Schema.Union([ServerSettingsError, EnvironmentAuthorizationError]),
+});
+
+const WsServerResolveEnvironmentBundleCredentialsRpc = Rpc.make(
+  WS_METHODS.serverResolveEnvironmentBundleCredentials,
+  {
+    payload: Schema.Struct({
+      credentialRefs: Schema.Array(PortableCredentialReference).check(Schema.isMaxLength(512)),
+    }),
+    success: EnvironmentBundleCredentialResolutions,
+    error: EnvironmentAuthorizationError,
+  },
+);
+
+const WsServerPlanEnvironmentBundleApplyRpc = Rpc.make(
+  WS_METHODS.serverPlanEnvironmentBundleApply,
+  {
+    payload: EnvironmentBundleApplyPlanInput,
+    success: EnvironmentBundleApplyPlan,
+    error: Schema.Union([EnvironmentBundleApplyError, EnvironmentAuthorizationError]),
+  },
+);
+
+const WsServerApplyEnvironmentBundleRpc = Rpc.make(WS_METHODS.serverApplyEnvironmentBundle, {
+  payload: EnvironmentBundleApplyInput,
+  success: EnvironmentBundleApplyResult,
+  error: Schema.Union([EnvironmentBundleApplyError, EnvironmentAuthorizationError]),
+});
+
+const WsServerExportThreadBundleRpc = Rpc.make(WS_METHODS.serverExportThreadBundle, {
+  payload: ThreadBundleExportInput,
+  success: ThreadBundle,
+  error: Schema.Union([ThreadBundleExportError, EnvironmentAuthorizationError]),
+});
+
+const WsServerPlanThreadBundleImportRpc = Rpc.make(WS_METHODS.serverPlanThreadBundleImport, {
+  payload: ThreadBundleImportPlanInput,
+  success: ThreadBundleImportPlan,
+  error: Schema.Union([ThreadBundleImportError, EnvironmentAuthorizationError]),
+});
+
+const WsServerImportThreadBundleRpc = Rpc.make(WS_METHODS.serverImportThreadBundle, {
+  payload: ThreadBundleImportApplyInput,
+  success: ThreadBundleImportResult,
+  error: Schema.Union([ThreadBundleImportError, EnvironmentAuthorizationError]),
 });
 
 const WsServerDiscoverSourceControlRpc = Rpc.make(WS_METHODS.serverDiscoverSourceControl, {
@@ -739,6 +831,18 @@ const WsPullRequestsDiffFileContentsRpc = Rpc.make(WS_METHODS.pullRequestsDiffFi
   error: PullRequestRpcError,
 });
 
+const WsPullRequestsFilesViewedRpc = Rpc.make(WS_METHODS.pullRequestsFilesViewed, {
+  payload: PullRequestRef,
+  success: PullRequestFilesViewedResult,
+  error: PullRequestRpcError,
+});
+
+const WsPullRequestsSetFilesViewedRpc = Rpc.make(WS_METHODS.pullRequestsSetFilesViewed, {
+  payload: PullRequestSetFilesViewedInput,
+  success: Schema.Void,
+  error: PullRequestRpcError,
+});
+
 const WsPullRequestsRunActionRpc = Rpc.make(WS_METHODS.pullRequestsRunAction, {
   payload: PullRequestActionInput,
   success: Schema.Void,
@@ -840,6 +944,37 @@ const WsSourceControlCloneRepositoryRpc = Rpc.make(WS_METHODS.sourceControlClone
   payload: SourceControlCloneRepositoryInput,
   success: SourceControlCloneRepositoryResult,
   error: Schema.Union([SourceControlRepositoryError, EnvironmentAuthorizationError]),
+});
+
+// Clone-backed project creation. `start` returns once the project exists and
+// the clone is running; progress arrives on the subscription.
+const WsProjectCloneStartRpc = Rpc.make(WS_METHODS.projectCloneStart, {
+  payload: ProjectCloneStartInput,
+  success: ProjectCloneStartResult,
+  error: Schema.Union([
+    SourceControlRepositoryError,
+    OrchestrationDispatchCommandError,
+    EnvironmentAuthorizationError,
+  ]),
+});
+
+const WsProjectCloneCancelRpc = Rpc.make(WS_METHODS.projectCloneCancel, {
+  payload: ProjectCloneActionInput,
+  success: ProjectCloneActionResult,
+  error: EnvironmentAuthorizationError,
+});
+
+const WsProjectCloneRetryRpc = Rpc.make(WS_METHODS.projectCloneRetry, {
+  payload: ProjectCloneActionInput,
+  success: ProjectCloneActionResult,
+  error: Schema.Union([SourceControlRepositoryError, EnvironmentAuthorizationError]),
+});
+
+const WsSubscribeProjectClonesRpc = Rpc.make(WS_METHODS.subscribeProjectClones, {
+  payload: ProjectCloneSubscribeInput,
+  success: ProjectCloneListEvent,
+  error: EnvironmentAuthorizationError,
+  stream: true,
 });
 
 const WsSourceControlPublishRepositoryRpc = Rpc.make(WS_METHODS.sourceControlPublishRepository, {
@@ -1234,6 +1369,21 @@ const WsOrchestrationGetArchivedShellSnapshotRpc = Rpc.make(
   },
 );
 
+const WsOrchestrationPreviewThreadCleanupRpc = Rpc.make(
+  ORCHESTRATION_WS_METHODS.previewThreadCleanup,
+  {
+    payload: OrchestrationRpcSchemas.previewThreadCleanup.input,
+    success: OrchestrationRpcSchemas.previewThreadCleanup.output,
+    error: Schema.Union([OrchestrationGetSnapshotError, EnvironmentAuthorizationError]),
+  },
+);
+
+const WsOrchestrationHandoffThreadRpc = Rpc.make(ORCHESTRATION_WS_METHODS.handoffThread, {
+  payload: ThreadProviderHandoffStartInput,
+  success: ThreadProviderHandoffStartResult,
+  error: Schema.Union([ThreadProviderHandoffRpcError, EnvironmentAuthorizationError]),
+});
+
 const WsOrchestrationSubscribeShellRpc = Rpc.make(ORCHESTRATION_WS_METHODS.subscribeShell, {
   payload: OrchestrationRpcSchemas.subscribeShell.input,
   success: OrchestrationRpcSchemas.subscribeShell.output,
@@ -1314,6 +1464,16 @@ const WsSubscribeResourceTelemetryRpc = Rpc.make(WS_METHODS.subscribeResourceTel
   stream: true,
 });
 
+const WsSubscribeResourceTelemetrySummaryRpc = Rpc.make(
+  WS_METHODS.subscribeResourceTelemetrySummary,
+  {
+    payload: Schema.Struct({}),
+    success: ResourceTelemetrySummary,
+    error: EnvironmentAuthorizationError,
+    stream: true,
+  },
+);
+
 export const WsRpcGroup = RpcGroup.make(
   WsServerProbeRpc,
   WsServerGetConfigRpc,
@@ -1336,6 +1496,12 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerRemoveKeybindingRpc,
   WsServerGetSettingsRpc,
   WsServerUpdateSettingsRpc,
+  WsServerResolveEnvironmentBundleCredentialsRpc,
+  WsServerPlanEnvironmentBundleApplyRpc,
+  WsServerApplyEnvironmentBundleRpc,
+  WsServerExportThreadBundleRpc,
+  WsServerPlanThreadBundleImportRpc,
+  WsServerImportThreadBundleRpc,
   WsServerDiscoverSourceControlRpc,
   WsServerGetTraceDiagnosticsRpc,
   WsServerGetProcessDiagnosticsRpc,
@@ -1362,6 +1528,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsPullRequestsActivityRpc,
   WsPullRequestsThreadCommentsRpc,
   WsPullRequestsDiffFileContentsRpc,
+  WsPullRequestsFilesViewedRpc,
+  WsPullRequestsSetFilesViewedRpc,
   WsPullRequestsRunActionRpc,
   WsPullRequestsUpdateRpc,
   WsPullRequestsCommentRpc,
@@ -1379,6 +1547,10 @@ export const WsRpcGroup = RpcGroup.make(
   WsSourceControlLookupRepositoryRpc,
   WsSourceControlCloneRepositoryRpc,
   WsSourceControlPublishRepositoryRpc,
+  WsProjectCloneStartRpc,
+  WsProjectCloneCancelRpc,
+  WsProjectCloneRetryRpc,
+  WsSubscribeProjectClonesRpc,
   WsProjectsListEntriesRpc,
   WsProjectsReadFileRpc,
   WsProjectsSearchContentsRpc,
@@ -1443,12 +1615,15 @@ export const WsRpcGroup = RpcGroup.make(
   WsSubscribeAuthAccessRpc,
   WsSubscribeBackgroundPolicyRpc,
   WsSubscribeResourceTelemetryRpc,
+  WsSubscribeResourceTelemetrySummaryRpc,
   WsOrchestrationDispatchCommandRpc,
   WsOrchestrationGetWorkflowScriptRpc,
   WsOrchestrationGetTurnDiffRpc,
   WsOrchestrationGetFullThreadDiffRpc,
   WsOrchestrationSearchThreadsRpc,
   WsOrchestrationGetArchivedShellSnapshotRpc,
+  WsOrchestrationPreviewThreadCleanupRpc,
+  WsOrchestrationHandoffThreadRpc,
   WsOrchestrationSubscribeShellRpc,
   WsOrchestrationSubscribeThreadRpc,
 );

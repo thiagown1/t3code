@@ -1,5 +1,7 @@
+// @effect-diagnostics nodeBuiltinImport:off - Effect FileSystem has no filesystem-capacity query.
+import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
-import type { HostResourcesSnapshot } from "@t3tools/contracts";
+import type { HostResourcesSnapshot, HostStorageSnapshot } from "@t3tools/contracts";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as Cache from "effect/Cache";
 import * as Context from "effect/Context";
@@ -7,12 +9,18 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 export class HostResources extends Context.Service<
   HostResources,
   { readonly read: Effect.Effect<HostResourcesSnapshot> }
 >()("t3/resourceTelemetry/HostResources") {}
+
+class HostStorageReadError extends Schema.TaggedError<HostStorageReadError>()(
+  "HostStorageReadError",
+  { cause: Schema.Defect() },
+) {}
 
 function readCpu() {
   const cpus = NodeOS.cpus();
@@ -36,6 +44,35 @@ function darwinAvailableMemory(output: string): number | null {
   // Adding them here counts each reclaimable page once; purgeable pages overlap.
   const available = (Number(free) + Number(inactive) + Number(speculative)) * Number(pageSize);
   return Number.isSafeInteger(available) && Number(pageSize) > 0 ? available : null;
+}
+
+interface StatFsCapacity {
+  readonly bavail: number;
+  readonly blocks: number;
+  readonly bsize: number;
+}
+
+export function workspaceStorageSnapshot(stats: StatFsCapacity): HostStorageSnapshot {
+  const totalBytes = stats.blocks * stats.bsize;
+  const availableBytes = stats.bavail * stats.bsize;
+  if (
+    !Number.isSafeInteger(totalBytes) ||
+    !Number.isSafeInteger(availableBytes) ||
+    totalBytes <= 0 ||
+    availableBytes < 0
+  ) {
+    return { status: "error", volumes: [] };
+  }
+  return {
+    status: "available",
+    volumes: [
+      {
+        kind: "workspace",
+        availableBytes: Math.min(totalBytes, availableBytes),
+        totalBytes,
+      },
+    ],
+  };
 }
 
 export const make = Effect.fn("makeHostResources")(function* () {
@@ -72,12 +109,20 @@ export const make = Effect.fn("makeHostResources")(function* () {
         );
       availableMemoryBytes = darwinAvailableMemory(output) ?? availableMemoryBytes;
     }
+    const storage = yield* Effect.tryPromise({
+      try: () => NodeFSP.statfs(process.cwd()),
+      catch: (cause) => new HostStorageReadError({ cause }),
+    }).pipe(
+      Effect.map(workspaceStorageSnapshot),
+      Effect.orElseSucceed((): HostStorageSnapshot => ({ status: "error", volumes: [] })),
+    );
     return {
       sampledAt: DateTime.toEpochMillis(yield* DateTime.now),
       cpuUtilization,
       cpuCount: cpu.count,
       availableMemoryBytes: Math.min(totalMemoryBytes, Math.max(0, availableMemoryBytes)),
       totalMemoryBytes,
+      storage,
     };
   });
 

@@ -6,6 +6,8 @@ import { TextGenerationError } from "@t3tools/contracts";
 
 import * as ProviderInstanceRegistry from "../provider/Services/ProviderInstanceRegistry.ts";
 import type { ProviderInstance } from "../provider/ProviderDriver.ts";
+import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
+import * as ThreadTitleLinks from "./ThreadTitleLinks.ts";
 import type { TextGenerationPolicy } from "./TextGenerationPolicy.ts";
 
 export type TextGenerationProvider = "codex" | "claudeAgent" | "cursor" | "grok" | "opencode";
@@ -60,6 +62,7 @@ export interface BranchNameGenerationResult {
 }
 
 export interface ThreadTitleGenerationInput {
+  linkedContext?: string | undefined;
   cwd: string;
   message: string;
   /** Present when replacing an existing title from the current thread history. */
@@ -71,6 +74,24 @@ export interface ThreadTitleGenerationInput {
 
 export interface ThreadTitleGenerationResult {
   title: string;
+  needsRefinement?: boolean | undefined;
+}
+
+export interface RoundSummaryGenerationInput {
+  cwd: string;
+  /** What the topic must achieve, as its author described it. */
+  topicTitle: string;
+  topicSummary: string;
+  /** Bounded transcript of the single round being summarized. */
+  transcript: string;
+  policy?: TextGenerationPolicy | undefined;
+  /** What model and provider to use for generation. */
+  modelSelection: ModelSelection;
+}
+
+export interface RoundSummaryGenerationResult {
+  /** Empty when the model returned nothing usable. */
+  summary: string;
 }
 
 /**
@@ -104,6 +125,14 @@ export class TextGeneration extends Context.Service<
     readonly generateThreadTitle: (
       input: ThreadTitleGenerationInput,
     ) => Effect.Effect<ThreadTitleGenerationResult, TextGenerationError>;
+
+    /**
+     * Summarize one finished round of a delegated thread for an orchestrator.
+     * Runs on the project's text generation model, not the thread's.
+     */
+    readonly generateRoundSummary: (
+      input: RoundSummaryGenerationInput,
+    ) => Effect.Effect<RoundSummaryGenerationResult, TextGenerationError>;
   }
 >()("t3/textGeneration/TextGeneration") {}
 
@@ -111,7 +140,8 @@ type TextGenerationOp =
   | "generateCommitMessage"
   | "generatePrContent"
   | "generateBranchName"
-  | "generateThreadTitle";
+  | "generateThreadTitle"
+  | "generateRoundSummary";
 
 const resolveInstance = (
   registry: ProviderInstanceRegistry.ProviderInstanceRegistry["Service"],
@@ -131,10 +161,11 @@ const resolveInstance = (
     ),
   );
 
-export const makeTextGenerationFromRegistry = (
-  registry: ProviderInstanceRegistry.ProviderInstanceRegistry["Service"],
-): TextGeneration["Service"] =>
-  TextGeneration.of({
+/** @public Service construction is part of the canonical Effect module API. */
+export const make = Effect.gen(function* () {
+  const registry = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
+  const sourceControl = yield* SourceControlProviderRegistry.SourceControlProviderRegistry;
+  return TextGeneration.of({
     generateCommitMessage: (input) =>
       resolveInstance(registry, "generateCommitMessage", input.modelSelection.instanceId).pipe(
         Effect.flatMap((textGeneration) => textGeneration.generateCommitMessage(input)),
@@ -149,14 +180,25 @@ export const makeTextGenerationFromRegistry = (
       ),
     generateThreadTitle: (input) =>
       resolveInstance(registry, "generateThreadTitle", input.modelSelection.instanceId).pipe(
-        Effect.flatMap((textGeneration) => textGeneration.generateThreadTitle(input)),
+        Effect.flatMap((textGeneration) =>
+          Effect.gen(function* () {
+            const linkedContext =
+              input.linkedContext ??
+              (yield* ThreadTitleLinks.resolveThreadTitleLinks(input).pipe(
+                Effect.provideService(
+                  SourceControlProviderRegistry.SourceControlProviderRegistry,
+                  sourceControl,
+                ),
+              ));
+            return yield* textGeneration.generateThreadTitle({ ...input, linkedContext });
+          }),
+        ),
+      ),
+    generateRoundSummary: (input) =>
+      resolveInstance(registry, "generateRoundSummary", input.modelSelection.instanceId).pipe(
+        Effect.flatMap((textGeneration) => textGeneration.generateRoundSummary(input)),
       ),
   });
-
-/** @public Service construction is part of the canonical Effect module API. */
-export const make = Effect.gen(function* () {
-  const registry = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
-  return makeTextGenerationFromRegistry(registry);
 });
 
 export const layer = Layer.effect(TextGeneration, make);

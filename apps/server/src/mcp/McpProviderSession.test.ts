@@ -1,5 +1,41 @@
 import { describe, expect, it } from "vite-plus/test";
-import { withAgentDeviceEnvironment } from "./McpProviderSession.ts";
+import { EnvironmentId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import {
+  clearAllMcpProviderSessions,
+  clearMcpProviderSession,
+  readMcpProviderSession,
+  setMcpProviderSession,
+  withAgentDeviceEnvironment,
+} from "./McpProviderSession.ts";
+
+describe("provider-scoped MCP sessions", () => {
+  const threadId = ThreadId.make("thread-handoff");
+  const sourceInstanceId = ProviderInstanceId.make("codex-source");
+  const targetInstanceId = ProviderInstanceId.make("claude-target");
+  const config = (providerInstanceId: ProviderInstanceId, providerSessionId: string) => ({
+    environmentId: EnvironmentId.make("environment-handoff"),
+    threadId,
+    providerSessionId,
+    providerInstanceId,
+    endpoint: "http://127.0.0.1/mcp",
+    authorizationHeader: "Bearer fixture",
+    capabilities: new Set<string>(),
+  });
+
+  it("keeps the source credential when a target starts and removes only the aborted target", () => {
+    clearAllMcpProviderSessions();
+    const source = config(sourceInstanceId, "source-session");
+    const target = config(targetInstanceId, "target-session");
+    setMcpProviderSession(source);
+    setMcpProviderSession(target);
+    expect(readMcpProviderSession(threadId, sourceInstanceId)).toEqual(source);
+    expect(readMcpProviderSession(threadId, targetInstanceId)).toEqual(target);
+    expect(readMcpProviderSession(threadId)).toBeUndefined();
+    clearMcpProviderSession(threadId, targetInstanceId);
+    expect(readMcpProviderSession(threadId, sourceInstanceId)).toEqual(source);
+    clearAllMcpProviderSessions();
+  });
+});
 
 describe("device CLI environment", () => {
   it("preserves provider credentials and commands while routing devices to the owned daemon", () => {

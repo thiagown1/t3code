@@ -18,6 +18,7 @@ import type {
 } from "@t3tools/client-runtime/state/subagentRuntime";
 import {
   formatSubagentModelLabel,
+  formatSubagentSourceLabel,
   formatSubagentTokenCount,
 } from "@t3tools/client-runtime/state/subagentRuntime";
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
@@ -143,12 +144,14 @@ function AgentRow({ agent }: { agent: RuntimeSubagent }) {
     agent.kind === "subagent_batch" && agent.status === "idle" ? "Idle" : visuals.label;
   const activity = agentActivityText(agent);
   const modelLabel = formatSubagentModelLabel(agent.model, agent.effort);
+  const sourceLabel = formatSubagentSourceLabel(agent.modelSource, agent.effortSource);
   const role =
     agent.role?.trim().toLocaleLowerCase() === agent.title.trim().toLocaleLowerCase()
       ? null
       : agent.role;
   const metadata = [
     modelLabel,
+    sourceLabel,
     agent.usage ? `${formatSubagentTokenCount(agent.usage.totalTokens)} tok` : "— tok",
     agent.usage?.toolUses !== undefined ? `${agent.usage.toolUses} tools` : null,
     agent.activationCount > 1 ? `run ${agent.activationCount}` : null,

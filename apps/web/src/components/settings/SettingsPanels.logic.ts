@@ -7,6 +7,7 @@ import type {
   ProviderInstanceId,
   ServerSettings,
   SidebarProjectGroupingMode,
+  ThreadArchiveReceipt,
   UnifiedSettings,
 } from "@t3tools/contracts";
 import { DEFAULT_UNIFIED_SETTINGS } from "@t3tools/contracts/settings";
@@ -21,6 +22,28 @@ import * as Equal from "effect/Equal";
 
 export function isProjectGroupingEnabled(mode: SidebarProjectGroupingMode): boolean {
   return mode !== "separate";
+}
+
+export type ArchiveReceiptPresentationTone = "success" | "warning" | "neutral" | "error";
+
+export function archiveReceiptPresentation(receipt: ThreadArchiveReceipt | null | undefined): {
+  readonly text: string;
+  readonly tone: ArchiveReceiptPresentationTone;
+} {
+  if (receipt === null || receipt === undefined) {
+    return { text: "Archive result pending", tone: "neutral" };
+  }
+  if (receipt.tone === "error" || receipt.provider.status === "failed") {
+    return { text: receipt.summary, tone: "error" };
+  }
+  switch (receipt.provider.status) {
+    case "archived":
+      return { text: receipt.summary, tone: "success" };
+    case "unsupported":
+      return { text: receipt.summary, tone: "warning" };
+    case "not-linked":
+      return { text: receipt.summary, tone: "neutral" };
+  }
 }
 
 export function projectGroupingModeFromToggle(

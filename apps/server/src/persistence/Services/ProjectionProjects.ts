@@ -8,6 +8,7 @@
  */
 import {
   IsoDateTime,
+  FirstMateWorkspaceState,
   ModelSelection,
   ProjectIconOverride,
   ProjectId,
@@ -31,6 +32,7 @@ export const ProjectionProject = Schema.Struct({
   faviconPath: Schema.optional(Schema.NullOr(Schema.String)),
   projectIcon: Schema.optional(Schema.NullOr(ProjectIconOverride)),
   scripts: Schema.Array(ProjectScript),
+  firstMate: Schema.optional(Schema.NullOr(FirstMateWorkspaceState)),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   deletedAt: Schema.NullOr(IsoDateTime),

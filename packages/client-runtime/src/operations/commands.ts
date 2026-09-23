@@ -1,6 +1,7 @@
 import {
   CommandId,
   ORCHESTRATION_WS_METHODS,
+  type ThreadProviderHandoffStartInput,
   type ClientOrchestrationCommand,
 } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
@@ -49,6 +50,8 @@ export type UnlinkThreadPullRequestInput = CommandInput<"thread.pull-request.unl
 export type SetThreadRuntimeModeInput = CommandInput<"thread.runtime-mode.set">;
 export type SetThreadInteractionModeInput = CommandInput<"thread.interaction-mode.set">;
 export type StartThreadTurnInput = CommandInput<"thread.turn.start">;
+export type EnqueueThreadMessageInput = CommandInput<"thread.queued-message.enqueue">;
+export type UpdateThreadQueuedMessageInput = CommandInput<"thread.queued-message.update">;
 export type InterruptThreadTurnInput = CommandInput<"thread.turn.interrupt">;
 export type RespondToThreadApprovalInput = CommandInput<"thread.approval.respond">;
 export type RespondToThreadUserInputInput = CommandInput<"thread.user-input.respond">;
@@ -57,6 +60,20 @@ export type RevertThreadCheckpointInput = CommandInput<"thread.checkpoint.revert
   readonly restoreFiles?: boolean;
 };
 export type StopThreadSessionInput = CommandInput<"thread.session.stop">;
+export type LinkFirstMateSupervisorInput = CommandInput<"firstmate.supervisor.link">;
+export type CreateFirstMateTopicInput = CommandInput<"firstmate.topic.create">;
+export type SelectFirstMateTopicInput = CommandInput<"firstmate.topic.select">;
+export type RecordFirstMateRoutingInput = CommandInput<"firstmate.routing.record">;
+export type SetFirstMateRoutingEvaluationModeInput =
+  CommandInput<"firstmate.routing-evaluation-mode.set">;
+export type OpenFirstMateDecisionInput = CommandInput<"firstmate.decision.open">;
+export type ResolveFirstMateDecisionInput = CommandInput<"firstmate.decision.resolve">;
+export type CancelFirstMateDecisionInput = CommandInput<"firstmate.decision.cancel">;
+export type HandoffThreadInput = ThreadProviderHandoffStartInput;
+
+export const handoffThread = Effect.fn("EnvironmentCommands.handoffThread")(
+  (input: HandoffThreadInput) => request(ORCHESTRATION_WS_METHODS.handoffThread, input),
+);
 
 type DispatchTag = typeof ORCHESTRATION_WS_METHODS.dispatchCommand;
 type CommandEffect = Effect.Effect<
@@ -91,6 +108,99 @@ function timestampedCommandMetadata(input: {
 function dispatch(command: ClientOrchestrationCommand) {
   return request(ORCHESTRATION_WS_METHODS.dispatchCommand, command);
 }
+
+export const linkFirstMateSupervisor: (input: LinkFirstMateSupervisorInput) => CommandEffect =
+  Effect.fn("EnvironmentCommands.linkFirstMateSupervisor")(function* (input) {
+    const metadata = yield* timestampedCommandMetadata(input);
+    return yield* dispatch({
+      ...input,
+      type: "firstmate.supervisor.link",
+      commandId: metadata.commandId,
+      createdAt: metadata.createdAt,
+    });
+  });
+
+export const createFirstMateTopic: (input: CreateFirstMateTopicInput) => CommandEffect = Effect.fn(
+  "EnvironmentCommands.createFirstMateTopic",
+)(function* (input) {
+  const metadata = yield* timestampedCommandMetadata(input);
+  return yield* dispatch({
+    ...input,
+    type: "firstmate.topic.create",
+    commandId: metadata.commandId,
+    createdAt: metadata.createdAt,
+  });
+});
+
+export const selectFirstMateTopic: (input: SelectFirstMateTopicInput) => CommandEffect = Effect.fn(
+  "EnvironmentCommands.selectFirstMateTopic",
+)(function* (input) {
+  const metadata = yield* timestampedCommandMetadata(input);
+  return yield* dispatch({
+    ...input,
+    type: "firstmate.topic.select",
+    commandId: metadata.commandId,
+    createdAt: metadata.createdAt,
+  });
+});
+
+export const recordFirstMateRouting: (input: RecordFirstMateRoutingInput) => CommandEffect =
+  Effect.fn("EnvironmentCommands.recordFirstMateRouting")(function* (input) {
+    const metadata = yield* timestampedCommandMetadata(input);
+    return yield* dispatch({
+      ...input,
+      type: "firstmate.routing.record",
+      commandId: metadata.commandId,
+      createdAt: metadata.createdAt,
+    });
+  });
+
+export const setFirstMateRoutingEvaluationMode: (
+  input: SetFirstMateRoutingEvaluationModeInput,
+) => CommandEffect = Effect.fn("EnvironmentCommands.setFirstMateRoutingEvaluationMode")(
+  function* (input) {
+    const metadata = yield* timestampedCommandMetadata(input);
+    return yield* dispatch({
+      ...input,
+      type: "firstmate.routing-evaluation-mode.set",
+      commandId: metadata.commandId,
+      createdAt: metadata.createdAt,
+    });
+  },
+);
+
+export const openFirstMateDecision: (input: OpenFirstMateDecisionInput) => CommandEffect =
+  Effect.fn("EnvironmentCommands.openFirstMateDecision")(function* (input) {
+    const metadata = yield* timestampedCommandMetadata(input);
+    return yield* dispatch({
+      ...input,
+      type: "firstmate.decision.open",
+      commandId: metadata.commandId,
+      createdAt: metadata.createdAt,
+    });
+  });
+
+export const resolveFirstMateDecision: (input: ResolveFirstMateDecisionInput) => CommandEffect =
+  Effect.fn("EnvironmentCommands.resolveFirstMateDecision")(function* (input) {
+    const metadata = yield* timestampedCommandMetadata(input);
+    return yield* dispatch({
+      ...input,
+      type: "firstmate.decision.resolve",
+      commandId: metadata.commandId,
+      createdAt: metadata.createdAt,
+    });
+  });
+
+export const cancelFirstMateDecision: (input: CancelFirstMateDecisionInput) => CommandEffect =
+  Effect.fn("EnvironmentCommands.cancelFirstMateDecision")(function* (input) {
+    const metadata = yield* timestampedCommandMetadata(input);
+    return yield* dispatch({
+      ...input,
+      type: "firstmate.decision.cancel",
+      commandId: metadata.commandId,
+      createdAt: metadata.createdAt,
+    });
+  });
 
 export const createProject: (input: CreateProjectInput) => CommandEffect = Effect.fn(
   "EnvironmentCommands.createProject",
@@ -308,6 +418,34 @@ export const startThreadTurn: (input: StartThreadTurnInput) => CommandEffect = E
     createdAt: metadata.createdAt,
   });
 });
+
+/**
+ * Hold a message on the server until the thread reaches a boundary. Unlike a
+ * turn start it does not run anything now, and unlike a client-side queue it
+ * keeps moving after the sender navigates away or disconnects.
+ */
+export const enqueueThreadMessage: (input: EnqueueThreadMessageInput) => CommandEffect = Effect.fn(
+  "EnvironmentCommands.enqueueThreadMessage",
+)(function* (input) {
+  const metadata = yield* timestampedCommandMetadata(input);
+  return yield* dispatch({
+    ...input,
+    type: "thread.queued-message.enqueue",
+    commandId: metadata.commandId,
+    createdAt: metadata.createdAt,
+  });
+});
+
+export const updateThreadQueuedMessage: (input: UpdateThreadQueuedMessageInput) => CommandEffect =
+  Effect.fn("EnvironmentCommands.updateThreadQueuedMessage")(function* (input) {
+    const metadata = yield* timestampedCommandMetadata(input);
+    return yield* dispatch({
+      ...input,
+      type: "thread.queued-message.update",
+      commandId: metadata.commandId,
+      createdAt: metadata.createdAt,
+    });
+  });
 
 export const interruptThreadTurn: (input: InterruptThreadTurnInput) => CommandEffect = Effect.fn(
   "EnvironmentCommands.interruptThreadTurn",

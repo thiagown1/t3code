@@ -7,6 +7,7 @@ import {
   ThreadPullRequestLinkSource,
   ThreadPullRequestSnapshot,
   ThreadPullRequestStack,
+  ThreadPullRequestSupervision,
   TrimmedNonEmptyString,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
@@ -30,8 +31,14 @@ export const ProjectionThreadPullRequest = Schema.Struct({
   linkedAt: IsoDateTime,
   snapshot: Schema.NullOr(ThreadPullRequestSnapshot),
   stack: Schema.NullOr(ThreadPullRequestStack),
+  supervision: Schema.optional(Schema.NullOr(ThreadPullRequestSupervision)),
 });
 export type ProjectionThreadPullRequest = typeof ProjectionThreadPullRequest.Type;
+
+function omitEmptySupervision(row: ProjectionThreadPullRequest): ProjectionThreadPullRequest {
+  const { supervision, ...link } = row;
+  return supervision == null ? link : { ...link, supervision };
+}
 
 export const ListProjectionThreadPullRequestsInput = Schema.Struct({
   threadId: ThreadId,
@@ -67,6 +74,7 @@ const ProjectionThreadPullRequestDbRow = ProjectionThreadPullRequest.mapFields(
   Struct.assign({
     snapshot: Schema.NullOr(Schema.fromJsonString(ThreadPullRequestSnapshot)),
     stack: Schema.NullOr(Schema.fromJsonString(ThreadPullRequestStack)),
+    supervision: Schema.NullOr(Schema.fromJsonString(ThreadPullRequestSupervision)),
   }),
 );
 
@@ -110,7 +118,8 @@ export const make = Effect.gen(function* () {
         source,
         linked_at,
         snapshot_json,
-        stack_json
+        stack_json,
+        supervision_json
       )
       VALUES (
         ${row.threadId},
@@ -121,7 +130,8 @@ export const make = Effect.gen(function* () {
         ${row.source},
         ${row.linkedAt},
         ${row.snapshot === null ? null : JSON.stringify(row.snapshot)},
-        ${row.stack === null ? null : JSON.stringify(row.stack)}
+        ${row.stack === null ? null : JSON.stringify(row.stack)},
+        ${row.supervision == null ? null : JSON.stringify(row.supervision)}
       )
       ON CONFLICT (thread_id, host, repository, number)
       DO UPDATE SET
@@ -129,7 +139,8 @@ export const make = Effect.gen(function* () {
         source = excluded.source,
         linked_at = excluded.linked_at,
         snapshot_json = excluded.snapshot_json,
-        stack_json = excluded.stack_json
+        stack_json = excluded.stack_json,
+        supervision_json = excluded.supervision_json
     `,
   });
 
@@ -146,7 +157,8 @@ export const make = Effect.gen(function* () {
         source,
         linked_at AS "linkedAt",
         snapshot_json AS "snapshot",
-        stack_json AS "stack"
+        stack_json AS "stack",
+        supervision_json AS "supervision"
       FROM projection_thread_pull_requests
       WHERE thread_id = ${threadId}
       ORDER BY linked_at ASC, number ASC
@@ -166,7 +178,8 @@ export const make = Effect.gen(function* () {
         source,
         linked_at AS "linkedAt",
         snapshot_json AS "snapshot",
-        stack_json AS "stack"
+        stack_json AS "stack",
+        supervision_json AS "supervision"
       FROM projection_thread_pull_requests
       WHERE host = ${host}
         AND repository = ${repository}
@@ -212,6 +225,7 @@ export const make = Effect.gen(function* () {
     input,
   ) =>
     listProjectionThreadPullRequestRows(input).pipe(
+      Effect.map((rows) => rows.map(omitEmptySupervision)),
       Effect.mapError(
         toPersistenceSqlError("ProjectionThreadPullRequestRepository.listByThreadId:query"),
       ),
@@ -221,6 +235,7 @@ export const make = Effect.gen(function* () {
     input,
   ) =>
     listProjectionThreadPullRequestRowsByPullRequest(normalizeThreadPullRequestKey(input)).pipe(
+      Effect.map((rows) => rows.map(omitEmptySupervision)),
       Effect.mapError(
         toPersistenceSqlError("ProjectionThreadPullRequestRepository.listByPullRequest:query"),
       ),

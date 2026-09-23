@@ -420,6 +420,7 @@ describe("OrchestrationEngine", () => {
       Layer.provide(
         Layer.succeed(ProjectionSnapshotQuery, {
           getUserInputActivity: () => Effect.die("unused"),
+          listActivitiesByKind: () => Effect.die("unused"),
           getCommandReadModel: () => Effect.succeed(commandReadModel),
           getSnapshot: () =>
             Effect.sync(() => {
@@ -433,6 +434,7 @@ describe("OrchestrationEngine", () => {
               threads: [],
               updatedAt: projectionSnapshot.updatedAt,
             }),
+          getDeletedWorktreeThreads: () => Effect.die("unused"),
           getArchivedShellSnapshot: () =>
             Effect.succeed({
               snapshotSequence: projectionSnapshot.snapshotSequence,
@@ -661,6 +663,28 @@ describe("OrchestrationEngine", () => {
             })
             .pipe(Effect.flip);
           expect(livenessError._tag).toBe("OrchestrationCommandInvariantError");
+          expect(yield* engine.latestSequence).toBe(livenessSnapshotSequence);
+          const wakeError = yield* engine
+            .dispatch({
+              type: "thread.pull-request.supervise",
+              action: "wake",
+              commandId: CommandId.make(`supervision-live-${expectedLiveness}`),
+              threadId: liveThreadId,
+              host: "github.com",
+              repository: "owner/repo",
+              number: 1,
+              owner: "firstmate:00000000-0000-4000-8000-000000000001",
+              environmentKey: "test",
+              baseRef: "main",
+              headRef: "feature",
+              resumeKey: "observed",
+              message: "Repair",
+            })
+            .pipe(Effect.flip);
+          expect(wakeError).toMatchObject({
+            _tag: "OrchestrationCommandInvariantError",
+            detail: `thread ${liveThreadId} has live background work`,
+          });
           expect(yield* engine.latestSequence).toBe(livenessSnapshotSequence);
           backgroundLiveness.clearThreadLiveness(liveThreadId);
         }

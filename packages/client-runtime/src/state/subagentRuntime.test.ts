@@ -4,6 +4,7 @@ import {
   deriveAgentPanelModel,
   foldSubagentActivities,
   formatSubagentModelLabel,
+  formatSubagentSourceLabel,
   formatSubagentTokenCount,
 } from "./subagentRuntime.ts";
 
@@ -570,6 +571,8 @@ describe("model and effort attribution", () => {
         title: "Verify math",
         model: "sonnet",
         effort: "high",
+        modelSource: "explicit",
+        effortSource: "inherited",
       }),
       // Later row refines with the authoritative API model id; effort absent
       // must not clear the known value.
@@ -578,6 +581,11 @@ describe("model and effort attribution", () => {
     expect(agents).toHaveLength(1);
     expect(agents[0]!.model).toBe("claude-sonnet-5[1m]");
     expect(agents[0]!.effort).toBe("high");
+    expect(agents[0]!.modelSource).toBe("explicit");
+    expect(agents[0]!.effortSource).toBe("inherited");
+    expect(formatSubagentSourceLabel(agents[0]!.modelSource, agents[0]!.effortSource)).toBe(
+      "modelo explícito · esforço herdado",
+    );
   });
 
   it("applies metadata-only updates without changing the current status", () => {
@@ -586,6 +594,8 @@ describe("model and effort attribution", () => {
         taskId: "task-metadata",
         title: "Check metadata",
         status: "waiting",
+        modelSource: "inherited",
+        effortSource: "explicit",
       }),
       activity("task.updated", {
         taskId: "task-metadata",
@@ -595,6 +605,8 @@ describe("model and effort attribution", () => {
     ];
     const waitingAgent = fold(waitingRows)[0]!;
     expect(waitingAgent.status).toBe("waiting");
+    expect(waitingAgent.modelSource).toBe("inherited");
+    expect(waitingAgent.effortSource).toBe("explicit");
     expect(formatSubagentModelLabel(waitingAgent.model, waitingAgent.effort)).toBe(
       "gpt-5.6-sol · high",
     );
@@ -602,9 +614,16 @@ describe("model and effort attribution", () => {
     const idleRows = [
       ...waitingRows,
       activity("task.updated", { taskId: "task-metadata", status: "idle" }),
-      activity("task.updated", { taskId: "task-metadata", model: "gpt-5.6-sol" }),
+      activity("task.updated", {
+        taskId: "task-metadata",
+        model: "gpt-5.6-sol",
+        modelSource: "unknown",
+      }),
     ];
-    expect(fold(idleRows)[0]!.status).toBe("idle");
+    const idleAgent = fold(idleRows)[0]!;
+    expect(idleAgent.status).toBe("idle");
+    expect(idleAgent.modelSource).toBe("inherited");
+    expect(idleAgent.effortSource).toBe("explicit");
 
     const completedAgent = fold([
       ...idleRows,
@@ -615,6 +634,8 @@ describe("model and effort attribution", () => {
     expect(completedAgent.status).toBe("completed");
     expect(completedAgent.model).toBe("gpt-5.6-sol");
     expect(completedAgent.effort).toBe("high");
+    expect(completedAgent.modelSource).toBe("inherited");
+    expect(completedAgent.effortSource).toBe("explicit");
   });
 
   it("formatSubagentModelLabel compacts ids and appends effort", () => {
@@ -622,6 +643,13 @@ describe("model and effort attribution", () => {
     expect(formatSubagentModelLabel("claude-opus-4-20250514", null)).toBe("opus-4");
     expect(formatSubagentModelLabel("gpt-5.6-sol", "low")).toBe("gpt-5.6-sol · low");
     expect(formatSubagentModelLabel(null, "high")).toBeNull();
+  });
+
+  it("does not claim provenance for legacy or unknown rows", () => {
+    expect(formatSubagentSourceLabel(null, null)).toBeNull();
+    expect(formatSubagentSourceLabel("unknown", "unknown")).toBeNull();
+    expect(formatSubagentSourceLabel("inherited", null)).toBe("modelo herdado");
+    expect(formatSubagentSourceLabel(null, "explicit")).toBe("esforço explícito");
   });
 });
 

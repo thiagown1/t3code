@@ -5,9 +5,11 @@ import {
   type ChatAttachment,
   type OrchestrationEvent,
   type OrchestrationSessionStatus,
+  ProjectId,
   ThreadId,
 } from "@t3tools/contracts";
 import { compareDateTimeStrings } from "@t3tools/shared/dateTime";
+import { createEmptyFirstMateWorkspace, projectFirstMateEvent } from "@t3tools/shared/firstMate";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -511,6 +513,10 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             faviconPath: event.payload.faviconPath ?? null,
             projectIcon: event.payload.projectIcon ?? null,
             scripts: event.payload.scripts,
+            firstMate: createEmptyFirstMateWorkspace(
+              event.payload.projectId,
+              event.payload.createdAt,
+            ),
             createdAt: event.payload.createdAt,
             updatedAt: event.payload.updatedAt,
             deletedAt: null,
@@ -560,6 +566,28 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             ...existingRow.value,
             deletedAt: event.payload.deletedAt,
             updatedAt: event.payload.deletedAt,
+          });
+          return;
+        }
+
+        case "firstmate.domain-event": {
+          if (event.aggregateKind !== "project") return;
+          const existingRow = yield* projectionProjectRepository.getById({
+            projectId: ProjectId.make(event.aggregateId),
+          });
+          if (Option.isNone(existingRow)) return;
+          const current =
+            existingRow.value.firstMate ??
+            createEmptyFirstMateWorkspace(existingRow.value.projectId, existingRow.value.createdAt);
+          const firstMate = projectFirstMateEvent(current, {
+            ...event.payload,
+            occurredAt: event.occurredAt,
+          });
+          if (firstMate === current) return;
+          yield* projectionProjectRepository.upsert({
+            ...existingRow.value,
+            firstMate,
+            updatedAt: event.occurredAt,
           });
           return;
         }
@@ -625,6 +653,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             createdAt: event.payload.createdAt,
             updatedAt: event.payload.updatedAt,
             archivedAt: null,
+            deliveryStatus: null,
             settledOverride: null,
             settledAt: null,
             unsettledAt: null,
@@ -670,6 +699,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           yield* projectionThreadRepository.upsert({
             ...existingRow.value,
             archivedAt: null,
+            deliveryStatus: null,
             updatedAt: event.payload.updatedAt,
           });
           return;
@@ -810,6 +840,9 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             ...(event.payload.activeOrderKey !== undefined
               ? { activeOrderKey: event.payload.activeOrderKey }
               : {}),
+            ...(event.payload.titleState !== undefined
+              ? { titleState: event.payload.titleState }
+              : {}),
             ...(event.payload.titleRegeneration !== undefined
               ? {
                   titleRegenerationRequestId: event.payload.titleRegeneration?.requestId ?? null,
@@ -828,6 +861,9 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
               : {}),
             ...(event.payload.branchPullRequest !== undefined
               ? { branchPullRequest: event.payload.branchPullRequest }
+              : {}),
+            ...(event.payload.deliveryStatus !== undefined
+              ? { deliveryStatus: event.payload.deliveryStatus }
               : {}),
             updatedAt: event.payload.updatedAt,
           });
@@ -1672,6 +1708,18 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             threadId: event.payload.threadId,
             turnId: event.payload.turnId,
           });
+          // Do not let a placeholder (status "missing") overwrite a checkpoint
+          // that has already been captured with a real git ref. In-memory
+          // projectEvent already refuses this. SQL did not, so thread detail
+          // and diffs could show missing after a ready capture.
+          if (
+            Option.isSome(existingTurn) &&
+            existingTurn.value.checkpointStatus !== null &&
+            existingTurn.value.checkpointStatus !== "missing" &&
+            event.payload.status === "missing"
+          ) {
+            return;
+          }
           const nextState = event.payload.status === "error" ? "error" : "completed";
           yield* projectionTurnRepository.clearCheckpointTurnConflict({
             threadId: event.payload.threadId,

@@ -25,11 +25,13 @@ import {
   buildBranchNamePrompt,
   buildCommitMessagePrompt,
   buildPrContentPrompt,
+  buildRoundSummaryPrompt,
   buildThreadTitlePrompt,
 } from "./TextGenerationPrompts.ts";
 import {
   sanitizeCommitSubject,
   sanitizePrTitle,
+  sanitizeRoundSummary,
   sanitizeThreadTitle,
 } from "./TextGenerationUtils.ts";
 
@@ -394,11 +396,30 @@ export const makeAntigravityTextGeneration = Effect.fn("makeAntigravityTextGener
         ...buildThreadTitlePrompt({
           message: input.message,
           previousTitle: input.previousTitle,
+          linkedContext: input.linkedContext,
           attachments: input.attachments,
         }),
         modelSelection: input.modelSelection,
       });
-      return { title: sanitizeThreadTitle(generated.title) };
+      return {
+        title: sanitizeThreadTitle(generated.title),
+        ...(generated.needsRefinement ? { needsRefinement: true } : {}),
+      };
+    });
+
+  const generateRoundSummary: TextGeneration.TextGeneration["Service"]["generateRoundSummary"] =
+    Effect.fn("AntigravityTextGeneration.generateRoundSummary")(function* (input) {
+      const generated = yield* runAntigravityJson({
+        operation: "generateRoundSummary",
+        ...buildRoundSummaryPrompt({
+          topicTitle: input.topicTitle,
+          topicSummary: input.topicSummary,
+          transcript: input.transcript,
+          policy: input.policy,
+        }),
+        modelSelection: input.modelSelection,
+      });
+      return { summary: sanitizeRoundSummary(generated.summary) };
     });
 
   return {
@@ -406,5 +427,6 @@ export const makeAntigravityTextGeneration = Effect.fn("makeAntigravityTextGener
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
+    generateRoundSummary,
   } satisfies TextGeneration.TextGeneration["Service"];
 });

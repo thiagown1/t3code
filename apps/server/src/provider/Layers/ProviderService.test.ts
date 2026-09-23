@@ -104,6 +104,9 @@ const claudeAgentInstanceId = ProviderInstanceId.make("claudeAgent");
 const CODEX_DRIVER = ProviderDriverKind.make("codex");
 const CLAUDE_AGENT_DRIVER = ProviderDriverKind.make("claudeAgent");
 const CURSOR_DRIVER = ProviderDriverKind.make("cursor");
+const GROK_DRIVER = ProviderDriverKind.make("grok");
+const OPENCODE_DRIVER = ProviderDriverKind.make("opencode");
+const ANTIGRAVITY_DRIVER = ProviderDriverKind.make("antigravity");
 
 const assistantQuoteText = 'Keep the shared parser for "résumé".\nPreserve line breaks.';
 const assistantCitation = {
@@ -257,6 +260,10 @@ function makeFakeCodexAdapter(
       Effect.succeed({ threadId, turns: [] }),
   );
 
+  const archiveThread = vi.fn(
+    (_threadId: ThreadId): Effect.Effect<void, ProviderAdapterError> => Effect.void,
+  );
+
   const uploadFeedback = vi.fn(
     (
       input: ProviderUploadFeedbackInput,
@@ -294,6 +301,7 @@ function makeFakeCodexAdapter(
     hasSession,
     readThread,
     rollbackThread,
+    ...(provider === CODEX_DRIVER ? { archiveThread } : {}),
     ...(provider === CODEX_DRIVER ? { uploadFeedback } : {}),
     stopAll,
     get streamEvents() {
@@ -331,6 +339,7 @@ function makeFakeCodexAdapter(
     hasSession,
     readThread,
     rollbackThread,
+    archiveThread,
     uploadFeedback,
     stopAll,
   };
@@ -424,12 +433,18 @@ function makeProviderServiceLayer(
   const codex = makeFakeCodexAdapter(CODEX_DRIVER, input.supportsConversationRollback);
   const claude = makeFakeCodexAdapter(CLAUDE_AGENT_DRIVER);
   const cursor = makeFakeCodexAdapter(CURSOR_DRIVER);
+  const grok = makeFakeCodexAdapter(GROK_DRIVER);
+  const opencode = makeFakeCodexAdapter(OPENCODE_DRIVER);
+  const antigravity = makeFakeCodexAdapter(ANTIGRAVITY_DRIVER);
   const registry =
     input.registry ??
     makeAdapterRegistryMock({
       [ProviderDriverKind.make("codex")]: codex.adapter,
       [ProviderDriverKind.make("claudeAgent")]: claude.adapter,
       [ProviderDriverKind.make("cursor")]: cursor.adapter,
+      [ProviderDriverKind.make("grok")]: grok.adapter,
+      [ProviderDriverKind.make("opencode")]: opencode.adapter,
+      [ProviderDriverKind.make("antigravity")]: antigravity.adapter,
     });
 
   const providerAdapterLayer = Layer.succeed(
@@ -471,6 +486,9 @@ function makeProviderServiceLayer(
     codex,
     claude,
     cursor,
+    grok,
+    opencode,
+    antigravity,
     layer,
   };
 }
@@ -1546,6 +1564,170 @@ it.effect(
 );
 
 routing.layer("ProviderServiceLive routing", (it) => {
+  const clearHandoffMocks = () => {
+    routing.codex.startSession.mockClear();
+    routing.codex.stopSession.mockClear();
+    routing.codex.sendTurn.mockClear();
+    routing.claude.startSession.mockClear();
+    routing.claude.stopSession.mockClear();
+    routing.claude.sendTurn.mockClear();
+  };
+  it.effect("keeps the source bound until the staged target completes its context turn", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+      const threadId = asThreadId("thread-staged-handoff-success");
+      yield* provider.startSession(threadId, {
+        threadId,
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        runtimeMode: "full-access",
+      });
+      yield* provider.stageHandoffTarget!(threadId, {
+        threadId,
+        provider: CLAUDE_AGENT_DRIVER,
+        providerInstanceId: claudeAgentInstanceId,
+        runtimeMode: "full-access",
+      });
+      yield* Effect.yieldNow;
+      const before = yield* directory.getBinding(threadId);
+      assert(Option.isSome(before));
+      assert.equal(before.value.providerInstanceId, codexInstanceId);
+      assert.equal(
+        routing.codex.stopSession.mock.calls.filter(([id]) => id === threadId).length,
+        0,
+      );
+      assert.deepEqual(
+        (yield* provider.listSessions())
+          .filter((session) => session.threadId === threadId)
+          .map((session) => session.provider),
+        [CODEX_DRIVER],
+      );
+
+      const turnId = asTurnId("turn-staged-context-success");
+      routing.claude.sendTurn.mockImplementationOnce(() =>
+        Effect.sync(() => {
+          routing.claude.emit({
+            type: "turn.completed",
+            eventId: asEventId("evt-staged-context-success"),
+            provider: CLAUDE_AGENT_DRIVER,
+            createdAt: "2026-01-01T00:00:00.000Z",
+            threadId,
+            turnId,
+          });
+          return { threadId, turnId };
+        }),
+      );
+      yield* provider.sendStagedHandoffContext!({ threadId, input: "Portable context" });
+      const stillSource = yield* directory.getBinding(threadId);
+      assert(Option.isSome(stillSource));
+      assert.equal(stillSource.value.providerInstanceId, codexInstanceId);
+      yield* provider.commitStagedHandoffTarget!(threadId);
+      const after = yield* directory.getBinding(threadId);
+      assert(Option.isSome(after));
+      assert.equal(after.value.providerInstanceId, claudeAgentInstanceId);
+      assert.equal(yield* routing.codex.hasSession(threadId), true);
+      yield* provider.finalizeStagedHandoffTarget!(threadId);
+      assert.equal(
+        routing.codex.stopSession.mock.calls.filter(([id]) => id === threadId).length,
+        1,
+      );
+      yield* provider.stopSession({ threadId });
+      clearHandoffMocks();
+    }),
+  );
+
+  it.effect("keeps the source usable when the staged context turn aborts", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+      const threadId = asThreadId("thread-staged-handoff-abort");
+      yield* provider.startSession(threadId, {
+        threadId,
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        runtimeMode: "full-access",
+      });
+      yield* provider.stageHandoffTarget!(threadId, {
+        threadId,
+        provider: CLAUDE_AGENT_DRIVER,
+        providerInstanceId: claudeAgentInstanceId,
+        runtimeMode: "full-access",
+      });
+      yield* Effect.yieldNow;
+      const turnId = asTurnId("turn-staged-context-abort");
+      routing.claude.sendTurn.mockImplementationOnce(() =>
+        Effect.sync(() => {
+          routing.claude.emit({
+            type: "turn.aborted",
+            eventId: asEventId("evt-staged-context-abort"),
+            provider: CLAUDE_AGENT_DRIVER,
+            createdAt: "2026-01-01T00:00:00.000Z",
+            threadId,
+            turnId,
+          });
+          return { threadId, turnId };
+        }),
+      );
+      const error = yield* Effect.flip(
+        provider.sendStagedHandoffContext!({ threadId, input: "Portable context" }),
+      );
+      assert.match(String(error), /target failed/i);
+      yield* provider.abortStagedHandoffTarget!(threadId);
+      const binding = yield* directory.getBinding(threadId);
+      assert(Option.isSome(binding));
+      assert.equal(binding.value.providerInstanceId, codexInstanceId);
+      assert.equal(yield* routing.codex.hasSession(threadId), true);
+      yield* provider.stopSession({ threadId });
+      clearHandoffMocks();
+    }),
+  );
+
+  it.effect("restores the source binding when a staged commit is rolled back", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+      const threadId = asThreadId("thread-staged-handoff-rollback");
+      yield* provider.startSession(threadId, {
+        threadId,
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        runtimeMode: "full-access",
+      });
+      yield* provider.stageHandoffTarget!(threadId, {
+        threadId,
+        provider: CLAUDE_AGENT_DRIVER,
+        providerInstanceId: claudeAgentInstanceId,
+        runtimeMode: "full-access",
+      });
+      yield* Effect.yieldNow;
+      const turnId = asTurnId("turn-staged-context-rollback");
+      routing.claude.sendTurn.mockImplementationOnce(() =>
+        Effect.sync(() => {
+          routing.claude.emit({
+            type: "turn.completed",
+            eventId: asEventId("evt-staged-context-rollback"),
+            provider: CLAUDE_AGENT_DRIVER,
+            createdAt: "2026-01-01T00:00:00.000Z",
+            threadId,
+            turnId,
+          });
+          return { threadId, turnId };
+        }),
+      );
+      yield* provider.sendStagedHandoffContext!({ threadId, input: "Portable context" });
+      yield* provider.commitStagedHandoffTarget!(threadId);
+      yield* provider.abortStagedHandoffTarget!(threadId);
+      const binding = yield* directory.getBinding(threadId);
+      assert(Option.isSome(binding));
+      assert.equal(binding.value.providerInstanceId, codexInstanceId);
+      assert.equal(yield* routing.codex.hasSession(threadId), true);
+      assert.equal(yield* routing.claude.hasSession(threadId), false);
+      yield* provider.stopSession({ threadId });
+      clearHandoffMocks();
+    }),
+  );
+
   it.effect.each([CODEX_DRIVER, CLAUDE_AGENT_DRIVER, CURSOR_DRIVER])(
     "rejects missing, file, and saved workspace paths before starting %s",
     (driver) =>
@@ -2091,6 +2273,187 @@ routing.layer("ProviderServiceLive routing", (it) => {
       assert.deepStrictEqual(routing.codex.uploadFeedback.mock.calls, [
         [{ threadId, reason: "The agent stopped early." }],
       ]);
+    }),
+  );
+
+  it.effect("routes native conversation archive to the active Codex adapter", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-archive-route");
+      yield* provider.startSession(threadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        threadId,
+        runtimeMode: "full-access",
+      });
+      routing.codex.archiveThread.mockClear();
+
+      const result = yield* provider.archiveConversation(threadId);
+
+      assert.deepStrictEqual(result, { provider: CODEX_DRIVER, status: "archived" });
+      assert.deepStrictEqual(routing.codex.archiveThread.mock.calls, [[threadId]]);
+    }),
+  );
+
+  it.effect("reports a thread without a provider binding as not linked", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-archive-not-linked");
+      routing.codex.archiveThread.mockClear();
+
+      const result = yield* provider.archiveConversation(threadId);
+
+      assert.deepStrictEqual(result, { status: "not-linked" });
+      assert.strictEqual(routing.codex.archiveThread.mock.calls.length, 0);
+    }),
+  );
+
+  it.effect("previews Codex cleanup without calling or starting an adapter", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-cleanup-preview-codex");
+      yield* provider.startSession(threadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        threadId,
+        runtimeMode: "full-access",
+      });
+      routing.codex.startSession.mockClear();
+      routing.codex.archiveThread.mockClear();
+      routing.codex.listSessions.mockClear();
+
+      const preview = yield* provider.previewThreadCleanup(threadId);
+
+      assert.deepStrictEqual(preview.provider, {
+        status: "linked",
+        provider: CODEX_DRIVER,
+        capabilities: {
+          archive: "supported",
+          unarchive: "known-not-implemented",
+          delete: "known-not-implemented",
+        },
+        transcript: {
+          archiveLocal: "preserved",
+          tombstoneLocal: "preserved",
+        },
+      });
+      assert.equal(routing.codex.startSession.mock.calls.length, 0);
+      assert.equal(routing.codex.archiveThread.mock.calls.length, 0);
+      assert.equal(routing.codex.listSessions.mock.calls.length, 0);
+    }),
+  );
+
+  it.effect("previews an unlinked cleanup without consulting any adapter", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-cleanup-preview-unlinked");
+      routing.codex.startSession.mockClear();
+      routing.codex.archiveThread.mockClear();
+      routing.claude.startSession.mockClear();
+
+      const preview = yield* provider.previewThreadCleanup(threadId);
+
+      assert.deepStrictEqual(preview.provider, {
+        status: "not-linked",
+        capabilities: {
+          archive: "not-linked",
+          unarchive: "not-linked",
+          delete: "not-linked",
+        },
+        transcript: "not-linked",
+      });
+      assert.equal(routing.codex.startSession.mock.calls.length, 0);
+      assert.equal(routing.codex.archiveThread.mock.calls.length, 0);
+      assert.equal(routing.claude.startSession.mock.calls.length, 0);
+    }),
+  );
+
+  it.effect("reports cleanup capabilities for every built-in provider without adapter calls", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const scenarios = [
+        [CLAUDE_AGENT_DRIVER, routing.claude],
+        [CURSOR_DRIVER, routing.cursor],
+        [GROK_DRIVER, routing.grok],
+        [OPENCODE_DRIVER, routing.opencode],
+        [ANTIGRAVITY_DRIVER, routing.antigravity],
+      ] as const;
+
+      for (const [driver, adapter] of scenarios) {
+        const threadId = asThreadId(`thread-cleanup-preview-${driver}`);
+        yield* provider.startSession(threadId, {
+          provider: driver,
+          providerInstanceId: ProviderInstanceId.make(driver),
+          threadId,
+          runtimeMode: "full-access",
+        });
+        adapter.startSession.mockClear();
+        adapter.archiveThread.mockClear();
+        adapter.listSessions.mockClear();
+
+        const preview = yield* provider.previewThreadCleanup(threadId);
+
+        assert.deepStrictEqual(preview.provider, {
+          status: "linked",
+          provider: driver,
+          capabilities: {
+            archive: "unsupported",
+            unarchive: "unsupported",
+            delete: "unsupported",
+          },
+          transcript: {
+            archiveLocal: "preserved",
+            tombstoneLocal: "preserved",
+          },
+        });
+        assert.equal(adapter.startSession.mock.calls.length, 0);
+        assert.equal(adapter.archiveThread.mock.calls.length, 0);
+        assert.equal(adapter.listSessions.mock.calls.length, 0);
+        yield* provider.stopSession({ threadId });
+      }
+    }),
+  );
+
+  it.effect("recovers a stopped Codex session before archiving its conversation", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-archive-recover");
+      yield* provider.startSession(threadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        threadId,
+        cwd: fixtureCwd("archive-project"),
+        runtimeMode: "full-access",
+      });
+      yield* routing.codex.stopSession(threadId);
+      routing.codex.startSession.mockClear();
+      routing.codex.archiveThread.mockClear();
+
+      const result = yield* provider.archiveConversation(threadId);
+
+      assert.deepStrictEqual(result, { provider: CODEX_DRIVER, status: "archived" });
+      assert.strictEqual(routing.codex.startSession.mock.calls.length, 1);
+      assert.deepStrictEqual(routing.codex.archiveThread.mock.calls, [[threadId]]);
+    }),
+  );
+
+  it.effect("reports unsupported without restarting a provider that has no archive API", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-archive-unsupported");
+      yield* provider.startSession(threadId, {
+        provider: CLAUDE_AGENT_DRIVER,
+        providerInstanceId: claudeAgentInstanceId,
+        threadId,
+        runtimeMode: "full-access",
+      });
+      yield* routing.claude.stopSession(threadId);
+      routing.claude.startSession.mockClear();
+
+      const result = yield* provider.archiveConversation(threadId);
+
+      assert.deepStrictEqual(result, { provider: CLAUDE_AGENT_DRIVER, status: "unsupported" });
+      assert.strictEqual(routing.claude.startSession.mock.calls.length, 0);
     }),
   );
 
@@ -4966,9 +5329,11 @@ describe("agent browser access", () => {
         getTurnStartMessage: () => Effect.die("unused"),
         getImportedAgentSessionSources: () => Effect.die("unused"),
         getUserInputActivity: () => Effect.die("unused"),
+        listActivitiesByKind: () => Effect.die("unused"),
         getCommandReadModel: () => Effect.die("unused"),
         getSnapshot: () => Effect.die("unused"),
         getShellSnapshot: () => Effect.die("unused"),
+        getDeletedWorktreeThreads: () => Effect.die("unused"),
         getArchivedShellSnapshot: () => Effect.die("unused"),
         getSnapshotSequence: () => Effect.die("unused"),
         getCounts: () => Effect.die("unused"),

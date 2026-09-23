@@ -1,3 +1,4 @@
+import { requestCustomSnooze } from "./CustomSnoozeDialog";
 import { useSupportsMultiplePullRequests } from "~/hooks/useSupportsMultiplePullRequests";
 import { resolveThreadCurrentPullRequestLink } from "@t3tools/shared/threadPullRequests";
 import { useAtomValue } from "@effect/atom-react";
@@ -33,6 +34,7 @@ import {
   type EnvironmentMachineKind,
   type ProjectIconOverride,
   type ScopedThreadRef,
+  type ThreadDeliveryStatus,
   type ThreadId,
 } from "@t3tools/contracts";
 import type { TimestampFormat } from "@t3tools/contracts/settings";
@@ -52,6 +54,7 @@ import {
   PinIcon,
   PinOffIcon,
   PlusIcon,
+  RocketIcon,
   SettingsIcon,
   ShieldQuestionIcon,
   SquarePenIcon,
@@ -115,6 +118,7 @@ import {
   useThreadSelectionStore,
 } from "../threadSelectionStore";
 import { useThreadActions } from "../hooks/useThreadActions";
+import { useThreadBundleExport } from "../hooks/useThreadBundleExport";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { isCommandPaletteOpen, openCommandPalette } from "../commandPaletteBus";
 import { startNewThreadFromContext } from "../lib/chatThreadActions";
@@ -130,10 +134,13 @@ import {
   useThreadShells,
 } from "../state/entities";
 import { environmentServerConfigsAtom, primaryServerKeybindingsAtom } from "../state/server";
+import { orchestrationEnvironment } from "../state/orchestration";
+import { environmentShell } from "../state/shell";
 import { vcsEnvironment } from "../state/vcs";
 import { threadEnvironment } from "../state/threads";
 import { useEnvironmentQuery } from "../state/query";
 import { useAtomCommand } from "../state/use-atom-command";
+import { appAtomRegistry } from "../rpc/atomRegistry";
 import {
   buildThreadRouteParams,
   resolveActiveThreadRouteRef,
@@ -150,6 +157,7 @@ import {
   animateSidebarLayoutChanges,
   applySidebarThreadDrop,
   buildBulkTitleRegenerationContextMenuItem,
+  buildBulkThreadBundleExportContextMenuItem,
   buildBulkUnpinContextMenuItem,
   deleteSelectedThreadEntries,
   filterSidebarProjectScopeItems,
@@ -168,6 +176,7 @@ import {
   resolveSidebarThreadStatus,
   searchSidebarThreads,
   shouldCreateNewThreadInCurrentProject,
+  shouldNavigateAfterThreadPark,
   shouldRecedeSidebarThread,
   resolveWorkingStartedAt,
   sidebarListItemId,
@@ -232,6 +241,18 @@ import {
 import { SidebarContent, SidebarGroup, useSidebar } from "./ui/sidebar";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
 import { SidebarHeaderIconButton, SidebarThreadHeader } from "./sidebar/SidebarThreadHeader";
+import {
+  FirstMateDecisionInbox,
+  type ResolveFirstMateDecisionRequest,
+} from "./firstMate/FirstMateDecisionInbox";
+import {
+  FirstMateTopicsPanel,
+  type SelectFirstMateTopicRequest,
+  type SetFirstMateRoutingEvaluationModeRequest,
+  type UnlinkFirstMateSupervisorRequest,
+  type LinkFirstMateSupervisorRequest,
+} from "./firstMate/FirstMateTopicsPanel";
+import { finalizeFirstMateShellCommand } from "./firstMate/firstMateShellCommand";
 import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
 import { Tooltip, TooltipPopup, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 import {
@@ -439,7 +460,7 @@ function SidebarThreadTooltip({
 function SnoozePopoverButton(props: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onSnooze: (preset: SnoozePreset) => void;
+  onSnooze: (preset: Pick<SnoozePreset, "snoozedUntil">) => void;
   timestampFormat: TimestampFormat;
 }) {
   const { open, onOpenChange, onSnooze, timestampFormat } = props;
@@ -489,6 +510,19 @@ function SnoozePopoverButton(props: {
             </span>
           </button>
         ))}
+        <div className="my-1 border-t border-border/60" />
+        <button
+          type="button"
+          className="flex w-full cursor-pointer rounded-md px-2 py-1.5 text-left text-xs text-foreground/90 hover:bg-accent hover:text-foreground"
+          onClick={async (event) => {
+            event.stopPropagation();
+            onOpenChange(false);
+            const choice = await requestCustomSnooze();
+            if (choice) onSnooze(choice);
+          }}
+        >
+          Custom…
+        </button>
       </PopoverPopup>
     </Popover>
   );
@@ -999,7 +1033,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   onContextMenu: (threadRef: ScopedThreadRef, position: { x: number; y: number }) => void;
   onSettle: (threadRef: ScopedThreadRef) => void;
   onUnsettle: (threadRef: ScopedThreadRef) => void;
-  onSnooze: (threadRef: ScopedThreadRef, preset: SnoozePreset) => void;
+  onSnooze: (threadRef: ScopedThreadRef, preset: Pick<SnoozePreset, "snoozedUntil">) => void;
   onUnsnooze: (threadRef: ScopedThreadRef) => void;
   onUnpin: (threadRef: ScopedThreadRef) => void;
   onAcknowledgeWoke: (threadRef: ScopedThreadRef, visitedAt: string) => void;
@@ -1153,19 +1187,32 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                   icon: "failed" as const,
                   className: "text-red-700 dark:text-red-300",
                 }
-              : isWoke
+              : thread.deliveryStatus != null
                 ? {
-                    label: "Woke",
-                    icon: "woke" as const,
-                    className: "text-amber-700 dark:text-amber-300",
+                    label:
+                      thread.deliveryStatus === "waiting-ci"
+                        ? "Waiting for CI"
+                        : thread.deliveryStatus === "waiting-deploy"
+                          ? "Waiting for deploy"
+                          : thread.deliveryStatus === "validating-deploy"
+                            ? "Validating deploy"
+                            : "Waiting for activation",
+                    icon: "delivery" as const,
+                    className: "text-violet-700 dark:text-violet-300",
                   }
-                : isUnread
+                : isWoke
                   ? {
-                      label: "Done",
-                      icon: "done" as const,
-                      className: "text-emerald-700 dark:text-emerald-300",
+                      label: "Woke",
+                      icon: "woke" as const,
+                      className: "text-amber-700 dark:text-amber-300",
                     }
-                  : null;
+                  : isUnread
+                    ? {
+                        label: "Done",
+                        icon: "done" as const,
+                        className: "text-emerald-700 dark:text-emerald-300",
+                      }
+                    : null;
   const isWokeStatus = topStatus?.icon === "woke";
 
   const branchMismatch = resolveLocalCheckoutBranchMismatch({
@@ -1263,6 +1310,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
             addFiles: (files) => {
               onFileDropThreads(threadRef, files);
             },
+            addFolders: () => {},
           })
         : null,
     [onFileDropThreads, threadRef],
@@ -1333,7 +1381,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     [onUnpin, threadRef],
   );
   const handleSnoozePreset = useCallback(
-    (preset: SnoozePreset) => {
+    (preset: Pick<SnoozePreset, "snoozedUntil">) => {
       onSnooze(threadRef, preset);
     },
     [onSnooze, threadRef],
@@ -1819,6 +1867,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                             <EyeIcon aria-hidden className="size-4 shrink-0" />
                           ) : topStatus.icon === "done" ? (
                             <CircleCheckIcon aria-hidden className="size-4 shrink-0" />
+                          ) : topStatus.icon === "delivery" ? (
+                            <RocketIcon aria-hidden className="size-4 shrink-0" />
                           ) : null}
                           {/* The label alone is the live region: a role="status"
                             wrapper around the ticking duration would make
@@ -2042,6 +2092,7 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
         addFiles: (files) => {
           props.onFileDropThreads(threadRef, files);
         },
+        addFolders: () => {},
       }),
     [props.onFileDropThreads, threadRef],
   );
@@ -2135,10 +2186,32 @@ export default function Sidebar() {
     reorderActiveThread,
     archiveThread,
     deleteThread,
+    requestThreadCleanupConfirmation,
   } = useThreadActions();
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
   });
+  const exportThreadBundle = useThreadBundleExport();
+  const resolveFirstMateDecision = useAtomCommand(
+    orchestrationEnvironment.resolveFirstMateDecision,
+    "resolve FirstMate decision",
+  );
+  const cancelFirstMateDecision = useAtomCommand(
+    orchestrationEnvironment.cancelFirstMateDecision,
+    "cancel FirstMate decision",
+  );
+  const selectFirstMateTopic = useAtomCommand(
+    orchestrationEnvironment.selectFirstMateTopic,
+    "select FirstMate topic",
+  );
+  const linkFirstMateSupervisor = useAtomCommand(
+    orchestrationEnvironment.linkFirstMateSupervisor,
+    "unlink FirstMate supervisor",
+  );
+  const setFirstMateRoutingEvaluationMode = useAtomCommand(
+    orchestrationEnvironment.setFirstMateRoutingEvaluationMode,
+    "set FirstMate routing evaluation mode",
+  );
   const { copyToClipboard: copyPathToClipboard } = useCopyToClipboard<{ path: string }>({
     onCopy: ({ path }) => {
       toastManager.add({
@@ -2195,6 +2268,18 @@ export default function Sidebar() {
     },
   });
   const newThreadContext = useHandleNewThread();
+  // The open thread, in the shape the FirstMate panel needs to offer adopting it
+  // as supervisor. A draft has no thread to link, so it stays undefined.
+  const firstMateLinkableThread = useMemo(() => {
+    const thread = newThreadContext.activeThread;
+    if (!thread) return undefined;
+    return {
+      environmentId: thread.environmentId,
+      projectId: thread.projectId,
+      threadId: thread.id,
+      threadTitle: thread.title ?? "this thread",
+    };
+  }, [newThreadContext.activeThread]);
   const openAddProjectCommandPalette = useCallback(
     () => openCommandPalette({ open: "add-project" }),
     [],
@@ -2813,6 +2898,165 @@ export default function Sidebar() {
     },
     [clearSelection, isMobile, router, setOpenMobile, setSelectionAnchor],
   );
+  const handleResolveFirstMateDecision = useCallback(
+    async (request: ResolveFirstMateDecisionRequest) => {
+      const result = await resolveFirstMateDecision({
+        environmentId: request.environmentId,
+        input: {
+          projectId: request.projectId,
+          decisionId: request.decisionId,
+          selectedOptionId: request.selectedOptionId,
+        },
+      });
+      // The command receipt can arrive before an older server forwards the
+      // project-level FirstMate event to an already-open shell subscription.
+      // Reconcile from the authoritative shell snapshot so the inbox still
+      // updates in place without adding a polling loop.
+      return finalizeFirstMateShellCommand({
+        result,
+        environmentId: request.environmentId,
+        refreshEnvironmentShell: (environmentId) =>
+          appAtomRegistry.refresh(environmentShell.stateAtom(environmentId)),
+      });
+    },
+    [resolveFirstMateDecision],
+  );
+  const handleCancelFirstMateDecision = useCallback(
+    async (request: Omit<ResolveFirstMateDecisionRequest, "selectedOptionId">) => {
+      const result = await cancelFirstMateDecision({
+        environmentId: request.environmentId,
+        input: {
+          projectId: request.projectId,
+          decisionId: request.decisionId,
+        },
+      });
+      return finalizeFirstMateShellCommand({
+        result,
+        environmentId: request.environmentId,
+        refreshEnvironmentShell: (environmentId) =>
+          appAtomRegistry.refresh(environmentShell.stateAtom(environmentId)),
+      });
+    },
+    [cancelFirstMateDecision],
+  );
+  const handleUnlinkFirstMateSupervisor = useCallback(
+    async (request: UnlinkFirstMateSupervisorRequest) => {
+      const result = await linkFirstMateSupervisor({
+        environmentId: request.environmentId,
+        input: { projectId: request.projectId, threadId: null },
+      });
+      return finalizeFirstMateShellCommand({
+        result,
+        environmentId: request.environmentId,
+        refreshEnvironmentShell: (environmentId) =>
+          appAtomRegistry.refresh(environmentShell.stateAtom(environmentId)),
+      });
+    },
+    [linkFirstMateSupervisor],
+  );
+  const handleLinkFirstMateSupervisor = useCallback(
+    async (request: LinkFirstMateSupervisorRequest) => {
+      const result = await linkFirstMateSupervisor({
+        environmentId: request.environmentId,
+        input: { projectId: request.projectId, threadId: request.threadId },
+      });
+      return finalizeFirstMateShellCommand({
+        result,
+        environmentId: request.environmentId,
+        refreshEnvironmentShell: (environmentId) =>
+          appAtomRegistry.refresh(environmentShell.stateAtom(environmentId)),
+      });
+    },
+    [linkFirstMateSupervisor],
+  );
+  const handleSelectFirstMateTopic = useCallback(
+    async (request: SelectFirstMateTopicRequest) => {
+      const result = await selectFirstMateTopic({
+        environmentId: request.environmentId,
+        input: {
+          projectId: request.projectId,
+          topicId: request.topicId,
+        },
+      });
+      return finalizeFirstMateShellCommand({
+        result,
+        environmentId: request.environmentId,
+        refreshEnvironmentShell: (environmentId) =>
+          appAtomRegistry.refresh(environmentShell.stateAtom(environmentId)),
+      });
+    },
+    [selectFirstMateTopic],
+  );
+  const handleSetFirstMateRoutingEvaluationMode = useCallback(
+    async (request: SetFirstMateRoutingEvaluationModeRequest) => {
+      const result = await setFirstMateRoutingEvaluationMode({
+        environmentId: request.environmentId,
+        input: {
+          projectId: request.projectId,
+          mode: request.mode,
+        },
+      });
+      return finalizeFirstMateShellCommand({
+        result,
+        environmentId: request.environmentId,
+        refreshEnvironmentShell: (environmentId) =>
+          appAtomRegistry.refresh(environmentShell.stateAtom(environmentId)),
+      });
+    },
+    [setFirstMateRoutingEvaluationMode],
+  );
+  const handleFirstMateSetWaitingDeploy = useCallback(
+    async (threadRef: ScopedThreadRef) => {
+      const result = await updateThreadMetadata({
+        environmentId: threadRef.environmentId,
+        input: { threadId: threadRef.threadId, deliveryStatus: "waiting-deploy" },
+      });
+      if (result._tag === "Success") return true;
+      if (!isAtomCommandInterrupted(result)) {
+        const error = squashAtomCommandFailure(result);
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Failed to update delivery status",
+            description: error instanceof Error ? error.message : "An error occurred.",
+          }),
+        );
+      }
+      return false;
+    },
+    [updateThreadMetadata],
+  );
+  const handleFirstMateArchiveThread = useCallback(
+    async (threadRef: ScopedThreadRef) => {
+      const thread = threads.find(
+        (candidate) =>
+          candidate.environmentId === threadRef.environmentId &&
+          candidate.id === threadRef.threadId,
+      );
+      if (thread === undefined) return false;
+      if (confirmThreadArchive) {
+        const confirmed = await requestThreadCleanupConfirmation(threadRef, {
+          action: "archive",
+          title: thread.title,
+        });
+        if (confirmed._tag === "Failure" || !confirmed.value) return false;
+      }
+      const result = await archiveThread(threadRef);
+      if (result._tag === "Success") return true;
+      if (!isAtomCommandInterrupted(result)) {
+        const error = squashAtomCommandFailure(result);
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Failed to archive thread",
+            description: error instanceof Error ? error.message : "An error occurred.",
+          }),
+        );
+      }
+      return false;
+    },
+    [archiveThread, confirmThreadArchive, requestThreadCleanupConfirmation, threads],
+  );
 
   // Dropping files on a row opens that thread and attaches the files there.
   // The composer only accepts drops for its OWN thread, so when the row is
@@ -3039,7 +3283,15 @@ export default function Sidebar() {
           }
           // Only move forward if the user is still on the settled thread —
           // a navigation made during the await wins over ours.
-          if (routeThreadKeyRef.current === threadKey) {
+          if (
+            shouldNavigateAfterThreadPark({
+              threadKey,
+              currentThreadKey: routeThreadKeyRef.current,
+              action: "settle",
+              now: new Date().toISOString(),
+              thread: readThreadShell(threadRef),
+            })
+          ) {
             navigateAfterSettle?.();
           }
         } finally {
@@ -3568,7 +3820,17 @@ export default function Sidebar() {
             const settled = await run(settleThread(threadRef), "Failed to settle thread").finally(
               () => settlingThreadKeysRef.current.delete(activeKey),
             );
-            if (settled && routeThreadKeyRef.current === activeKey) navigateAfterSettle?.();
+            if (
+              settled &&
+              shouldNavigateAfterThreadPark({
+                threadKey: activeKey,
+                currentThreadKey: routeThreadKeyRef.current,
+                action: "settle",
+                now: new Date().toISOString(),
+                thread: readThreadShell(threadRef),
+              })
+            )
+              navigateAfterSettle?.();
             return;
           }
           case "move-active":
@@ -3644,7 +3906,7 @@ export default function Sidebar() {
   const performSnooze = useCallback(
     async (
       threadRef: ScopedThreadRef,
-      preset: SnoozePreset,
+      preset: Pick<SnoozePreset, "snoozedUntil">,
       opts: { coSnoozingKeys?: ReadonlySet<string> } = {},
     ) => {
       const threadKey = scopedThreadKey(threadRef);
@@ -3665,7 +3927,15 @@ export default function Sidebar() {
         }
         // Only move forward if the user is still on the snoozed thread —
         // a navigation made during the await wins over ours.
-        if (routeThreadKeyRef.current === threadKey) {
+        if (
+          shouldNavigateAfterThreadPark({
+            threadKey,
+            currentThreadKey: routeThreadKeyRef.current,
+            action: "snooze",
+            now: new Date().toISOString(),
+            thread: readThreadShell(threadRef),
+          })
+        ) {
           navigateAfterSnooze?.();
         }
         return { status: "success" } as const;
@@ -3678,7 +3948,7 @@ export default function Sidebar() {
   const attemptSnooze = useCallback(
     (
       threadRef: ScopedThreadRef,
-      preset: SnoozePreset,
+      preset: Pick<SnoozePreset, "snoozedUntil">,
       opts: { coSnoozingKeys?: ReadonlySet<string> } = {},
     ) => {
       void (async () => {
@@ -3774,15 +4044,19 @@ export default function Sidebar() {
                   {
                     id: "snooze",
                     label: `Snooze (${count})`,
-                    children: snoozePresets.map((preset) => ({
-                      id: `snooze:${preset.id}`,
-                      label: `${preset.label} (${preset.whenLabel})`,
-                    })),
+                    children: [
+                      ...snoozePresets.map((preset) => ({
+                        id: `snooze:${preset.id}`,
+                        label: `${preset.label} (${preset.whenLabel})`,
+                      })),
+                      { id: "snooze:custom", label: "Custom…", separatorBefore: true },
+                    ],
                   },
                 ]
               : []),
             ...(titleRegenerationMenuItem ? [titleRegenerationMenuItem] : []),
             { id: "mark-unread", label: `Mark unread (${count})` },
+            buildBulkThreadBundleExportContextMenuItem(count),
             { id: "delete", label: `Delete (${count})`, destructive: true },
           ],
           position,
@@ -3790,9 +4064,10 @@ export default function Sidebar() {
       );
       if (clicked._tag === "Failure") return;
       if (clicked.value?.startsWith("snooze:")) {
-        const preset = snoozePresets.find(
-          (candidate) => `snooze:${candidate.id}` === clicked.value,
-        );
+        const preset =
+          clicked.value === "snooze:custom"
+            ? await requestCustomSnooze()
+            : snoozePresets.find((candidate) => `snooze:${candidate.id}` === clicked.value);
         if (preset) {
           // Post-snooze navigation must skip threads snoozing in this same
           // batch — they are all leaving the card block together.
@@ -3902,13 +4177,19 @@ export default function Sidebar() {
         clearSelection();
         return;
       }
+      if (clicked.value === "export-thread-bundle") {
+        await exportThreadBundle(
+          selectedThreads.map((thread) => scopeThreadRef(thread.environmentId, thread.id)),
+        );
+        return;
+      }
       if (clicked.value !== "delete") return;
       if (confirmThreadDelete) {
         const confirmed = await settlePromise(() =>
           api.dialogs.confirm(
             [
               `Delete ${count} thread${count === 1 ? "" : "s"}?`,
-              "This permanently clears conversation history for these threads.",
+              "T3 will remove these threads from your lists and delete their terminal history and stored attachments. Conversation records remain in the audit log, and provider conversations stay unchanged.",
             ].join("\n"),
             { variant: "destructive" },
           ),
@@ -3949,6 +4230,7 @@ export default function Sidebar() {
       clearSelection,
       confirmThreadDelete,
       deleteThread,
+      exportThreadBundle,
       markThreadUnread,
       performSnooze,
       removeFromSelection,
@@ -3989,16 +4271,33 @@ export default function Sidebar() {
         const supportsTitleRegeneration =
           serverConfigs.get(thread.environmentId)?.environment.capabilities
             .threadTitleRegeneration === true;
+        const supportsDeliveryStatus =
+          serverConfigs.get(thread.environmentId)?.environment.capabilities.threadDeliveryStatus ===
+          true;
         const isRegeneratingTitle = thread.titleRegeneration != null;
         const isSettled = settledThreadKeysRef.current.has(threadKey);
         const isSnoozed = snoozedThreadKeysRef.current.has(threadKey);
         const isPinned = thread.pinnedAt != null;
         // Presets resolve at menu-open time (same as the popover).
         const snoozePresets = resolveSnoozePresets(new Date(), timestampFormat);
+        const threadProjectGroup =
+          projectGroupsRef.current.find((project) =>
+            project.memberProjectRefs.some(
+              (projectRef) =>
+                projectRef.environmentId === thread.environmentId &&
+                projectRef.projectId === thread.projectId,
+            ),
+          ) ?? null;
         const clicked = await settlePromise(() =>
           api.contextMenu.show(
             buildThreadActionMenuItems({
               branch: thread.branch ?? null,
+              projectFilter: threadProjectGroup
+                ? {
+                    label: threadProjectGroup.displayName,
+                    isActive: projectScopeKey === threadProjectGroup.projectKey,
+                  }
+                : null,
               isPinned,
               isSettled,
               isSnoozed,
@@ -4006,11 +4305,13 @@ export default function Sidebar() {
               isRegeneratingTitle,
               isRunning:
                 thread.session?.status === "running" && thread.session.activeTurnId != null,
+              deliveryStatus: thread.deliveryStatus ?? null,
               supports: {
                 settlement: supportsSettlement,
                 snooze: supportsSnooze,
                 pinning: supportsPinning,
                 titleRegeneration: supportsTitleRegeneration,
+                deliveryStatus: supportsDeliveryStatus,
               },
               snoozePresets,
             }),
@@ -4019,24 +4320,48 @@ export default function Sidebar() {
         );
         if (clicked._tag === "Failure") return;
         if (clicked.value?.startsWith("snooze:")) {
-          const preset = snoozePresets.find(
-            (candidate) => `snooze:${candidate.id}` === clicked.value,
-          );
+          const preset =
+            clicked.value === "snooze:custom"
+              ? await requestCustomSnooze()
+              : snoozePresets.find((candidate) => `snooze:${candidate.id}` === clicked.value);
           if (preset) attemptSnooze(threadRef, preset);
           return;
         }
-        switch (clicked.value) {
-          case "project-settings": {
-            const projectGroup = projectGroupsRef.current.find((group) =>
-              group.memberProjectRefs.some(
-                (projectRef) =>
-                  projectRef.environmentId === thread.environmentId &&
-                  projectRef.projectId === thread.projectId,
-              ),
+        if (clicked.value?.startsWith("delivery-status:")) {
+          const value = clicked.value.slice("delivery-status:".length);
+          const deliveryStatus: ThreadDeliveryStatus | null =
+            value === "clear" ? null : (value as ThreadDeliveryStatus);
+          const result = await updateThreadMetadata({
+            environmentId: threadRef.environmentId,
+            input: { threadId: threadRef.threadId, deliveryStatus },
+          });
+          if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+            const error = squashAtomCommandFailure(result);
+            toastManager.add(
+              stackedThreadToast({
+                type: "error",
+                title: "Failed to update delivery status",
+                description: error instanceof Error ? error.message : "An error occurred.",
+              }),
             );
-            if (projectGroup) openProjectSettings(projectGroup);
-            return;
           }
+          return;
+        }
+        switch (clicked.value) {
+          case "filter-by-project":
+            // This item is the only scope control here, so picking the
+            // already-scoped project again is the way back to all projects.
+            if (threadProjectGroup) {
+              setProjectScopeKey(
+                projectScopeKey === threadProjectGroup.projectKey
+                  ? null
+                  : threadProjectGroup.projectKey,
+              );
+            }
+            return;
+          case "project-settings":
+            if (threadProjectGroup) openProjectSettings(threadProjectGroup);
+            return;
           case "new-thread-on-branch": {
             // Explicit branch carry-over: reuse the thread's worktree when it
             // has one, otherwise its branch on the local checkout.
@@ -4120,11 +4445,15 @@ export default function Sidebar() {
           case "copy-thread-id":
             copyThreadIdToClipboard(thread.id, { threadId: thread.id });
             return;
+          case "export-thread-bundle":
+            await exportThreadBundle(threadRef);
+            return;
           case "archive": {
             if (confirmThreadArchive) {
-              const confirmed = await settlePromise(() =>
-                api.dialogs.confirm(`Archive thread "${thread.title}"?`),
-              );
+              const confirmed = await requestThreadCleanupConfirmation(threadRef, {
+                action: "archive",
+                title: thread.title,
+              });
               if (confirmed._tag === "Failure" || !confirmed.value) return;
             }
             let didArchive = false;
@@ -4150,15 +4479,10 @@ export default function Sidebar() {
           }
           case "delete": {
             if (confirmThreadDelete) {
-              const confirmed = await settlePromise(() =>
-                api.dialogs.confirm(
-                  [
-                    `Delete thread "${thread.title}"?`,
-                    "This permanently clears conversation history for this thread.",
-                  ].join("\n"),
-                  { variant: "destructive" },
-                ),
-              );
+              const confirmed = await requestThreadCleanupConfirmation(threadRef, {
+                action: "tombstone",
+                title: thread.title,
+              });
               if (confirmed._tag === "Failure" || !confirmed.value) return;
             }
             const result = await deleteThread(threadRef);
@@ -4194,11 +4518,15 @@ export default function Sidebar() {
       copyPathToClipboard,
       copyThreadIdToClipboard,
       deleteThread,
+      requestThreadCleanupConfirmation,
+      exportThreadBundle,
       handleMultiSelectContextMenu,
       markThreadUnread,
       openProjectSettings,
+      projectScopeKey,
       projectByKey,
       serverConfigs,
+      setProjectScopeKey,
       startThreadRename,
       updateThreadMetadata,
       timestampFormat,
@@ -4485,6 +4813,29 @@ export default function Sidebar() {
           </SidebarGroup>
         }
       >
+        <FirstMateDecisionInbox
+          projects={projects}
+          threads={threads}
+          scopedProjectKeys={scopedProjectKeys}
+          hidden={isSearchingThreads}
+          onResolveDecision={handleResolveFirstMateDecision}
+          onCancelDecision={handleCancelFirstMateDecision}
+          onOpenThread={navigateToThread}
+        />
+        <FirstMateTopicsPanel
+          projects={projects}
+          threads={threads}
+          scopedProjectKeys={scopedProjectKeys}
+          hidden={isSearchingThreads}
+          onUnlinkSupervisor={handleUnlinkFirstMateSupervisor}
+          onSelectTopic={handleSelectFirstMateTopic}
+          onSetRoutingEvaluationMode={handleSetFirstMateRoutingEvaluationMode}
+          onSetWaitingDeploy={handleFirstMateSetWaitingDeploy}
+          onArchiveThread={handleFirstMateArchiveThread}
+          onOpenThread={navigateToThread}
+          activeThread={firstMateLinkableThread}
+          onLinkSupervisor={handleLinkFirstMateSupervisor}
+        />
         <SidebarGroup className="ps-[calc(var(--sidebar-content-inset)+1px)] pe-[var(--sidebar-content-inset)] pb-1 pt-0 flex-1">
           {isSearchingThreads ? (
             threadSearchResults.length > 0 ? (

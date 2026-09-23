@@ -763,6 +763,8 @@ it.layer(layer)("AntigravityAdapter", (it) => {
       const turn = yield* Fiber.join(sending);
       const started = yield* h.waitForEvent((event) => event.type === "task.started");
       expect(started.payload.taskType).toBe("local_bash");
+      expect(started.payload.modelSource).toBeUndefined();
+      expect(started.payload.effortSource).toBeUndefined();
       expect(started.turnId).toBe(turn.turnId);
       yield* h.emitNative({
         _tag: "ToolCallUpdated",

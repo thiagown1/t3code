@@ -1,3 +1,4 @@
+import type { WorktreeSetupCardProps } from "./worktree-setup-card";
 import type { ComposerTextPaste } from "../../native/T3ComposerEditor.types";
 import { type EnvironmentConnectionPhase } from "@t3tools/client-runtime/connection";
 import {
@@ -17,6 +18,7 @@ import type {
   EnvironmentId,
   MessageId,
   ModelSelection,
+  OrchestrationThreadActivity,
   OrchestrationThreadShell,
   ProviderApprovalDecision,
   ProviderInteractionMode,
@@ -27,8 +29,6 @@ import type {
   UserInputQuestion,
 } from "@t3tools/contracts";
 import * as Haptics from "expo-haptics";
-import { BlurTargetView } from "expo-blur";
-import { GlassBlurTargetContext } from "../../lib/glassBlurTarget";
 import {
   memo,
   useCallback,
@@ -65,9 +65,12 @@ import Animated, {
 } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useWorkspaceContentWidth } from "../layout/workspace-content-width";
-
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { collectProviderUsageLimits } from "@t3tools/shared/usageLimits";
+import {
+  deriveContextCompactionHistory,
+  deriveLatestContextWindowSnapshot,
+} from "@t3tools/shared/contextWindow";
 import type { ComposerEditorHandle } from "../../components/ComposerEditor";
 import type { StatusTone } from "../../components/StatusPill";
 import type { DraftComposerAttachment } from "../../lib/composerImages";
@@ -85,6 +88,8 @@ import type {
 import { PendingApprovalCard } from "./PendingApprovalCard";
 import { ComposerFeedback } from "./ComposerFeedback";
 import { ComposerUsageLimits } from "./ComposerUsageLimits";
+import { PersistentUsageLimits } from "./PersistentUsageLimits";
+import { PersistentContextWindow } from "./PersistentContextWindow";
 import { PendingUserInputCard } from "./PendingUserInputCard";
 import { ThreadCreationFailedCard } from "./ThreadCreationFailedCard";
 import {
@@ -109,6 +114,8 @@ import type { ThreadContentPresentation } from "./threadContentPresentation";
 import { resolveThreadFeedSubmissionAnchor } from "./thread-feed-live-follow";
 
 export interface ThreadDetailScreenProps {
+  readonly worktreeSetup?: WorktreeSetupCardProps | null;
+  readonly setupWorkingStartedAt?: string | null;
   readonly selectedThread: OrchestrationThreadShell;
   readonly contentPresentation: ThreadContentPresentation;
   readonly screenTone: StatusTone;
@@ -117,6 +124,7 @@ export interface ThreadDetailScreenProps {
   readonly feedbackSubmissions: ReadonlyArray<CodexFeedbackSubmission>;
   readonly onDismissFeedback: (id: MessageId) => void;
   readonly selectedThreadFeed: ReadonlyArray<ThreadFeedEntry>;
+  readonly selectedThreadActivities: ReadonlyArray<OrchestrationThreadActivity>;
   readonly activeWorkStartedAt: string | null;
   readonly isCompacting: boolean;
   /**
@@ -331,6 +339,38 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
     ? 0
     : Math.max(insets.bottom, 12);
   const contentPresentationKind = props.contentPresentation.kind;
+  const contextWindow = useMemo(
+    () => deriveLatestContextWindowSnapshot(props.selectedThreadActivities),
+    [props.selectedThreadActivities],
+  );
+  const contextCompactions = useMemo(
+    () => deriveContextCompactionHistory(props.selectedThreadActivities),
+    [props.selectedThreadActivities],
+  );
+  const selectedProvider = props.serverConfig?.providers.find(
+    (provider) => provider.instanceId === props.selectedThread.modelSelection.instanceId,
+  );
+  const contextWindowModelDisplayName =
+    selectedProvider?.models.find(
+      (model) => model.slug === props.selectedThread.modelSelection.model,
+    )?.name ?? props.selectedThread.modelSelection.model;
+  const contextWindowProviderDisplayName =
+    selectedProvider?.displayName?.trim() ||
+    (selectedProvider?.driver === "codex"
+      ? "Codex"
+      : selectedProvider?.driver === "claudeAgent"
+        ? "Claude"
+        : (selectedProvider?.instanceId ?? props.selectedThread.modelSelection.instanceId));
+  const contextWindowUnavailableMessage =
+    contextWindow === null &&
+    props.selectedThread.session !== null &&
+    selectedProvider?.reportsContextWindow === true
+      ? contentPresentationKind === "loading" ||
+        props.selectedThread.session.status === "starting" ||
+        props.selectedThread.session.status === "running"
+        ? "Waiting for provider context telemetry…"
+        : "Context has not been reported by this provider."
+      : null;
   // The raw sync status enters "synchronizing" on every full fetch, cached or
   // not. Whether messages are already on screen decides the pill label: no
   // data yet → "Loading messages", cached data reconciling → "Syncing".
@@ -364,6 +404,8 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
       return null;
     }
     if (props.creationState?.kind === "preparing") {
+      // The setup header already reports progress in the feed.
+      if (props.worktreeSetup) return null;
       return {
         kind: "preparing",
         label: props.creationState.preparingWorktree ? "Setting up worktree…" : "Starting…",
@@ -819,7 +861,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
   }, [freeze, scrollMessageToEnd]);
 
   const showScrollToEndButton = contentPresentationKind === "ready" && !endFollowEnabled;
-  const { themeAppearance, materialYouStyleLayoutActive } = useAppearancePreferences();
+  const { themeAppearance } = useAppearancePreferences();
   const isDarkMode = themeAppearance === "dark";
 
   const handleFeedTouchStart = useCallback((event: GestureResponderEvent) => {
@@ -851,13 +893,11 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
   const handleFeedTouchCancel = useCallback(() => {
     feedTouchStartRef.current = null;
   }, []);
-  const feedBlurTarget = useRef<View>(null);
 
   return (
     <View className="flex-1">
       {showContent ? (
-        <BlurTargetView
-          ref={feedBlurTarget}
+        <View
           style={{ flex: 1 }}
           onTouchStart={handleFeedTouchStart}
           onTouchMove={handleFeedTouchMove}
@@ -867,7 +907,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
           <View
             pointerEvents="none"
             className={
-              materialYouStyleLayoutActive
+              Platform.OS === "android"
                 ? "absolute inset-0 bg-thread-canvas"
                 : "absolute inset-0 bg-screen"
             }
@@ -878,6 +918,8 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
             threadId={props.selectedThread.id}
             workspaceRoot={props.threadCwd}
             feed={props.selectedThreadFeed}
+            worktreeSetup={props.worktreeSetup}
+            setupWorkingStartedAt={props.setupWorkingStartedAt}
             queuedMessages={props.queuedMessages}
             dispatchingMessageId={props.dispatchingMessageId}
             onEditPendingMessage={handleEditPendingMessage}
@@ -903,7 +945,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
             onUseArtifactTemplate={handleUseArtifactTemplate}
             loadEarlier={props.loadEarlier ?? null}
           />
-        </BlurTargetView>
+        </View>
       ) : (
         <View className="flex-1" />
       )}
@@ -938,6 +980,23 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                 onScrollToEnd={handleScrollToEnd}
               />
               <View className="w-full self-center" style={{ maxWidth: contentMaxWidth }}>
+                <PersistentUsageLimits
+                  instanceId={props.selectedThread.modelSelection.instanceId}
+                  providers={props.serverConfig?.providers ?? []}
+                  sources={props.serverConfig?.usageLimitSources ?? []}
+                  onOpen={showUsageLimits}
+                />
+                <PersistentContextWindow
+                  usage={contextWindow}
+                  unavailableMessage={contextWindowUnavailableMessage}
+                  modelDisplayName={contextWindowModelDisplayName}
+                  providerDisplayName={contextWindowProviderDisplayName}
+                  compactions={contextCompactions}
+                  manualCompactionAvailable={
+                    selectedProvider?.slashCommands.some((command) => command.name === "compact") ??
+                    false
+                  }
+                />
                 {props.feedbackSubmissions.map((submission) => (
                   <ComposerFeedback
                     key={submission.id}
@@ -1025,44 +1084,42 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                     : undefined
                 }
               >
-                <GlassBlurTargetContext value={feedBlurTarget}>
-                  <ThreadComposer
-                    editorRef={composerEditorRef}
-                    draftMessage={props.draftMessage}
-                    draftAttachments={props.draftAttachments}
-                    placeholder="Ask the repo agent, or run a command…"
-                    contentMaxWidth={contentMaxWidth}
-                    connectionState={props.connectionStateLabel}
-                    environmentLabel={props.environmentLabel}
-                    selectedThread={props.selectedThread}
-                    hasCompactableConversation={hasCompactableConversation && !props.isCompacting}
-                    serverConfig={props.serverConfig}
-                    queueCount={props.selectedThreadQueueCount}
-                    environmentId={props.environmentId}
-                    projectCwd={props.threadCwd ?? props.projectWorkspaceRoot}
-                    // Follow-ups typed during setup wait in the draft: queueing
-                    // them against a thread id the server may still reject
-                    // would strand them in the outbox.
-                    sendBlockedReason={
-                      props.creationState?.kind === "preparing" ? "Starting the task…" : null
-                    }
-                    bottomInset={composerBottomInset}
-                    onChangeDraftMessage={props.onChangeDraftMessage}
-                    onPickDraftMedia={props.onPickDraftMedia}
-                    onPickDraftFiles={props.onPickDraftFiles}
-                    onNativePasteImages={props.onNativePasteImages}
-                    onNativePasteText={props.onNativePasteText}
-                    onRemoveDraftImage={props.onRemoveDraftImage}
-                    onStopThread={props.onStopThread}
-                    onSendMessage={handleSendMessage}
-                    onShowUsageLimits={showUsageLimits}
-                    onUpdateModelSelection={props.onUpdateThreadModelSelection}
-                    onUpdateRuntimeMode={props.onUpdateThreadRuntimeMode}
-                    onUpdateInteractionMode={props.onUpdateThreadInteractionMode}
-                    onExpandedChange={setComposerExpanded}
-                    onEditorFocusChange={handleComposerFocusChange}
-                  />
-                </GlassBlurTargetContext>
+                <ThreadComposer
+                  editorRef={composerEditorRef}
+                  draftMessage={props.draftMessage}
+                  draftAttachments={props.draftAttachments}
+                  placeholder="Ask the repo agent, or run a command…"
+                  contentMaxWidth={contentMaxWidth}
+                  connectionState={props.connectionStateLabel}
+                  environmentLabel={props.environmentLabel}
+                  selectedThread={props.selectedThread}
+                  hasCompactableConversation={hasCompactableConversation && !props.isCompacting}
+                  serverConfig={props.serverConfig}
+                  queueCount={props.selectedThreadQueueCount}
+                  environmentId={props.environmentId}
+                  projectCwd={props.threadCwd ?? props.projectWorkspaceRoot}
+                  // Follow-ups typed during setup wait in the draft: queueing
+                  // them against a thread id the server may still reject
+                  // would strand them in the outbox.
+                  sendBlockedReason={
+                    props.creationState?.kind === "preparing" ? "Starting the task…" : null
+                  }
+                  bottomInset={composerBottomInset}
+                  onChangeDraftMessage={props.onChangeDraftMessage}
+                  onPickDraftMedia={props.onPickDraftMedia}
+                  onPickDraftFiles={props.onPickDraftFiles}
+                  onNativePasteImages={props.onNativePasteImages}
+                  onNativePasteText={props.onNativePasteText}
+                  onRemoveDraftImage={props.onRemoveDraftImage}
+                  onStopThread={props.onStopThread}
+                  onSendMessage={handleSendMessage}
+                  onShowUsageLimits={showUsageLimits}
+                  onUpdateModelSelection={props.onUpdateThreadModelSelection}
+                  onUpdateRuntimeMode={props.onUpdateThreadRuntimeMode}
+                  onUpdateInteractionMode={props.onUpdateThreadInteractionMode}
+                  onExpandedChange={setComposerExpanded}
+                  onEditorFocusChange={handleComposerFocusChange}
+                />
               </View>
             </View>
           </Animated.View>

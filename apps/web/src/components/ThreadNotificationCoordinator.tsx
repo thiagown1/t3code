@@ -15,6 +15,7 @@ import {
   unlockNotificationAudio,
 } from "../threadNotifications";
 import { resolveSidebarThreadStatus } from "./Sidebar.logic";
+import { firstMatePanelPullRequests } from "./firstMate/FirstMateTopicsPanel.logic";
 import { toastManager } from "./ui/toast";
 
 export function ThreadNotificationCoordinator() {
@@ -98,7 +99,14 @@ function EnvironmentNotifications({
     strict: false,
   });
   const previous = useRef(
-    new Map<ThreadId, { attention: string | null; completion: number | null }>(),
+    new Map<
+      ThreadId,
+      {
+        attention: string | null;
+        completion: number | null;
+        readyPullRequests: ReadonlySet<string>;
+      }
+    >(),
   );
 
   useEffect(() => {
@@ -106,7 +114,14 @@ function EnvironmentNotifications({
       previous.current.clear();
       return;
     }
-    const next = new Map<ThreadId, { attention: string | null; completion: number | null }>();
+    const next = new Map<
+      ThreadId,
+      {
+        attention: string | null;
+        completion: number | null;
+        readyPullRequests: ReadonlySet<string>;
+      }
+    >();
     for (const thread of shell.snapshot.value.threads) {
       let status = resolveSidebarThreadStatus(thread);
       if (status === "ready" && thread.latestTurn?.state === "error") status = "failed";
@@ -122,76 +137,120 @@ function EnvironmentNotifications({
         Number.isFinite(completedAt)
           ? completedAt
           : (prior?.completion ?? null);
-      next.set(thread.id, { attention, completion });
+      const readyPullRequests = new Map(
+        firstMatePanelPullRequests(thread.pullRequests ?? [], Date.now())
+          .filter((pullRequest) => pullRequest.status === "ready-to-merge")
+          .map(
+            (pullRequest) =>
+              [`${pullRequest.key}:${pullRequest.headSha ?? "unknown"}`, pullRequest] as const,
+          ),
+      );
+      next.set(thread.id, {
+        attention,
+        completion,
+        readyPullRequests: new Set(readyPullRequests.keys()),
+      });
       if (!prior || thread.archivedAt !== null) continue;
-      const kind =
-        attention && attention !== prior.attention
-          ? "input"
-          : completion !== null && (prior.completion === null || completion > prior.completion)
-            ? "completion"
-            : null;
-      if (!kind) continue;
-      const title =
-        kind === "completion"
-          ? "Thread completed"
-          : status === "approval"
-            ? "Approval needed"
-            : status === "failed"
-              ? "Thread failed"
-              : "Input needed";
-      if (hasNotificationSound(mode)) {
-        void playNotificationSound(kind, () =>
-          hasNotificationSound(getClientSettings().notificationMode),
-        );
-      }
-      if (
-        inAppNotificationsEnabled &&
-        document.visibilityState === "visible" &&
-        document.hasFocus() &&
-        (activeEnvironmentId !== environmentId || activeThreadId !== thread.id)
-      ) {
-        const toastId = toastManager.add({
-          type: kind === "completion" ? "success" : status === "failed" ? "error" : "warning",
-          title,
+      const events: Array<{
+        readonly kind: "input" | "completion";
+        readonly title: string;
+        readonly description: string;
+        readonly tag: string;
+        readonly type: "success" | "error" | "warning";
+      }> = [];
+      if (attention && attention !== prior.attention) {
+        events.push({
+          kind: "input",
+          title:
+            status === "approval"
+              ? "Approval needed"
+              : status === "failed"
+                ? "Thread failed"
+                : "Input needed",
           description: thread.title,
-          data: { hideCopyButton: true },
-          actionProps: {
-            children: "Open thread",
-            onClick: () => {
-              toastManager.close(toastId);
-              void navigate({
-                to: "/$environmentId/$threadId",
-                params: { environmentId, threadId: thread.id },
-              });
-            },
-          },
-        });
-        continue;
-      }
-      if (
-        !hasDesktopNotifications(mode) ||
-        (document.visibilityState === "visible" && document.hasFocus()) ||
-        typeof Notification === "undefined" ||
-        Notification.permission !== "granted"
-      )
-        continue;
-      try {
-        const notification = new Notification(title, {
-          body: thread.title,
           tag: `${environmentId}:${thread.id}`,
-          silent: true,
+          type: status === "failed" ? "error" : "warning",
         });
-        onNotification(environmentId, notification);
-        notification.addEventListener("click", () => {
-          notification.close();
-          window.focus();
-          void navigate({
-            to: "/$environmentId/$threadId",
-            params: { environmentId, threadId: thread.id },
+      }
+      if (completion !== null && (prior.completion === null || completion > prior.completion)) {
+        events.push({
+          kind: "completion",
+          title: "Thread completed",
+          description: thread.title,
+          tag: `${environmentId}:${thread.id}`,
+          type: "success",
+        });
+      }
+      const newlyReady = [...readyPullRequests].filter(
+        ([key]) => !prior.readyPullRequests.has(key),
+      );
+      if (newlyReady.length > 0) {
+        events.push({
+          kind: "completion",
+          title:
+            newlyReady.length === 1
+              ? "Pull request ready to merge"
+              : "Pull requests ready to merge",
+          description: `${thread.title} · ${newlyReady.map(([, pullRequest]) => `#${pullRequest.number}`).join(", ")}`,
+          tag: `${environmentId}:${thread.id}:ready-to-merge`,
+          type: "success",
+        });
+      }
+      for (const event of events) {
+        if (hasNotificationSound(mode)) {
+          void playNotificationSound(event.kind, () =>
+            hasNotificationSound(getClientSettings().notificationMode),
+          );
+        }
+        if (
+          inAppNotificationsEnabled &&
+          document.visibilityState === "visible" &&
+          document.hasFocus() &&
+          (activeEnvironmentId !== environmentId || activeThreadId !== thread.id)
+        ) {
+          const toastId = toastManager.add({
+            type: event.type,
+            title: event.title,
+            description: event.description,
+            data: { hideCopyButton: true },
+            actionProps: {
+              children: "Open thread",
+              onClick: () => {
+                toastManager.close(toastId);
+                void navigate({
+                  to: "/$environmentId/$threadId",
+                  params: { environmentId, threadId: thread.id },
+                });
+              },
+            },
           });
-        });
-      } catch {
-        // Some browsers expose Notification but reject desktop presentation.
+          continue;
+        }
+        if (
+          !hasDesktopNotifications(mode) ||
+          (document.visibilityState === "visible" && document.hasFocus()) ||
+          typeof Notification === "undefined" ||
+          Notification.permission !== "granted"
+        )
+          continue;
+        try {
+          const notification = new Notification(event.title, {
+            body: event.description,
+            tag: event.tag,
+            silent: true,
+          });
+          onNotification(environmentId, notification);
+          notification.addEventListener("click", () => {
+            notification.close();
+            window.focus();
+            void navigate({
+              to: "/$environmentId/$threadId",
+              params: { environmentId, threadId: thread.id },
+            });
+          });
+        } catch {
+          // Some browsers expose Notification but reject desktop presentation.
+        }
       }
     }
     previous.current = next;

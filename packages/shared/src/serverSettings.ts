@@ -270,11 +270,14 @@ export function applyServerSettingsPatch(
     providerHealthRefreshInterval,
     backgroundActivityProfile,
     backgroundActivity,
+    worktreeCleanup: worktreeCleanupPatch,
     // Merged per entry below; its `null` removals must not reach deepMerge.
     usageLimitSources: usageLimitSourcesPatch,
     usagePriceOverrides: usagePriceOverridesPatch,
     // Entry replacement: deepMerge would keep keys the client meant to clear.
     projectSettingsOverrides: projectSettingsOverridesPatch,
+    // Per-entry merge applied below; it must not leak into the settings shape.
+    providerInstanceEnablement: providerInstanceEnablementPatch,
     // Already translated into `projectSettingsOverrides` above; the legacy
     // maps are derived views and must never be merged directly.
     projectAgentBrowserAccessOverrides: _legacyBrowserAccess,
@@ -318,8 +321,39 @@ export function applyServerSettingsPatch(
           }
         : undefined;
   const next = deepMerge(current, patchForMerge);
+  const providerInstancesBase =
+    patch.providerInstances !== undefined ? patch.providerInstances : current.providerInstances;
+  const providerInstances = { ...providerInstancesBase };
+  for (const [instanceId, enabled] of Object.entries(providerInstanceEnablementPatch ?? {})) {
+    const currentInstance = providerInstances[instanceId as keyof typeof providerInstances];
+    if (!currentInstance) continue;
+    providerInstances[instanceId as keyof typeof providerInstances] = {
+      ...currentInstance,
+      enabled,
+    };
+  }
   const nextWithReplacementsBase = {
     ...next,
+    ...(worktreeCleanupPatch === undefined
+      ? {}
+      : {
+          worktreeCleanup:
+            worktreeCleanupPatch?.mode === "custom"
+              ? {
+                  mode: "custom" as const,
+                  rules: {
+                    worktreeAfterDays: next.storageCleanup.worktreeAfterDays,
+                    worktreeOnMerge: next.storageCleanup.worktreeOnMerge,
+                    worktreeOnDelete: next.storageCleanup.worktreeOnDelete,
+                    worktreeUnchanged: next.storageCleanup.worktreeUnchanged,
+                    ...(current.worktreeCleanup?.mode === "custom"
+                      ? current.worktreeCleanup.rules
+                      : {}),
+                    ...worktreeCleanupPatch.rules,
+                  },
+                }
+              : worktreeCleanupPatch,
+        }),
     ...(backgroundActivity !== undefined
       ? {
           backgroundActivity: {
@@ -333,8 +367,8 @@ export function applyServerSettingsPatch(
     ...(backgroundActivity === undefined && backgroundActivityPatch !== undefined
       ? { backgroundActivity: backgroundActivityPatch }
       : {}),
-    ...(patch.providerInstances !== undefined
-      ? { providerInstances: patch.providerInstances }
+    ...(patch.providerInstances !== undefined || providerInstanceEnablementPatch !== undefined
+      ? { providerInstances }
       : {}),
     ...(projectSettingsOverridesPatch !== undefined
       ? {

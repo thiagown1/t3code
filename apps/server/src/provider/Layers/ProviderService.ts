@@ -33,7 +33,9 @@ import {
   type ProviderDriverKind,
   type ProviderRuntimeEvent,
   type ProviderSession,
+  type ProviderTurnStartResult,
   type ServerSettings as ServerSettingsValue,
+  type ThreadCleanupPreview,
 } from "@t3tools/contracts";
 import { expandAssistantCitationsForProvider } from "@t3tools/shared/assistantCitations";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
@@ -328,7 +330,7 @@ function turnEffort(modelSelection: ProviderSendTurnInput["modelSelection"]): st
 }
 
 type ProviderServiceMethod<Name extends keyof ProviderService.ProviderService["Service"]> =
-  ProviderService.ProviderService["Service"][Name];
+  NonNullable<ProviderService.ProviderService["Service"][Name]>;
 
 const ProviderRollbackConversationInput = Schema.Struct({
   threadId: ThreadId,
@@ -487,6 +489,34 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   const fileSystem = yield* FileSystem.FileSystem;
   const pathService = yield* Path.Path;
   const runtimeEventPubSub = yield* PubSub.unbounded<ProviderRuntimeEvent>();
+  const stagedHandoffs = new Map<
+    ThreadId,
+    {
+      readonly sourceInstanceId: ProviderInstanceId;
+      readonly sourceBinding: ProviderSessionDirectory.ProviderRuntimeBinding;
+      readonly modelSelection?: ModelSelection;
+      readonly targetInstanceId: ProviderInstanceId;
+      readonly adapter: ProviderAdapterShape<ProviderAdapterError>;
+      readonly completion: Deferred.Deferred<"completed" | "aborted" | "error">;
+      session: ProviderSession | null;
+      turnId: ProviderTurnStartResult["turnId"] | null;
+      earlyTerminal: "completed" | "aborted" | "error" | null;
+      eventCount: number;
+      accepted: boolean;
+      committed: boolean;
+    }
+  >();
+  const suppressedInstanceEvents = new Map<ThreadId, Set<ProviderInstanceId>>();
+  const suppressInstanceEvents = (threadId: ThreadId, instanceId: ProviderInstanceId) => {
+    const suppressed = suppressedInstanceEvents.get(threadId) ?? new Set<ProviderInstanceId>();
+    suppressed.add(instanceId);
+    suppressedInstanceEvents.set(threadId, suppressed);
+  };
+  const allowInstanceEvents = (threadId: ThreadId, instanceId: ProviderInstanceId) => {
+    const suppressed = suppressedInstanceEvents.get(threadId);
+    suppressed?.delete(instanceId);
+    if (suppressed?.size === 0) suppressedInstanceEvents.delete(threadId);
+  };
   const pendingCompactions = new Map<ThreadId, PendingCompaction>();
   const timedOutNativeCompactions = new Set<ThreadId>();
   const settleCompaction = (threadId: ThreadId, pending: PendingCompaction, terminal: string) =>
@@ -940,11 +970,22 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     } satisfies Record<string, string>;
   });
 
-  const prepareMcpSession = (threadId: ThreadId, providerInstanceId: ProviderInstanceId) =>
+  const prepareMcpSession = (
+    threadId: ThreadId,
+    providerInstanceId: ProviderInstanceId,
+    concurrent = false,
+  ) =>
     Effect.gen(function* () {
       const capabilities = yield* agentAccessCapabilities(threadId);
-      const credential = yield* issueMcpCredential({ threadId, providerInstanceId, capabilities });
+      const credential = yield* concurrent
+        ? McpSessionRegistry.issueConcurrentMcpCredential({
+            threadId,
+            providerInstanceId,
+            capabilities,
+          })
+        : issueMcpCredential({ threadId, providerInstanceId, capabilities });
       if (credential) {
+        if (!concurrent) McpProviderSession.clearMcpProviderSession(threadId);
         const deviceEnvironment = capabilities.has("device")
           ? yield* agentDeviceEnvironment
           : undefined;
@@ -1087,6 +1128,29 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       const canonicalEvent = yield* Effect.sync(() =>
         correlateRuntimeEventWithInstance(source, event),
       );
+      const staged = stagedHandoffs.get(canonicalEvent.threadId);
+      if (staged?.targetInstanceId === source.instanceId) {
+        staged.eventCount++;
+        if (staged.eventCount > 10_000) {
+          yield* Deferred.succeed(staged.completion, "error");
+          return;
+        }
+        const terminal =
+          canonicalEvent.type === "turn.completed"
+            ? "completed"
+            : canonicalEvent.type === "turn.aborted"
+              ? "aborted"
+              : canonicalEvent.type === "runtime.error" || canonicalEvent.type === "session.exited"
+                ? "error"
+                : null;
+        if (terminal !== null) {
+          if (staged.turnId === null) staged.earlyTerminal = terminal;
+          else if (canonicalEvent.turnId === undefined || canonicalEvent.turnId === staged.turnId)
+            yield* Deferred.succeed(staged.completion, terminal);
+        }
+        return;
+      }
+      if (suppressedInstanceEvents.get(canonicalEvent.threadId)?.has(source.instanceId)) return;
       yield* increment(providerRuntimeEventsTotal, {
         provider: canonicalEvent.provider,
         eventType: canonicalEvent.type,
@@ -1396,6 +1460,12 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
 
   const startSession: ProviderServiceMethod<"startSession"> = Effect.fn("startSession")(
     function* (threadId, rawInput) {
+      if (stagedHandoffs.has(threadId)) {
+        return yield* toValidationError(
+          "ProviderService.startSession",
+          "Wait for the provider handoff to finish or cancel it before restarting this thread.",
+        );
+      }
       const parsed = yield* decodeInputOrValidationError({
         operation: "ProviderService.startSession",
         schema: ProviderSessionStartInput,
@@ -1521,6 +1591,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           ...session,
           providerInstanceId: resolvedInstanceId,
         };
+        allowInstanceEvents(threadId, resolvedInstanceId);
 
         yield* stopStaleSessionsForThread({
           threadId,
@@ -1566,12 +1637,216 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     },
   );
 
+  const abortStagedHandoffTarget: ProviderServiceMethod<"abortStagedHandoffTarget"> = Effect.fn(
+    "abortStagedHandoffTarget",
+  )(function* (threadId) {
+    const staged = stagedHandoffs.get(threadId);
+    if (!staged) return;
+    if (staged.committed) {
+      yield* directory.upsert(staged.sourceBinding);
+      allowInstanceEvents(threadId, staged.sourceInstanceId);
+    }
+    suppressInstanceEvents(threadId, staged.targetInstanceId);
+    yield* staged.adapter
+      .stopSession(threadId)
+      .pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("provider.handoff.stop-target-failed", { threadId, cause }),
+        ),
+      );
+    const credential = McpProviderSession.readMcpProviderSession(threadId, staged.targetInstanceId);
+    if (credential)
+      yield* McpSessionRegistry.revokeActiveMcpProviderSession(credential.providerSessionId);
+    McpProviderSession.clearMcpProviderSession(threadId, staged.targetInstanceId);
+    stagedHandoffs.delete(threadId);
+  });
+
+  const stageHandoffTarget: ProviderServiceMethod<"stageHandoffTarget"> = Effect.fn(
+    "stageHandoffTarget",
+  )(function* (threadId, rawInput) {
+    const input = yield* decodeInputOrValidationError({
+      operation: "ProviderService.stageHandoffTarget",
+      schema: ProviderSessionStartInput,
+      payload: rawInput,
+    });
+    if (stagedHandoffs.has(threadId)) {
+      return yield* toValidationError(
+        "ProviderService.stageHandoffTarget",
+        "A handoff is already being prepared for this thread.",
+      );
+    }
+    const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+    if (!binding?.providerInstanceId) {
+      return yield* toValidationError(
+        "ProviderService.stageHandoffTarget",
+        "The source provider session is not bound to this thread.",
+      );
+    }
+    const targetInstanceId = yield* requireBindingInstanceId(
+      "ProviderService.stageHandoffTarget",
+      input,
+    );
+    if (targetInstanceId === binding.providerInstanceId) {
+      return yield* toValidationError(
+        "ProviderService.stageHandoffTarget",
+        "The target must be a different provider instance.",
+      );
+    }
+    const info = yield* registry.getInstanceInfo(targetInstanceId);
+    if (!info.enabled || (input.provider !== undefined && input.provider !== info.driverKind)) {
+      return yield* toValidationError(
+        "ProviderService.stageHandoffTarget",
+        "The target provider instance is unavailable or has changed.",
+      );
+    }
+    const adapter = yield* registry.getByInstance(targetInstanceId);
+    if (yield* adapter.hasSession(threadId)) {
+      return yield* toValidationError(
+        "ProviderService.stageHandoffTarget",
+        "The target provider already has a session for this thread.",
+      );
+    }
+    const completion = yield* Deferred.make<"completed" | "aborted" | "error">();
+    allowInstanceEvents(threadId, targetInstanceId);
+    const staged = {
+      sourceInstanceId: binding.providerInstanceId,
+      sourceBinding: binding,
+      ...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
+      targetInstanceId,
+      adapter,
+      completion,
+      session: null as ProviderSession | null,
+      turnId: null as ProviderTurnStartResult["turnId"] | null,
+      earlyTerminal: null as "completed" | "aborted" | "error" | null,
+      eventCount: 0,
+      accepted: false,
+      committed: false,
+    };
+    stagedHandoffs.set(threadId, staged);
+    return yield* Effect.gen(function* () {
+      yield* prepareMcpSession(threadId, targetInstanceId, true);
+      const session = yield* adapter.startSession({
+        ...input,
+        threadId,
+        provider: info.driverKind,
+        providerInstanceId: targetInstanceId,
+      });
+      if (session.provider !== info.driverKind) {
+        return yield* toValidationError(
+          "ProviderService.stageHandoffTarget",
+          "The target adapter returned a different provider.",
+        );
+      }
+      staged.session = { ...session, providerInstanceId: targetInstanceId };
+      return staged.session;
+    }).pipe(Effect.onError(() => abortStagedHandoffTarget(threadId).pipe(Effect.ignoreCause)));
+  });
+
+  const sendStagedHandoffContext: ProviderServiceMethod<"sendStagedHandoffContext"> = Effect.fn(
+    "sendStagedHandoffContext",
+  )(function* (rawInput) {
+    const input = yield* decodeInputOrValidationError({
+      operation: "ProviderService.sendStagedHandoffContext",
+      schema: ProviderSendTurnInput,
+      payload: rawInput,
+    });
+    const staged = stagedHandoffs.get(input.threadId);
+    if (!staged?.session || staged.turnId !== null || !input.input || input.attachments?.length) {
+      return yield* toValidationError(
+        "ProviderService.sendStagedHandoffContext",
+        "The staged target requires one text-only context turn.",
+      );
+    }
+    const turn = yield* staged.adapter.sendTurn({
+      threadId: input.threadId,
+      input: input.input,
+      modelSelection: input.modelSelection,
+      interactionMode: input.interactionMode,
+    });
+    staged.turnId = turn.turnId;
+    if (staged.earlyTerminal !== null)
+      yield* Deferred.succeed(staged.completion, staged.earlyTerminal);
+    const terminal = yield* Deferred.await(staged.completion).pipe(
+      Effect.timeoutOption("3 minutes"),
+    );
+    if (Option.isNone(terminal) || terminal.value !== "completed") {
+      return yield* toValidationError(
+        "ProviderService.sendStagedHandoffContext",
+        Option.isNone(terminal)
+          ? "The target did not accept the context in time."
+          : "The target failed while accepting the context.",
+      );
+    }
+    staged.accepted = true;
+    return turn;
+  });
+
+  const commitStagedHandoffTarget: ProviderServiceMethod<"commitStagedHandoffTarget"> = Effect.fn(
+    "commitStagedHandoffTarget",
+  )(function* (threadId) {
+    const staged = stagedHandoffs.get(threadId);
+    if (!staged?.accepted || !staged.session) {
+      return yield* toValidationError(
+        "ProviderService.commitStagedHandoffTarget",
+        "The target has not accepted the context.",
+      );
+    }
+    const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+    if (binding?.providerInstanceId !== staged.sourceInstanceId) {
+      return yield* toValidationError(
+        "ProviderService.commitStagedHandoffTarget",
+        "The source binding changed during handoff.",
+      );
+    }
+    yield* upsertSessionBinding(staged.session, threadId, {
+      modelSelection: staged.modelSelection,
+    });
+    suppressInstanceEvents(threadId, staged.sourceInstanceId);
+    staged.committed = true;
+    return staged.session;
+  });
+
+  const finalizeStagedHandoffTarget: ProviderServiceMethod<"finalizeStagedHandoffTarget"> =
+    Effect.fn("finalizeStagedHandoffTarget")(function* (threadId) {
+      const staged = stagedHandoffs.get(threadId);
+      if (!staged?.committed) {
+        return yield* toValidationError(
+          "ProviderService.finalizeStagedHandoffTarget",
+          "The handoff target has not been committed.",
+        );
+      }
+      const sourceCredential = McpProviderSession.readMcpProviderSession(
+        threadId,
+        staged.sourceInstanceId,
+      );
+      const sourceAdapter = yield* registry.getByInstance(staged.sourceInstanceId);
+      yield* sourceAdapter
+        .stopSession(threadId)
+        .pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("provider.handoff.stop-source-failed", { threadId, cause }),
+          ),
+        );
+      if (sourceCredential)
+        yield* McpSessionRegistry.revokeActiveMcpProviderSession(
+          sourceCredential.providerSessionId,
+        );
+      McpProviderSession.clearMcpProviderSession(threadId, staged.sourceInstanceId);
+      stagedHandoffs.delete(threadId);
+    });
+
   const sendTurn: ProviderServiceMethod<"sendTurn"> = Effect.fn("sendTurn")(function* (rawInput) {
     const parsed = yield* decodeInputOrValidationError({
       operation: "ProviderService.sendTurn",
       schema: ProviderSendTurnInput,
       payload: rawInput,
     });
+    if (stagedHandoffs.has(parsed.threadId)) {
+      return yield* toValidationError(
+        "ProviderService.sendTurn",
+        "Wait for the provider handoff to finish or cancel it before sending another message.",
+      );
+    }
 
     const attachments = parsed.attachments ?? [];
     if (!parsed.input && attachments.length === 0 && parsed.continuation !== true) {
@@ -2036,6 +2311,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         schema: ProviderStopSessionInput,
         payload: rawInput,
       });
+      yield* abortStagedHandoffTarget(input.threadId);
       let metricProvider = "unknown";
       return yield* Effect.gen(function* () {
         const routed = yield* resolveRoutableSession({
@@ -2094,6 +2370,114 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     },
   );
 
+  const archiveConversation: ProviderServiceMethod<"archiveConversation"> = Effect.fn(
+    "archiveConversation",
+  )(function* (threadId) {
+    const binding = yield* directory.getBinding(threadId);
+    if (Option.isNone(binding)) {
+      return { status: "not-linked" } as const;
+    }
+    let routed = yield* resolveRoutableSession({
+      threadId,
+      operation: "ProviderService.archiveConversation",
+      allowRecovery: false,
+    });
+    const archiveThread = routed.adapter.archiveThread;
+    if (archiveThread === undefined) {
+      return {
+        provider: routed.adapter.provider,
+        status: "unsupported",
+      } as const;
+    }
+    if (!routed.isActive) {
+      routed = yield* resolveRoutableSession({
+        threadId,
+        operation: "ProviderService.archiveConversation",
+        allowRecovery: true,
+      });
+    }
+    const recoveredArchiveThread = routed.adapter.archiveThread;
+    if (recoveredArchiveThread === undefined) {
+      return {
+        provider: routed.adapter.provider,
+        status: "unsupported",
+      } as const;
+    }
+    yield* Effect.annotateCurrentSpan({
+      "provider.operation": "archive-conversation",
+      "provider.kind": routed.adapter.provider,
+      "provider.thread_id": threadId,
+    });
+    yield* recoveredArchiveThread(routed.threadId);
+    yield* analytics.record("provider.conversation.archived", {
+      provider: routed.adapter.provider,
+    });
+    return {
+      provider: routed.adapter.provider,
+      status: "archived",
+    } as const;
+  });
+
+  const previewThreadCleanup: ProviderServiceMethod<"previewThreadCleanup"> = Effect.fn(
+    "previewThreadCleanup",
+  )(function* (threadId) {
+    const binding = yield* directory.getBinding(threadId);
+    let provider: ThreadCleanupPreview["provider"];
+    if (Option.isNone(binding)) {
+      provider = {
+        status: "not-linked",
+        capabilities: {
+          archive: "not-linked",
+          unarchive: "not-linked",
+          delete: "not-linked",
+        },
+        transcript: "not-linked",
+      };
+    } else {
+      const adapter =
+        binding.value.providerInstanceId === undefined
+          ? Option.none<ProviderAdapterShape<ProviderAdapterError>>()
+          : yield* registry.getByInstance(binding.value.providerInstanceId).pipe(Effect.option);
+      const isCodex = String(binding.value.provider) === "codex";
+      provider = {
+        status: "linked",
+        provider: binding.value.provider,
+        capabilities: {
+          archive: Option.isNone(adapter)
+            ? "unavailable"
+            : adapter.value.archiveThread === undefined
+              ? "unsupported"
+              : "supported",
+          unarchive: isCodex ? "known-not-implemented" : "unsupported",
+          delete: isCodex ? "known-not-implemented" : "unsupported",
+        },
+        transcript: {
+          archiveLocal: "preserved",
+          tombstoneLocal: "preserved",
+        },
+      };
+    }
+
+    return {
+      threadId,
+      local: {
+        archive: { outcome: "archived", reversible: true },
+        tombstone: { outcome: "tombstoned", reversible: false },
+        terminalHistory: { archive: "preserved", tombstone: "deleted" },
+        attachments: { archive: "preserved", tombstone: "deleted" },
+        eventStoreAudit: "retained",
+      },
+      provider,
+      irreversible: {
+        archiveLocal: false,
+        tombstoneLocal: true,
+        deleteTerminalHistory: true,
+        deleteAttachments: true,
+        deleteRemoteConversation: false,
+      },
+    } satisfies ThreadCleanupPreview;
+  });
+
   const listSessions: ProviderServiceMethod<"listSessions"> = Effect.fn("listSessions")(
     function* () {
       const currentAdapters = yield* getAdapterEntries;
@@ -2107,7 +2491,12 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           ),
         ),
       );
-      const activeSessions = sessionsByProvider.flatMap((sessions) => sessions);
+      const activeSessions = sessionsByProvider
+        .flatMap((sessions) => sessions)
+        .filter((session) => {
+          const staged = stagedHandoffs.get(session.threadId);
+          return staged?.targetInstanceId !== session.providerInstanceId;
+        });
       // Only live adapter sessions appear in this response. Resolving every
       // historical binding here makes each call scale with the full thread
       // history instead of the active session set.
@@ -2295,6 +2684,9 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   );
 
   const runStopAll = Effect.fn("runStopAll")(function* () {
+    yield* Effect.forEach([...stagedHandoffs.keys()], abortStagedHandoffTarget, {
+      discard: true,
+    });
     // Continuation is project-scopable, so decide it per session's project;
     // without orchestration the environment value is all there is.
     const stopSettings = yield* serverSettings.getSettings.pipe(
@@ -2400,12 +2792,19 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
 
   return {
     startSession,
+    stageHandoffTarget,
+    sendStagedHandoffContext,
+    commitStagedHandoffTarget,
+    finalizeStagedHandoffTarget,
+    abortStagedHandoffTarget,
     sendTurn,
     compactThread,
     interruptTurn,
     respondToRequest,
     respondToUserInput,
     stopSession,
+    archiveConversation,
+    previewThreadCleanup,
     listSessions,
     getCapabilities,
     getInstanceInfo,

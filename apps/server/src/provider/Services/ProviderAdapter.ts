@@ -140,6 +140,15 @@ export interface ProviderAdapterShape<TError> {
   ) => Effect.Effect<ProviderThreadSnapshot, TError>;
 
   /**
+   * Archive the provider-native conversation backing this T3 thread.
+   *
+   * Omitted when the provider has no supported archive API. Callers must
+   * surface that state as unsupported instead of emulating the action through
+   * browser automation or provider-owned storage files.
+   */
+  readonly archiveThread?: (threadId: ThreadId) => Effect.Effect<void, TError>;
+
+  /**
    * Upload a thread to the provider when the adapter supports feedback.
    */
   readonly uploadFeedback?: (

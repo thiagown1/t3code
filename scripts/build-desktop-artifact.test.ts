@@ -3,6 +3,7 @@ import * as NodeCrypto from "node:crypto";
 import * as NodePath from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodePathService from "@effect/platform-node/NodePath";
 import { assert, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as FileSystem from "effect/FileSystem";
@@ -51,10 +52,12 @@ import {
   resolveFffNativeDependencies,
   resolveBuildOptions,
   resolveDesktopBuildIconAssets,
+  resolveDesktopBuildIdentity,
   resolveDesktopProductName,
   resolveDesktopUpdateChannel,
   resolveDesktopWebAssetBrand,
   resolveResourceMonitorRustTargets,
+  resolveStageInstallCommand,
   resolveWindowsServerAsarIgnoreGlobs,
   resourceMonitorExecutableName,
   resolveGitHubPublishConfig,
@@ -91,7 +94,12 @@ import {
   wslRuntimeArchiveStem,
 } from "./build-desktop-artifact.ts";
 import { BRAND_ASSET_PATHS } from "./lib/brand-assets.ts";
-import { HostProcessArchitecture, HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import {
+  HostProcessArchitecture,
+  HostProcessEnvironment,
+  HostProcessPlatform,
+} from "@t3tools/shared/hostProcess";
+import { SpawnExecutableResolution } from "@t3tools/shared/shell";
 import { symlinksSupported } from "@t3tools/shared/testing/symlinks";
 
 // A minimal stand-in for the Linux CLI release archive: one top-level
@@ -256,6 +264,16 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
   it("switches desktop packaging product names to nightly for nightly builds", () => {
     assert.equal(resolveDesktopProductName("0.0.17"), "T3 Code (Alpha)");
     assert.equal(resolveDesktopProductName("0.0.17-nightly.20260413.42"), "T3 Code (Nightly)");
+    assert.equal(resolveDesktopProductName("0.0.17", "firstmate"), "T3 Code FirstMate");
+  });
+
+  it("isolates the FirstMate installer identity from the official desktop app", () => {
+    assert.deepStrictEqual(resolveDesktopBuildIdentity("0.0.17", "firstmate"), {
+      appId: "com.t3tools.t3code.firstmate",
+      artifactName: "T3-Code-FirstMate-${version}-${arch}.${ext}",
+      packageName: "t3code-firstmate",
+      productName: "T3 Code FirstMate",
+    });
   });
 
   it("switches desktop packaging icons to the nightly artwork for nightly versions", () => {
@@ -356,6 +374,68 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
           provider: "github",
           owner: "pingdotgg",
           repo: "t3code",
+          releaseType: "release",
+        },
+      ]);
+    }).pipe(
+      Effect.provide(
+        ConfigProvider.layer(
+          ConfigProvider.fromEnv({ env: { GITHUB_REPOSITORY: "pingdotgg/t3code" } }),
+        ),
+      ),
+    ),
+  );
+
+  it.effect("uses only the dedicated FirstMate update repository for fork builds", () =>
+    Effect.gen(function* () {
+      const withoutDedicatedRepository = yield* createBuildConfig(
+        "win",
+        "nsis",
+        "0.0.33",
+        false,
+        false,
+        undefined,
+        undefined,
+        false,
+        "x64",
+        "firstmate",
+      );
+      const withDedicatedRepository = yield* createBuildConfig(
+        "win",
+        "nsis",
+        "0.0.33",
+        false,
+        false,
+        undefined,
+        undefined,
+        false,
+        "x64",
+        "firstmate",
+      ).pipe(
+        Effect.provide(
+          ConfigProvider.layer(
+            ConfigProvider.fromEnv({
+              env: {
+                GITHUB_REPOSITORY: "pingdotgg/t3code",
+                T3CODE_FIRSTMATE_DESKTOP_UPDATE_REPOSITORY: "thiagown1/t3code-firstmate",
+              },
+            }),
+          ),
+        ),
+      );
+
+      assert.notProperty(withoutDedicatedRepository, "publish");
+      assert.equal(withoutDedicatedRepository.appId, "com.t3tools.t3code.firstmate");
+      assert.equal(withoutDedicatedRepository.productName, "T3 Code FirstMate");
+      assert.equal(
+        withoutDedicatedRepository.artifactName,
+        "T3-Code-FirstMate-${version}-${arch}.${ext}",
+      );
+      assert.deepStrictEqual(withDedicatedRepository.publish, [
+        {
+          provider: "github",
+          owner: "thiagown1",
+          repo: "t3code-firstmate",
           releaseType: "release",
         },
       ]);
@@ -473,6 +553,31 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       },
     });
   });
+
+  it.effect("resolves staged installs through the repository vp shim", () =>
+    Effect.gen(function* () {
+      let resolvedCandidate: string | undefined;
+      const command = yield* resolveStageInstallCommand("C:\\repo").pipe(
+        Effect.provide(NodePathService.layerWin32),
+        Effect.provideService(HostProcessPlatform, "win32"),
+        Effect.provideService(HostProcessEnvironment, {
+          PATH: "./node_modules/.bin",
+          PATHEXT: ".COM;.EXE;.BAT;.CMD",
+        }),
+        Effect.provideService(SpawnExecutableResolution, (candidate) => {
+          resolvedCandidate = candidate;
+          return `${candidate}.CMD`;
+        }),
+      );
+
+      assert.equal(resolvedCandidate, "C:\\repo\\node_modules\\.bin\\vp");
+      assert.deepStrictEqual(command, {
+        command: '^"C:\\repo\\node_modules\\.bin\\vp.CMD^"',
+        args: ['^"install^"', '^"--prod^"'],
+        shell: true,
+      });
+    }),
+  );
 
   it("stages pnpm 11 allowBuilds and patchedDependencies in the workspace yaml", () => {
     assert.deepStrictEqual(
@@ -733,7 +838,6 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
           "@ff-labs/fff-node": "0.9.4",
           "@opencode-ai/sdk": "^1.3.15",
           "@pierre/diffs": "1.3.0",
-          "msgpackr-extract": "3.0.4",
           "node-pty": "1.1.0",
         },
         desktopDependencies: {
@@ -745,7 +849,6 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       }),
       {
         "@ff-labs/fff-node": "0.9.4",
-        "msgpackr-extract": "3.0.4",
         "node-pty": "1.1.0",
         "@napi-rs/keyring": "1.3.0",
         "playwright-core": "1.60.0",
@@ -1763,6 +1866,23 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     });
   });
 
+  it("uses the isolated FirstMate app identity for macOS passkey signing", () => {
+    const configuration = resolveMacPasskeySigningConfiguration(
+      {
+        T3CODE_APPLE_TEAM_ID: "abc1234567",
+        T3CODE_MACOS_PROVISIONING_PROFILE: "/tmp/t3code.provisionprofile",
+        T3CODE_CLERK_PASSKEY_RP_DOMAINS: "example.clerk.accounts.dev",
+      },
+      "firstmate",
+    );
+
+    assert.equal(configuration.appId, "com.t3tools.t3code.firstmate");
+    assert.include(
+      renderMacPasskeyEntitlements(configuration),
+      "<string>ABC1234567.com.t3tools.t3code.firstmate</string>",
+    );
+  });
+
   it("normalizes explicit macOS passkey RP domains and renders required entitlements", () => {
     const configuration = resolveMacPasskeySigningConfiguration({
       T3CODE_APPLE_TEAM_ID: "ABC1234567",
@@ -2109,6 +2229,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
   it.effect("resolves default platform and architecture from host references", () =>
     Effect.gen(function* () {
       const resolved = yield* resolveBuildOptions({
+        flavor: Option.none(),
         platform: Option.none(),
         target: Option.none(),
         arch: Option.none(),
@@ -2141,6 +2262,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       assert.equal(resolved.platform, "win");
       assert.equal(resolved.target, "nsis");
       assert.equal(resolved.arch, "arm64");
+      assert.equal(resolved.flavor, "official");
     }),
   );
 
@@ -2149,6 +2271,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       for (const platform of ["linux", "win"] as const) {
         const error = yield* Effect.flip(
           resolveBuildOptions({
+            flavor: Option.none(),
             platform: Option.some(platform),
             target: Option.none(),
             arch: Option.some("universal"),
@@ -2173,6 +2296,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
   it.effect("preserves explicit false boolean flags over true env defaults", () =>
     Effect.gen(function* () {
       const resolved = yield* resolveBuildOptions({
+        flavor: Option.some("firstmate"),
         platform: Option.some("mac"),
         target: Option.none(),
         arch: Option.some("arm64"),
@@ -2206,6 +2330,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       assert.equal(resolved.signed, false);
       assert.equal(resolved.verbose, false);
       assert.equal(resolved.mockUpdates, false);
+      assert.equal(resolved.flavor, "firstmate");
     }),
   );
 });

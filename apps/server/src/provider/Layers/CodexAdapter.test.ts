@@ -104,6 +104,8 @@ class FakeCodexRuntime implements CodexSessionRuntimeShape {
     }),
   );
 
+  public readonly archiveThreadImpl = vi.fn(() => Promise.resolve(undefined));
+
   public readonly uploadFeedbackImpl = vi.fn((_reason?: string) =>
     Promise.resolve({ threadId: "provider-thread-1" }),
   );
@@ -145,6 +147,8 @@ class FakeCodexRuntime implements CodexSessionRuntimeShape {
   rollbackThread(numTurns: number) {
     return Effect.promise(() => this.rollbackThreadImpl(numTurns));
   }
+
+  archiveThread = Effect.promise(() => this.archiveThreadImpl());
 
   uploadFeedback(reason?: string) {
     return Effect.promise(() => this.uploadFeedbackImpl(reason));
@@ -403,6 +407,25 @@ sessionErrorLayer("CodexAdapterLive session errors", (it) => {
     }),
   );
 
+  it.effect("archives the active provider-native Codex thread", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const threadId = asThreadId("thread-archive");
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("codex"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const runtime = sessionRuntimeFactory.lastRuntime;
+      NodeAssert.ok(runtime);
+      NodeAssert.ok(adapter.archiveThread);
+
+      yield* adapter.archiveThread(threadId);
+
+      NodeAssert.equal(runtime.archiveThreadImpl.mock.calls.length, 1);
+    }),
+  );
+
   it.effect("rejects feedback for an unknown Codex thread", () =>
     Effect.gen(function* () {
       const adapter = yield* CodexAdapter;
@@ -445,6 +468,54 @@ sessionErrorLayer("CodexAdapterLive session errors", (it) => {
         effort: "high",
         serviceTier: "priority",
       });
+    }),
+  );
+
+  it.effect("passes image attachments to Codex by path instead of base64", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const threadId = asThreadId("thread-image-attachment");
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("codex"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const runtime = sessionRuntimeFactory.lastRuntime;
+      NodeAssert.ok(runtime);
+      runtime.sendTurnImpl.mockClear();
+
+      const serverConfig = yield* ServerConfig;
+      const attachmentsDir = serverConfig.attachmentsDir;
+      const attachmentId = "attachment-local-image-1";
+      const attachmentPath = NodePath.join(attachmentsDir, `${attachmentId}.png`);
+      NodeFS.writeFileSync(attachmentPath, Buffer.alloc(4, 0x89));
+
+      try {
+        yield* adapter.sendTurn({
+          threadId,
+          input: "Use this image.",
+          attachments: [
+            {
+              type: "image",
+              id: attachmentId,
+              name: "generated.png",
+              mimeType: "image/png",
+              sizeBytes: NodeFS.statSync(attachmentPath).size,
+            },
+          ],
+        });
+
+        const input = runtime.sendTurnImpl.mock.calls[0]?.[0];
+        NodeAssert.ok(input);
+        NodeAssert.deepStrictEqual(input.attachments, [
+          {
+            type: "localImage",
+            path: attachmentPath,
+          },
+        ]);
+      } finally {
+        NodeFS.rmSync(attachmentPath, { force: true });
+      }
     }),
   );
 
@@ -1118,6 +1189,8 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
         const payload = event.payload as Record<string, unknown>;
         NodeAssert.equal(payload.model, "gpt-5.6-sol");
         NodeAssert.equal(payload.effort, "high");
+        NodeAssert.equal("modelSource" in payload, false);
+        NodeAssert.equal("effortSource" in payload, false);
       }
 
       const metadataPayload = events[8]?.payload as Record<string, unknown>;

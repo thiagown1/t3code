@@ -9,6 +9,107 @@ A driver kind identifies an integration; an instance identifies one configuratio
 lifecycle. Route work by instance, so two accounts using the same driver do not share mutable
 session or catalog state.
 
+Context-window telemetry follows the same boundary. Adapters normalize provider usage into
+`context-window.updated` activities; clients derive the newest valid snapshot and share one
+presentation model across web and mobile. Compact surfaces may round counts, but detail surfaces
+must preserve exact provider values and label omitted fields instead of estimating them.
+Compaction history is reconstructed from durable `context-compaction` activities. A correlated
+request id marks a manual compaction; an uncorrelated provider event is presented as
+provider-native. Before/after counts remain optional because not every provider reports them.
+
+Portable capability profiles are versioned, secret-free policy manifests. Their declarations may
+reference only a local credential identifier and resolver kind; credential material never belongs
+in the manifest. Effective access is fail-closed: the most-specific declaration must be enabled,
+the current machine must report the integration available, and the current action must be
+separately authorized. Missing or equally specific conflicting declarations are denied.
+Each server persists its own optional profile in environment settings. The Integrations panel can
+export that profile or import one through a validate, dry-run diff, and explicit-confirmation flow.
+Import replaces the complete profile so removed declarations cannot survive unnoticed; an absent
+profile grants no capabilities. Import/export does not resolve credentials or prove availability
+or authorization, which remain independent runtime gates.
+
+Environment Bundles extend that policy with a versioned, canonical inventory of MCP servers,
+skills, plugins/apps, provider instances, project-instruction hashes, and the initial skill-context
+budget. Bundles contain only logical paths, configuration references, credential references, and
+content hashes. Absolute or escaping paths, duplicate identities, and conflicting MCP allow/block
+rules are rejected. A bundle dry run compares every inventory independently; it is not permission
+to install, enable, restart, or mutate an environment. Runtime health remains explicit as
+`configured`, `missing-credential`, `unavailable`, `disabled`, or `ready`, and only a completed
+health check can produce `ready`.
+
+The Integrations panel builds its export from the selected server's live provider inventory and,
+when available, the workspace-scoped skill snapshot for that checkout. It converts project skill
+paths to relative logical paths and infers plugin/app identities without serializing user or
+installation paths. Import always starts with a canonical dry run that lists each add, update, and
+remove operation and marks provider reloads and required health checks. The reviewed bundle can
+apply a supported change only through one atomic destination family. Existing Codex and Claude
+skills and project MCPs for Claude and OpenCode can be disabled with destination-bound hashes,
+provider refresh, post-write verification, and drift-aware rollback. Existing provider instances
+can be disabled or re-enabled without copying their opaque local configuration; re-enablement is
+confirmed only after the provider is installed, available, authenticated, and ready. Provider
+creation, removal, and metadata changes remain blocked.
+
+A Codex plugin/app disable is a project policy over every currently enabled skill supplied by that
+installed integration. It writes only exact-path `enabled = false` overrides to the project's
+`.codex/config.toml`; it never removes the plugin, its cache, or its credentials. The server derives
+paths from the live provider snapshot rather than the imported bundle and blocks the whole plan if
+the bundle omits a provided skill, mislabels a non-plugin skill, or would silently affect another
+instance. Plugin/app installation and enablement remain unsupported.
+
+The server keeps provider-effective instruction coverage separate from its authoritative
+`known-root-v1` allowlist attestation. Provider coverage remains partial until adapters report the
+exact files loaded by a session. The allowlist covers, in order, root `AGENTS.md`, `CLAUDE.md`,
+`GEMINI.md`, `.cursorrules`, and `.github/copilot-instructions.md`; it is complete only when every
+entry is either authoritatively absent or resolves to a regular file within the real project root
+and contains at most 256,000 bytes. Internal symlinks are allowed. The scanner opens each present
+file once, reads at most 256,001 bytes from that handle, and rechecks the canonical path plus the
+descriptor identity and metadata available on the host. Detected path swaps, identity or size
+changes, escapes, directories, oversized files, permission failures, and other I/O failures make
+that scope partial with only a logical path and stable reason code exposed. These portable checks
+fail closed when they observe a race, but cannot provide an atomic no-symlink-open guarantee on
+every supported filesystem. The bundle carries the allowlist
+scope id and definition hash, plus SHA-256 hashes of present file bytes, but never contents or
+absolute paths. Apply compares the attested inventories symmetrically and fails closed for legacy
+v1 bundles without an attestation, incompatible scopes, missing or extra files, changed hashes,
+disabled entries, and paths outside the allowlist. Instructions and context-budget changes remain
+blockers because they have no safe write adapter. MCP inventory stays explicit about coverage. The Codex adapter scans only MCP table names, `enabled`, `enabled_tools`,
+and `disabled_tools` from the configured user home and root project config. Commands, arguments,
+URLs, environment values, tokens, absolute paths, and unrecognized fields are discarded before the
+inventory or its hash is built. Single-line allow/block lists are supported; unhandled
+provider-native scopes and more complex TOML remain partial. The browser must not derive inventory
+from raw provider config.
+Nested Codex MCP `env` tables contribute only their variable names as portable
+`environment-variable` credential references. Values are never returned or hashed; destinations
+must resolve each name from their own environment before any future enablement adapter may report
+the MCP as ready. Inline or provider-specific credential layouts remain outside the partial scan.
+Claude instances also contribute project-scoped servers from the repository's `.mcp.json`. That
+adapter accepts only safe server names and returns environment-variable reference names found in
+the declared `env` keys or `${VAR}` placeholders in standard command, argument, URL, and header
+fields. It discards all corresponding values and executable configuration before hashing. User and
+local Claude scopes, approval state, managed MCPs, plugins, and runtime health are not inferred, so
+coverage remains partial.
+Cursor instances use the same sanitized JSON parser for the repository's `.cursor/mcp.json`.
+Only project-scoped server identities and environment-variable reference names are exported;
+commands, arguments, URLs, headers, and values are discarded. User-scoped Cursor configuration,
+runtime health, approvals, and extension-managed MCPs remain outside the adapter, so coverage is
+still explicitly partial.
+OpenCode instances contribute the repository's `opencode.jsonc` or `opencode.json` (JSONC wins
+when both exist). The adapter accepts both `mcp.<name>` and `mcp.servers.<name>`, preserves only
+the enabled state and environment-variable reference names, and discards commands, URLs, headers,
+OAuth values, file references, and all other configuration. Global, custom, remote, inline, and
+managed OpenCode layers are not inferred, so this inventory also remains explicitly partial.
+The read-only credential-resolution RPC accepts only explicitly requested references. It reports
+`resolved`, `missing`, or `unsupported`, never returns a value, and does not enumerate the host
+environment. The first resolver supports environment variables; native keychains, credential
+managers, and managed references remain unsupported until dedicated adapters exist.
+The import review resolves those references on the selected environment and displays only their
+identities and statuses. Enabling a capability that names a credential is fail-closed until its
+reference resolves locally; a missing, unsupported, unchecked, or failed resolution keeps the
+atomic Apply action disabled. MCP references are visible in the same review, but do not authorize
+MCP configuration or activation while that application adapter is absent.
+The inventory dialog exposes logical identities, enabled state, origin, coverage, and abbreviated
+instruction hashes so operators can inspect what a bundle would contain before exporting it.
+
 ## Process and account isolation
 
 T3-managed OpenCode chat uses one server per thread. Its MCP registrations are directory-scoped, while
@@ -94,6 +195,17 @@ therefore rejects revert before touching files. Native permission and question o
 also survive normalization; a display label is not necessarily a valid reply.
 
 ## Attachments and stored history
+
+Archiving is event-driven rather than a transport side effect. After
+`thread.archived` commits, the
+[archive reactor](../../apps/server/src/orchestration/Layers/ThreadArchiveReactor.ts) asks the
+bound adapter to archive the provider-native conversation, then stops the runtime and closes
+terminal panes without deleting their history. It appends one durable activity receipt that keeps
+the local archive, provider result, runtime stop, and transcript preservation separate. Codex uses
+its native `thread/archive` request. Providers without a supported archive API report
+`unsupported`; do not emulate that operation through browser automation or by moving provider-owned
+storage files. The archived-thread settings page projects the latest receipt so pending, archived,
+unsupported, unlinked, and failed outcomes stay visible after the thread leaves the active sidebar.
 
 Attachments live outside the project workspace. [ProviderService](../../apps/server/src/provider/Layers/ProviderService.ts)
 puts their environment-local paths in turn input and lets adapters choose native input formats.

@@ -11,6 +11,8 @@ import {
   type LimitAccount,
   isUsageLimitsCommand,
   collectProviderUsageLimits,
+  compactUsageLimitsSummary,
+  formatCompactUsageLimitsValue,
   sameUsageLimitCommandCoverage,
   withUsageLimitsCommands,
   collectLimitAccounts,
@@ -873,6 +875,17 @@ describe("/usage-limits", () => {
     expect(report?.notices).toEqual([]);
   });
 
+  it("puts the selected provider account first even when the catalog orders it later", () => {
+    const work = provider({
+      instanceId: ProviderInstanceId.make("codex-work"),
+      displayName: "Work",
+      usageLimits: limits,
+    });
+    const report = collectProviderUsageLimits(work.instanceId, [selected, work], [], now);
+
+    expect(report?.accounts.map((account) => account.id)).toEqual(["codex-work", "codex"]);
+  });
+
   it("supports a source-only provider and keeps duplicates when the native probe failed", () => {
     expect(
       collectProviderUsageLimits(selected.instanceId, [provider({})], sources, now)?.accounts.map(
@@ -949,6 +962,143 @@ describe("/usage-limits", () => {
     expect(
       withUsageLimitsCommands([selected], [])[0]?.slashCommands.map((command) => command.name),
     ).toEqual(["usage-limits"]);
+  });
+});
+
+describe("compact usage limits summary", () => {
+  const report = {
+    createdAt: "2026-09-03T12:00:00.000Z",
+    accounts: [
+      {
+        id: "codex-work",
+        driver: ProviderDriverKind.make("codex"),
+        label: "Codex · Work",
+        limits: {
+          checkedAt: "2026-09-03T11:55:00.000Z",
+          windows: [
+            window,
+            {
+              id: "seven_day",
+              kind: "weekly" as const,
+              label: "Weekly",
+              usedPercent: 25,
+              resetsAt: "2026-09-08T12:00:00.000Z",
+            },
+          ],
+        },
+      },
+    ],
+    notices: [],
+  };
+
+  it("shows every reported window for the selected account", () => {
+    const summary = compactUsageLimitsSummary(report, now);
+    expect(summary).toEqual({
+      status: "available",
+      accountLabel: "Codex · Work",
+      accountCount: 1,
+      checkedAt: "2026-09-03T11:55:00.000Z",
+      windows: [
+        {
+          id: "five_hour",
+          kind: "session",
+          label: "Session",
+          remainingPercent: 60,
+          resetsIn: "resets in 2h 0m",
+        },
+        {
+          id: "seven_day",
+          kind: "weekly",
+          label: "Weekly",
+          remainingPercent: 75,
+          resetsIn: "resets in 5d 0h",
+        },
+      ],
+    });
+    expect(formatCompactUsageLimitsValue(summary)).toBe(
+      "Session 60%, resets in 2h 0m · Weekly 75%, resets in 5d 0h",
+    );
+  });
+
+  it("uses a friendly provider and instance label without repeating the default instance", () => {
+    expect(
+      compactUsageLimitsSummary(
+        {
+          ...report,
+          accounts: [
+            {
+              ...report.accounts[0]!,
+              instanceId: ProviderInstanceId.make("codex"),
+              label: "codex [codex]",
+            },
+          ],
+        },
+        now,
+      ).accountLabel,
+    ).toBe("Codex");
+    expect(
+      compactUsageLimitsSummary(
+        {
+          ...report,
+          accounts: [
+            {
+              ...report.accounts[0]!,
+              instanceId: ProviderInstanceId.make("codex-work"),
+              displayName: "Work",
+              label: "Work [codex-work]",
+            },
+          ],
+        },
+        now,
+      ).accountLabel,
+    ).toBe("Codex · Work");
+  });
+
+  it("does not present old percentages as current", () => {
+    const summary = compactUsageLimitsSummary(report, Date.parse("2026-09-03T12:06:00.001Z"));
+    expect(summary).toEqual({
+      status: "stale",
+      accountLabel: "Codex · Work",
+      accountCount: 1,
+      checkedAt: "2026-09-03T11:55:00.000Z",
+      windows: [],
+      message: "Usage reading is stale.",
+    });
+    expect(formatCompactUsageLimitsValue(summary)).toBe("Usage reading is stale.");
+  });
+
+  it("explains unavailable and missing readings without inventing percentages", () => {
+    expect(
+      compactUsageLimitsSummary(
+        {
+          ...report,
+          accounts: [
+            {
+              ...report.accounts[0]!,
+              limits: {
+                checkedAt: "2026-09-03T11:59:00.000Z",
+                windows: [],
+                unavailable: { reason: "probeFailed" as const, message: "Codex timed out." },
+              },
+            },
+          ],
+        },
+        now,
+      ),
+    ).toMatchObject({ status: "unavailable", windows: [], message: "Codex timed out." });
+    expect(
+      compactUsageLimitsSummary(
+        { createdAt: report.createdAt, accounts: [], notices: ["Hub is offline."] },
+        now,
+      ),
+    ).toEqual({
+      status: "unavailable",
+      accountLabel: "Usage limits",
+      accountCount: 0,
+      checkedAt: null,
+      windows: [],
+      message: "Hub is offline.",
+    });
   });
 });
 

@@ -9,12 +9,18 @@ import { CheckpointReactor } from "../Services/CheckpointReactor.ts";
 import { ProviderCommandReactor } from "../Services/ProviderCommandReactor.ts";
 import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeIngestion.ts";
 import { ThreadDeletionReactor } from "../Services/ThreadDeletionReactor.ts";
+import { ThreadArchiveReactor } from "../Services/ThreadArchiveReactor.ts";
+import { ThreadQueuedMessageReactor } from "../Services/ThreadQueuedMessageReactor.ts";
+import * as FirstMateDecisionDeliveryReactor from "../FirstMateDecisionDeliveryReactor.ts";
+import * as FirstMateRequestDecisionReactor from "../FirstMateRequestDecisionReactor.ts";
 import * as ThreadSettlementReactor from "../ThreadSettlementReactor.ts";
 import * as PullRequestSyncReactor from "../PullRequestSyncReactor.ts";
 import * as ThreadPullRequestReactor from "../ThreadPullRequestReactor.ts";
+import * as FirstMateRoundSummaryReactor from "../FirstMateRoundSummaryReactor.ts";
 import { OrchestrationReactor } from "../Services/OrchestrationReactor.ts";
 import { makeOrchestrationReactor } from "./OrchestrationReactor.ts";
 import * as AgentAwarenessRelay from "../../relay/AgentAwarenessRelay.ts";
+import { StorageCleanup } from "../../storageCleanup.ts";
 
 describe("OrchestrationReactor", () => {
   let runtime: ManagedRuntime.ManagedRuntime<OrchestrationReactor, never> | null = null;
@@ -31,6 +37,24 @@ describe("OrchestrationReactor", () => {
 
     runtime = ManagedRuntime.make(
       Layer.effect(OrchestrationReactor, makeOrchestrationReactor).pipe(
+        Layer.provideMerge(
+          Layer.succeed(ThreadQueuedMessageReactor, {
+            start: () => {
+              started.push("thread-queued-message-reactor");
+              return Effect.void;
+            },
+            drain: Effect.void,
+          }),
+        ),
+        Layer.provideMerge(
+          Layer.succeed(StorageCleanup, {
+            start: () => {
+              started.push("storage-cleanup");
+              return Effect.void;
+            },
+            drain: Effect.void,
+          }),
+        ),
         Layer.provideMerge(
           Layer.succeed(ProviderRuntimeIngestionService, {
             start: () => {
@@ -68,6 +92,14 @@ describe("OrchestrationReactor", () => {
           }),
         ),
         Layer.provideMerge(
+          Layer.succeed(ThreadArchiveReactor, {
+            start: () => {
+              started.push("thread-archive-reactor");
+              return Effect.void;
+            },
+          }),
+        ),
+        Layer.provideMerge(
           Layer.succeed(ThreadPullRequestReactor.ThreadPullRequestReactor, {
             start: () => {
               started.push("thread-pull-request-reactor");
@@ -86,6 +118,24 @@ describe("OrchestrationReactor", () => {
           }),
         ),
         Layer.provideMerge(
+          Layer.succeed(FirstMateDecisionDeliveryReactor.FirstMateDecisionDeliveryReactor, {
+            start: () => {
+              started.push("firstmate-decision-delivery-reactor");
+              return Effect.void;
+            },
+            drain: Effect.void,
+          }),
+        ),
+        Layer.provideMerge(
+          Layer.succeed(FirstMateRequestDecisionReactor.FirstMateRequestDecisionReactor, {
+            start: () => {
+              started.push("firstmate-request-decision-reactor");
+              return Effect.void;
+            },
+            drain: Effect.void,
+          }),
+        ),
+        Layer.provideMerge(
           Layer.succeed(PullRequestSyncReactor.PullRequestSyncReactor, {
             start: () => {
               started.push("pull-request-sync-reactor");
@@ -93,6 +143,15 @@ describe("OrchestrationReactor", () => {
             },
             drain: Effect.void,
             requestSync: () => Effect.void,
+          }),
+        ),
+        Layer.provideMerge(
+          Layer.succeed(FirstMateRoundSummaryReactor.FirstMateRoundSummaryReactor, {
+            start: () => {
+              started.push("first-mate-round-summary-reactor");
+              return Effect.void;
+            },
+            drain: Effect.void,
           }),
         ),
         Layer.provideMerge(
@@ -116,10 +175,16 @@ describe("OrchestrationReactor", () => {
       "provider-command-reactor",
       "checkpoint-reactor",
       "thread-deletion-reactor",
+      "thread-archive-reactor",
+      "thread-queued-message-reactor",
       "thread-pull-request-reactor",
       "thread-settlement-reactor",
+      "firstmate-decision-delivery-reactor",
+      "firstmate-request-decision-reactor",
       "pull-request-sync-reactor",
+      "first-mate-round-summary-reactor",
       "agent-awareness-relay",
+      "storage-cleanup",
     ]);
 
     await Effect.runPromise(Scope.close(scope, Exit.void));

@@ -35,6 +35,22 @@ describe("wasRecentlyInteracted", () => {
     }),
   );
 
+  it.effect("retains aggregate machine health as diagnostics activity", () =>
+    Effect.gen(function* () {
+      const environmentId = EnvironmentId.make("machine-health-observation-test");
+      const release = yield* observeBackgroundActivitySubscription({
+        environmentId,
+        method: WS_METHODS.subscribeResourceTelemetrySummary,
+        input: {},
+      });
+
+      expect(retainedBackgroundScopes(environmentId)).toEqual([{ type: "diagnostics" }]);
+
+      yield* release;
+      expect(retainedBackgroundScopes(environmentId)).toEqual([]);
+    }),
+  );
+
   it.effect("keeps delimiter-containing environment and scope values distinct", () =>
     Effect.gen(function* () {
       const firstEnvironmentId = EnvironmentId.make("a");

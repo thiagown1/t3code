@@ -16,6 +16,7 @@ import * as DesktopConfig from "./DesktopConfig.ts";
 import { resolveLinuxDesktopEntryName } from "./DesktopEarlyElectronStartup.ts";
 import { resolveDesktopBaseDir, resolveDesktopStateDir } from "./DesktopStatePaths.ts";
 import { isNightlyDesktopVersion } from "../updates/updateChannels.ts";
+import type { OtlpProtocol } from "@t3tools/shared/observability";
 
 export interface MakeDesktopEnvironmentInput {
   readonly dirname: string;
@@ -23,6 +24,7 @@ export interface MakeDesktopEnvironmentInput {
   readonly platform: NodeJS.Platform;
   readonly processArch: string;
   readonly appVersion: string;
+  readonly appName?: string;
   readonly appPath: string;
   readonly isPackaged: boolean;
   readonly resourcesPath: string;
@@ -39,6 +41,7 @@ export class DesktopEnvironment extends Context.Service<
     readonly isPackaged: boolean;
     readonly isDevelopment: boolean;
     readonly appVersion: string;
+    readonly desktopFlavor: DesktopFlavor;
     readonly appPath: string;
     readonly resourcesPath: string;
     readonly homeDirectory: string;
@@ -72,6 +75,8 @@ export class DesktopEnvironment extends Context.Service<
     readonly commitHashOverride: Option.Option<string>;
     readonly otlpTracesUrl: Option.Option<string>;
     readonly otlpExportIntervalMs: number;
+    readonly otlpHeaders: Option.Option<Record<string, string>>;
+    readonly otlpProtocol: OtlpProtocol;
     readonly branding: DesktopAppBranding;
     readonly displayName: string;
     readonly appUserModelId: string;
@@ -89,6 +94,20 @@ export class DesktopEnvironment extends Context.Service<
 >()("@t3tools/desktop/app/DesktopEnvironment") {}
 
 const APP_BASE_NAME = "T3 Code";
+const FIRSTMATE_APP_NAME = "T3 Code FirstMate";
+
+export type DesktopFlavor = "official" | "firstmate";
+
+function resolveDesktopFlavor(input: {
+  readonly appName?: string;
+  readonly isPackaged: boolean;
+}): DesktopFlavor {
+  if (!input.isPackaged) return "official";
+  const appName = input.appName?.trim().toLowerCase();
+  return appName === FIRSTMATE_APP_NAME.toLowerCase() || appName === "t3code-firstmate"
+    ? "firstmate"
+    : "official";
+}
 
 function resolveDesktopAppStageLabel(input: {
   readonly isDevelopment: boolean;
@@ -104,12 +123,14 @@ function resolveDesktopAppStageLabel(input: {
 export function resolveDesktopAppBranding(input: {
   readonly isDevelopment: boolean;
   readonly appVersion: string;
+  readonly desktopFlavor?: DesktopFlavor;
 }): DesktopAppBranding {
   const stageLabel = resolveDesktopAppStageLabel(input);
+  const baseName = input.desktopFlavor === "firstmate" ? FIRSTMATE_APP_NAME : APP_BASE_NAME;
   return {
-    baseName: APP_BASE_NAME,
+    baseName,
     stageLabel,
-    displayName: `${APP_BASE_NAME} (${stageLabel})`,
+    displayName: `${baseName} (${stageLabel})`,
   };
 }
 
@@ -151,6 +172,7 @@ const make = Effect.fn("desktop.environment.make")(function* (
   const homeDirectory = input.homeDirectory;
   const devServerUrl = config.devServerUrl;
   const isDevelopment = Option.isSome(devServerUrl);
+  const desktopFlavor = resolveDesktopFlavor(input);
   const appDataDirectory =
     input.platform === "win32"
       ? Option.getOrElse(config.appDataDirectory, () =>
@@ -163,6 +185,7 @@ const make = Effect.fn("desktop.environment.make")(function* (
     homeDirectory,
     joinPath: path.join,
     t3Home: config.t3Home,
+    defaultBaseDirName: desktopFlavor === "firstmate" ? ".t3-firstmate" : ".t3",
   });
   const rootDir = path.resolve(input.dirname, "../../..");
   const appRoot = input.isPackaged ? input.appPath : rootDir;
@@ -173,6 +196,7 @@ const make = Effect.fn("desktop.environment.make")(function* (
   const branding = resolveDesktopAppBranding({
     isDevelopment,
     appVersion: input.appVersion,
+    desktopFlavor,
   });
   const displayName = branding.displayName;
   const stateDir = resolveDesktopStateDir({
@@ -181,8 +205,14 @@ const make = Effect.fn("desktop.environment.make")(function* (
     joinPath: path.join,
     t3Home: config.t3Home,
   });
-  const userDataDirName = isDevelopment ? "t3code-dev" : "t3code";
-  const legacyUserDataDirName = isDevelopment ? "T3 Code (Dev)" : "T3 Code (Alpha)";
+  const userDataDirName =
+    desktopFlavor === "firstmate" ? "t3code-firstmate" : isDevelopment ? "t3code-dev" : "t3code";
+  const legacyUserDataDirName =
+    desktopFlavor === "firstmate"
+      ? FIRSTMATE_APP_NAME
+      : isDevelopment
+        ? "T3 Code (Dev)"
+        : "T3 Code (Alpha)";
   const linuxApplicationsDir = path.join(
     Option.getOrElse(config.xdgDataHome, () => path.join(homeDirectory, ".local", "share")),
     "applications",
@@ -197,6 +227,7 @@ const make = Effect.fn("desktop.environment.make")(function* (
     isPackaged: input.isPackaged,
     isDevelopment,
     appVersion: input.appVersion,
+    desktopFlavor,
     appPath: input.appPath,
     resourcesPath,
     homeDirectory,
@@ -225,10 +256,16 @@ const make = Effect.fn("desktop.environment.make")(function* (
     commitHashOverride: config.commitHashOverride,
     otlpTracesUrl: config.otlpTracesUrl,
     otlpExportIntervalMs: config.otlpExportIntervalMs,
+    otlpHeaders: config.otlpHeaders,
+    otlpProtocol: config.otlpProtocol,
     branding,
     displayName,
     appUserModelId: Option.getOrElse(config.appUserModelIdOverride, () =>
-      isDevelopment ? "com.t3tools.t3code.dev" : "com.t3tools.t3code",
+      desktopFlavor === "firstmate"
+        ? "com.t3tools.t3code.firstmate"
+        : isDevelopment
+          ? "com.t3tools.t3code.dev"
+          : "com.t3tools.t3code",
     ),
     linuxDesktopEntryName: resolveLinuxDesktopEntryName(isDevelopment),
     linuxWmClass: isDevelopment ? "t3code-dev" : "t3code",

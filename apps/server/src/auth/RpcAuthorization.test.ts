@@ -1,6 +1,7 @@
 import {
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
+  ORCHESTRATION_WS_METHODS,
   AuthRelayReadScope,
   AuthRelayWriteScope,
   WS_METHODS,
@@ -49,6 +50,12 @@ describe("RPC authorization scopes", () => {
     );
     expect(requiredScopeForRpcMethod(WS_METHODS.agentSessionsImport)).toBe(
       AuthOrchestrationOperateScope,
+    );
+  });
+
+  it("keeps thread cleanup preview read-only", () => {
+    expect(requiredScopeForRpcMethod(ORCHESTRATION_WS_METHODS.previewThreadCleanup)).toBe(
+      AuthOrchestrationReadScope,
     );
   });
 

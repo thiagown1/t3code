@@ -22,6 +22,7 @@ import {
 import { describe, expect, it } from "vite-plus/test";
 
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
+import { threadJumpTarget } from "../keyboard/threadKeyboardShortcuts";
 import {
   buildThreadListV2Items,
   buildThreadListV2ListItems,
@@ -166,6 +167,22 @@ describe("resolveThreadListV2Status", () => {
     expect(resolveThreadListV2Status(makeThread({ id: ThreadId.make("t"), title: "t" }))).toBe(
       "ready",
     );
+  });
+
+  it("shows a delivery status after active provider states", () => {
+    const waiting = makeThread({
+      id: ThreadId.make("waiting"),
+      title: "Waiting",
+      deliveryStatus: "waiting-deploy",
+    });
+    expect(resolveThreadListV2Status(waiting)).toBe("waiting-deploy");
+
+    expect(
+      resolveThreadListV2Status({
+        ...waiting,
+        hasPendingUserInput: true,
+      }),
+    ).toBe("input");
   });
 });
 
@@ -1050,6 +1067,9 @@ describe("buildThreadListV2ListItems", () => {
       "v2-settled-shelf",
       "v2-thread",
     ]);
+    expect(threadJumpTarget(items, "thread.jump.1")?.id).toBe("active");
+    expect(threadJumpTarget(items, "thread.jump.2")?.id).toBe("settled");
+    expect(threadJumpTarget(items, "thread.jump.3")).toBeNull();
   });
 });
 

@@ -76,7 +76,10 @@ az login
 ## Clone or publish a project
 
 Use **Add Project** in the command palette (`Cmd/Ctrl+K`) to clone a repository. Choose a hosting
-provider or paste a Git URL, then choose where to save it.
+provider or paste a Git URL, then choose where to save it. The project opens right away while the
+clone runs in the background: you can write your first prompt, and sending waits until the files
+are in place. A toast tracks progress and lets you cancel; if the clone fails, retry it from the
+toast or from the banner above the composer.
 
 For a local Git repository without a remote, **Publish Repository** creates a hosted repository,
 adds it as `origin`, and pushes your commits. If there are no commits yet, it creates the remote;
@@ -115,8 +118,22 @@ for ten minutes during a GitHub outage; new credentials must be verified first. 
 an uncertain result is never automatically retried elsewhere. Listings, diffs, and checkout or
 PR creation from Git actions continue to use the project's environment.
 
-For Azure DevOps, use the host website to view diffs or change comments. Bitbucket does not support
-reopening a declined pull request.
+For Azure DevOps, use the host website to change comments. Bitbucket does not support reopening a
+declined pull request.
+
+### Mark files as viewed
+
+Tick a file off in the **Code** tab once you have read it and it collapses; the toolbar keeps a
+running count. A tick belongs to the pull request rather than to a commit, so scoping the tab to a
+single commit keeps them. A file pushed to after you cleared it comes back marked **Changed**.
+
+On GitHub these are GitHub's own viewed marks, so a review carries between T3 Code and github.com
+in either direction. Forgejo, GitLab, Bitbucket, and Azure DevOps expose no record T3 Code can read, so the
+server you are connected to keeps them instead: they follow you across the apps connected to that
+server, but the host's own site will not show them, and the count reads **viewed in T3 Code**.
+
+The **Code** tab is a web and desktop surface. The mobile app reports a pull request's status but
+does not show its diff, so marks are made and read on web and desktop.
 
 ## Troubleshooting
 
@@ -144,13 +161,43 @@ links. On mobile, the Git overview lists linked reviews and their stacks; tap a 
 Linking and unlinking are available in the web and desktop clients.
 
 The **Linked pull requests** panel lists every review and groups stacks. Unlink a review from its
-row menu. An unlinked stack layer stays out of later syncs. Open linked reviews refresh on the server;
-closed reviews refresh periodically so reopening one on the host is detected. Merged reviews refresh
-when requested. With **Auto-settle merged threads** enabled, a thread can settle after every linked
-review is terminal. An open or unsynced link keeps it active.
+row menu. An unlinked stack layer stays out of later syncs. Open linked reviews refresh on the server
+every minute, including after the agent session settles, so a completed check can still become an
+operator action. Unchanged snapshots receive a periodic freshness receipt; closed reviews refresh
+periodically so reopening one on the host is detected. Merged reviews refresh when requested. With
+**Auto-settle merged threads** enabled, a thread can settle after every linked review is terminal. An
+open or unsynced link keeps it active.
+
+In the FirstMate topic list, each linked pull request shows its number, exact observed head SHA and
+check readiness. Pending checks keep the topic at **Waiting for CI**. A fresh head whose reported
+checks all passed becomes **Ready to merge**. Required action, failures, conflicts, cancelled/skipped
+checks, and stale evidence fail closed instead of appearing green. These statuses are informational:
+T3 Code does not merge, deploy, or activate a feature automatically. When a fresh head transitions
+to **Ready to merge**, the normal in-app or desktop notification settings alert you and open the
+owning thread; the same head does not notify repeatedly while it stays green.
+
+After every linked pull request is merged, FirstMate asks for the operator-owned next step. Choose
+the rocket action to keep the thread visible as **Waiting to deploy**, or archive it when no deploy,
+feature flag, or post-deploy validation remains. Neither action is selected automatically.
 
 Cross-repository links use a project on the same host. Azure DevOps reviews require a project checked
 out from the matching organization and repository.
+
+## Let the original agent follow a PR
+
+For a repository configured for FirstMate supervision, ask the implementing
+agent to supervise its linked PR. The agent enrolls the same conversation and
+reports whether enrollment succeeded. FirstMate watches without calling a model
+and resumes that conversation when a CI/review failure needs work or passing
+gates need final functional evidence. It never merges or deploys the PR.
+
+Keep the T3 server running. Supervision survives a server restart, but it cannot
+repair while the server is offline. The pilot allows three automatic resumptions
+within two hours and waits while the thread is busy or needs your answer. Ask
+the agent to stop supervision to cancel it; stopping releases its writer after
+the current work is idle. Ask for supervision status to see its progress and
+why it stopped. Unavailable credentials, exhausted limits and unavailable
+coordination are recorded in thread activity.
 
 ## GitHub stacks
 

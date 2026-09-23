@@ -51,6 +51,8 @@ export interface ProviderRegistryShape {
   readonly refreshWorkspaceSnapshot: (input: {
     readonly instanceId: ProviderInstanceId;
     readonly cwd: string;
+    /** Re-probe and replace an existing workspace snapshot. */
+    readonly force?: boolean;
   }) => Effect.Effect<ReadonlyArray<ServerProvider>>;
 
   /**

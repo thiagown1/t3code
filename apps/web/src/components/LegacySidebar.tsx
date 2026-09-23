@@ -1,5 +1,4 @@
 import { useSupportsMultiplePullRequests } from "~/hooks/useSupportsMultiplePullRequests";
-import { GitPullRequestIcon } from "lucide-react";
 import { resolveThreadCurrentPullRequestLink } from "@t3tools/shared/threadPullRequests";
 import { Spinner } from "~/components/ui/spinner";
 import {
@@ -214,6 +213,7 @@ import {
   type SidebarProjectGroupMember,
   type SidebarProjectSnapshot,
 } from "../sidebarProjectGrouping";
+import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
 const SIDEBAR_SORT_LABELS: Record<SidebarProjectSortOrder, string> = {
   updated_at: "Last user message",
   created_at: "Created at",
@@ -391,6 +391,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
         addFiles: (files) => {
           onFileDropThreads(threadRef, files);
         },
+        addFolders: () => {},
       }),
     [onFileDropThreads, threadRef],
   );
@@ -757,7 +758,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
               className="text-muted-foreground"
               aria-label={`PR #${currentLinkedPr.number}, status pending`}
             >
-              <GitPullRequestIcon className="size-3" />
+              <PullRequestGlyph.pullRequest className="size-3" />
             </a>
           ) : null}
           {threadStatus && <ThreadStatusLabel status={threadStatus} />}
@@ -1579,7 +1580,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
                           ...(member.environmentLabel
                             ? [`Environment: ${member.environmentLabel}`]
                             : []),
-                          "This permanently clears conversation history for those threads and any archived threads.",
+                          "T3 removes those threads from your lists, deletes terminal history and stored attachments, and retains conversation records in the audit log. Provider conversations stay unchanged.",
                           "This removes only this project entry.",
                           "This action cannot be undone.",
                         ].join("\n")
@@ -1589,7 +1590,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
                           ...(member.environmentLabel
                             ? [`Environment: ${member.environmentLabel}`]
                             : []),
-                          "This permanently clears any archived conversation history.",
+                          "T3 removes archived threads from your lists and retains their conversation records in the audit log. Provider conversations stay unchanged.",
                           "This removes only this project entry.",
                         ].join("\n"),
                     { variant: "destructive" },
@@ -1639,7 +1640,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         `Remove project "${member.title}"?`,
         `Path: ${member.workspaceRoot}`,
         ...(member.environmentLabel ? [`Environment: ${member.environmentLabel}`] : []),
-        "This permanently clears any archived conversation history.",
+        "T3 removes archived threads from your lists and retains their conversation records in the audit log. Provider conversations stay unchanged.",
         "This removes only this project entry.",
       ].join("\n");
       const confirmed = await api.dialogs.confirm(message, { variant: "destructive" });
@@ -1956,7 +1957,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         const confirmed = await api.dialogs.confirm(
           [
             `Delete ${count} thread${count === 1 ? "" : "s"}?`,
-            "This permanently clears conversation history for these threads.",
+            "T3 will remove these threads from your lists and delete their terminal history and stored attachments. Conversation records remain in the audit log, and provider conversations stay unchanged.",
           ].join("\n"),
           { variant: "destructive" },
         );
@@ -2317,8 +2318,8 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       if (appSettingsConfirmThreadDelete) {
         const confirmed = await api.dialogs.confirm(
           [
-            `Delete thread "${thread.title}"?`,
-            "This permanently clears conversation history for this thread.",
+            `Remove thread "${thread.title}" from T3?`,
+            "T3 will remove the thread from your lists and delete its terminal history and stored attachments. Conversation records remain in the audit log, and the provider conversation stays unchanged.",
           ].join("\n"),
           { variant: "destructive" },
         );

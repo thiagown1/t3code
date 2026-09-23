@@ -4,13 +4,21 @@ import { buildThreadActionMenuItems, type ThreadActionMenuState } from "./thread
 
 const baseState: ThreadActionMenuState = {
   branch: null,
+  projectFilter: null,
   isPinned: false,
   isSettled: false,
   isSnoozed: false,
   canSnoozeNow: true,
   isRegeneratingTitle: false,
   isRunning: false,
-  supports: { settlement: true, snooze: true, pinning: true, titleRegeneration: true },
+  deliveryStatus: null,
+  supports: {
+    settlement: true,
+    snooze: true,
+    pinning: true,
+    titleRegeneration: true,
+    deliveryStatus: true,
+  },
   snoozePresets: [
     { id: "hour", label: "In 1 hour", whenLabel: "3:00 PM", snoozedUntil: "2026-08-07T15:00:00Z" },
   ],
@@ -31,20 +39,63 @@ describe("buildThreadActionMenuItems", () => {
     expect(
       ids({
         ...baseState,
-        supports: { settlement: false, snooze: false, pinning: false, titleRegeneration: false },
+        supports: {
+          settlement: false,
+          snooze: false,
+          pinning: false,
+          titleRegeneration: false,
+          deliveryStatus: false,
+        },
       }),
-    ).toEqual(["rename", "mark-unread", "copy", "project-settings", "archive", "delete"]);
+    ).toEqual([
+      "rename",
+      "mark-unread",
+      "copy",
+      "export-thread-bundle",
+      "project-settings",
+      "archive",
+      "delete",
+    ]);
   });
 
   it("groups project settings with utility actions before archive", () => {
     const items = buildThreadActionMenuItems(baseState);
     const copyIndex = items.findIndex((item) => item.id === "copy");
     expect(items[copyIndex + 1]).toMatchObject({
+      id: "export-thread-bundle",
+      label: "Export Thread Bundle…",
+      icon: "download",
+    });
+    expect(items[copyIndex + 2]).toMatchObject({
       id: "project-settings",
       label: "Project settings",
       icon: "settings",
     });
-    expect(items[copyIndex + 2]?.id).toBe("archive");
+    expect(items[copyIndex + 3]?.id).toBe("archive");
+  });
+
+  it("offers project filtering only for surfaces with a scoped thread list", () => {
+    expect(ids(baseState)).not.toContain("filter-by-project");
+    expect(
+      buildThreadActionMenuItems({
+        ...baseState,
+        projectFilter: { label: "Beta Project", isActive: false },
+      }).find((item) => item.id === "filter-by-project"),
+    ).toMatchObject({ label: "Filter by Beta Project", icon: "folder-tree" });
+  });
+
+  it("offers the way back to all projects once the list is scoped", () => {
+    const items = buildThreadActionMenuItems({
+      ...baseState,
+      projectFilter: { label: "Beta Project", isActive: true },
+    });
+    const indexOf = (id: string) => items.findIndex((candidate) => candidate.id === id);
+    const filterIndex = indexOf("filter-by-project");
+    expect(items[filterIndex]).toMatchObject({ label: "Show all projects", icon: "folder-tree" });
+    // Between the read-state group and the copy group. This fork inserts the
+    // delivery-status submenu in the same stretch, so assert order, not adjacency.
+    expect(indexOf("mark-unread")).toBeLessThan(filterIndex);
+    expect(filterIndex).toBeLessThan(indexOf("copy"));
   });
 
   it("includes branch items only for threads with a branch", () => {
@@ -67,7 +118,7 @@ describe("buildThreadActionMenuItems", () => {
       (item) => item.id === "snooze",
     );
     expect(snooze?.disabled).toBe(true);
-    expect(snooze?.children?.map((child) => child.id)).toEqual(["snooze:hour"]);
+    expect(snooze?.children?.map((child) => child.id)).toEqual(["snooze:hour", "snooze:custom"]);
   });
 
   it("disables title regeneration while one is in flight", () => {
@@ -95,7 +146,13 @@ describe("buildThreadActionMenuItems", () => {
     expect(
       ids({
         ...baseState,
-        supports: { settlement: false, snooze: false, pinning: false, titleRegeneration: false },
+        supports: {
+          settlement: false,
+          snooze: false,
+          pinning: false,
+          titleRegeneration: false,
+          deliveryStatus: false,
+        },
       }),
     ).toContain("archive");
   });
@@ -105,5 +162,21 @@ describe("buildThreadActionMenuItems", () => {
       (item) => item.id === "archive",
     );
     expect(archiveItem?.disabled).toBe(true);
+  });
+
+  it("offers persisted delivery gates and only shows clear for an active gate", () => {
+    expect(allIds(baseState)).toEqual(
+      expect.arrayContaining([
+        "delivery-status",
+        "delivery-status:waiting-ci",
+        "delivery-status:waiting-deploy",
+        "delivery-status:validating-deploy",
+        "delivery-status:waiting-activation",
+      ]),
+    );
+    expect(allIds(baseState)).not.toContain("delivery-status:clear");
+    expect(allIds({ ...baseState, deliveryStatus: "waiting-deploy" })).toContain(
+      "delivery-status:clear",
+    );
   });
 });

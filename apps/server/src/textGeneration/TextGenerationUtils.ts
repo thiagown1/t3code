@@ -9,7 +9,13 @@ const decodeJsonThreadTitle = Schema.decodeOption(
 
 /** Convert an Effect Schema to a flat JSON Schema object, inlining `$defs` when present. */
 export function toJsonSchemaObject(schema: Schema.Top): unknown {
-  const document = Schema.toJsonSchemaDocument(schema);
+  // The type side, so decoding defaults do not turn required fields into
+  // optional ones, and closed objects (`additionalProperties: false`):
+  // structured-output modes require both, and closed was the generator
+  // default before effect rc.113.
+  const document = Schema.toJsonSchemaDocument(Schema.toType(schema), {
+    onExcessProperty: "error",
+  });
   if (document.definitions && Object.keys(document.definitions).length > 0) {
     return { ...document.schema, $defs: document.definitions };
   }
@@ -46,7 +52,11 @@ export function sanitizePrTitle(raw: string): string {
   return "Update project changes";
 }
 
-/** Normalise a raw thread title to a compact single-line sidebar-safe label. */
+// Prompts ask for under 40 characters. This cap only stops a runaway model
+// from pushing a paragraph into the sidebar, header, and window title.
+const MAX_THREAD_TITLE_CHARS = 120;
+
+/** Normalise a raw thread title to a single line. Clients truncate for display. */
 export function sanitizeThreadTitle(raw: string): string {
   // Unwrap a JSON-formatted title before truncation can cut off the closing brace.
   const decoded = decodeJsonThreadTitle(raw);
@@ -63,11 +73,28 @@ export function sanitizeThreadTitle(raw: string): string {
     return "New thread";
   }
 
-  if (normalized.length <= 50) {
+  if (normalized.length <= MAX_THREAD_TITLE_CHARS) {
     return normalized;
   }
 
-  return `${normalized.slice(0, 47).trimEnd()}...`;
+  return `${normalized.slice(0, MAX_THREAD_TITLE_CHARS - 3).trimEnd()}...`;
+}
+
+// The prompt asks for under 600 characters. This cap only stops a runaway
+// model from pushing a transcript into the supervisor's topic listing.
+const MAX_ROUND_SUMMARY_CHARS = 1_000;
+
+/**
+ * Normalise a generated round summary to one bounded paragraph. Returns an
+ * empty string when the model produced nothing; callers treat that as "no
+ * summary" rather than recording a blank one.
+ */
+export function sanitizeRoundSummary(raw: string): string {
+  const normalized = raw.trim().replace(/\s+/g, " ");
+  if (normalized.length <= MAX_ROUND_SUMMARY_CHARS) {
+    return normalized;
+  }
+  return `${normalized.slice(0, MAX_ROUND_SUMMARY_CHARS - 3).trimEnd()}...`;
 }
 
 /** CLI name to human-readable label, e.g. "codex" → "Codex CLI (`codex`)" */
@@ -116,4 +143,45 @@ export function normalizeCliError(
     detail: fallback,
     cause: error,
   });
+}
+
+/**
+ * Lines that mark the reason a provider CLI gave up, rather than the prompt it
+ * echoed on the way there.
+ */
+const CLI_FAILURE_MARKERS =
+  /^\s*(?:error\b|fatal\b|panic\b|stream error\b|.*\busage limit\b|.*\brate limit\b|.*\bquota\b|.*\bunauthorized\b|.*\bnot (?:logged in|authenticated)\b)/i;
+
+const CLI_FAILURE_DETAIL_MAX_CHARS = 600;
+
+/**
+ * Describe why a provider CLI exited non-zero, in terms a user can act on.
+ *
+ * Codex and Claude both echo their banner and the whole prompt to stdout before
+ * the failure line, and a text generation prompt carries the thread transcript.
+ * Reporting that verbatim buries the reason — a spent quota reached the user as
+ * thousands of characters of their own conversation with the log truncating the
+ * one line that mattered.
+ *
+ * stderr wins when the CLI used it. Otherwise the marker lines are pulled out of
+ * stdout, newest first, because the CLI prints the prompt before it fails. With
+ * no marker the tail is still a better guess than the head, for the same reason.
+ */
+export function summarizeCliFailure(input: {
+  readonly stdout: string;
+  readonly stderr: string;
+}): string | undefined {
+  const stderr = input.stderr.trim();
+  if (stderr.length > 0) return limitSection(stderr, CLI_FAILURE_DETAIL_MAX_CHARS);
+
+  const lines = input.stdout
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  if (lines.length === 0) return undefined;
+
+  const markers = lines.filter((line) => CLI_FAILURE_MARKERS.test(line));
+  // Duplicate failure lines are common: the CLI reports per attempt.
+  const unique = [...new Set(markers.length > 0 ? markers : lines.slice(-3))];
+  return limitSection(unique.join("\n"), CLI_FAILURE_DETAIL_MAX_CHARS);
 }

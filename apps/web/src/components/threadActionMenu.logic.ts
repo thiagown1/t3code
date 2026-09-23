@@ -1,4 +1,4 @@
-import type { ContextMenuItem } from "@t3tools/contracts";
+import type { ContextMenuItem, ThreadDeliveryStatus } from "@t3tools/contracts";
 import type { SnoozePreset } from "@t3tools/client-runtime/state/thread-settled";
 
 /**
@@ -8,6 +8,7 @@ import type { SnoozePreset } from "@t3tools/client-runtime/state/thread-settled"
  */
 export type ThreadActionMenuId =
   | "new-thread-on-branch"
+  | "filter-by-project"
   | "project-settings"
   | "pin"
   | "unpin"
@@ -19,15 +20,27 @@ export type ThreadActionMenuId =
   | "rename"
   | "regenerate-title"
   | "mark-unread"
+  | "delivery-status"
+  | `delivery-status:${ThreadDeliveryStatus | "clear"}`
   | "copy"
   | "copy-path"
   | "copy-branch"
   | "copy-thread-id"
+  | "export-thread-bundle"
   | "archive"
   | "delete";
 
 export interface ThreadActionMenuState {
   readonly branch: string | null;
+  /**
+   * Project scoping for the thread list. Null on surfaces with no scoped
+   * list behind the menu (the chat header), where the item must not show.
+   */
+  readonly projectFilter: {
+    readonly label: string;
+    /** True when the list is already scoped to this thread's project. */
+    readonly isActive: boolean;
+  } | null;
   readonly isPinned: boolean;
   readonly isSettled: boolean;
   readonly isSnoozed: boolean;
@@ -35,19 +48,21 @@ export interface ThreadActionMenuState {
   readonly isRegeneratingTitle: boolean;
   /** Archive rejects a thread with an active turn, so disable it here rather than let the action fail. */
   readonly isRunning: boolean;
+  readonly deliveryStatus: ThreadDeliveryStatus | null;
   readonly supports: {
     readonly settlement: boolean;
     readonly snooze: boolean;
     readonly pinning: boolean;
     readonly titleRegeneration: boolean;
+    readonly deliveryStatus: boolean;
   };
   readonly snoozePresets: ReadonlyArray<SnoozePreset>;
 }
 
 /**
  * Single source for the per-thread action menu: the sidebar row's right-click
- * menu and the chat header menu both render exactly this list, so labels,
- * ordering, and capability gating cannot drift between the two surfaces.
+ * menu and the chat header menu share labels, ordering, and capability gating.
+ * Each surface supplies state for the actions it supports.
  */
 export function buildThreadActionMenuItems(
   state: ThreadActionMenuState,
@@ -88,10 +103,13 @@ export function buildThreadActionMenuItems(
                 label: "Snooze",
                 icon: "clock",
                 disabled: !state.canSnoozeNow,
-                children: state.snoozePresets.map((preset) => ({
-                  id: `snooze:${preset.id}` as const,
-                  label: `${preset.label} (${preset.whenLabel})`,
-                })),
+                children: [
+                  ...state.snoozePresets.map((preset) => ({
+                    id: `snooze:${preset.id}` as const,
+                    label: `${preset.label} (${preset.whenLabel})`,
+                  })),
+                  { id: "snooze:custom" as const, label: "Custom…", separatorBefore: true },
+                ],
               },
         ]
       : []),
@@ -107,6 +125,38 @@ export function buildThreadActionMenuItems(
         ]
       : []),
     { id: "mark-unread", label: "Mark unread", icon: "mail-open" },
+    ...(state.supports.deliveryStatus
+      ? [
+          {
+            id: "delivery-status" as const,
+            label: "Delivery status",
+            icon: "rocket",
+            children: [
+              { id: "delivery-status:waiting-ci" as const, label: "Waiting for CI" },
+              { id: "delivery-status:waiting-deploy" as const, label: "Waiting for deploy" },
+              { id: "delivery-status:validating-deploy" as const, label: "Validating deploy" },
+              {
+                id: "delivery-status:waiting-activation" as const,
+                label: "Waiting for activation",
+              },
+              ...(state.deliveryStatus !== null
+                ? [{ id: "delivery-status:clear" as const, label: "Clear delivery status" }]
+                : []),
+            ],
+          },
+        ]
+      : []),
+    ...(state.projectFilter
+      ? [
+          {
+            id: "filter-by-project" as const,
+            label: state.projectFilter.isActive
+              ? "Show all projects"
+              : `Filter by ${state.projectFilter.label}`,
+            icon: "folder-tree",
+          },
+        ]
+      : []),
     {
       id: "copy",
       label: "Copy",
@@ -119,6 +169,11 @@ export function buildThreadActionMenuItems(
           : []),
         { id: "copy-thread-id", label: "Thread ID", icon: "hash" },
       ],
+    },
+    {
+      id: "export-thread-bundle",
+      label: "Export Thread Bundle…",
+      icon: "download",
     },
     { id: "project-settings", label: "Project settings", icon: "settings" },
     // Archive removes the thread from the sidebar while keeping its

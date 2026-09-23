@@ -3,6 +3,106 @@ import {
   type MarkdownNode,
   type TextMatch,
 } from "~/vendor/mdast-find-and-replace";
+import type { AssetResource, PullRequestRef } from "@t3tools/contracts";
+
+type PullRequestImageResource = Extract<AssetResource, { readonly _tag: "pull-request-image" }>;
+
+const GIT_REVISION_PATTERN = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/iu;
+
+function safeRepositoryImagePath(value: string): string | null {
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(value);
+  } catch {
+    return null;
+  }
+  if (decoded.length === 0 || decoded.includes("\0") || decoded.includes("\\")) return null;
+  const segments = decoded.split("/");
+  return segments.every((segment) => segment.length > 0 && segment !== "." && segment !== "..")
+    ? decoded
+    : null;
+}
+
+/**
+ * Turns GitHub repository-relative markdown images into a server-resolved resource. The browser
+ * never receives GitHub credentials or a credential-bearing download URL.
+ */
+export function pullRequestImageResourceFromSource(input: {
+  readonly source: string;
+  readonly repositoryUrl: string;
+  readonly reference: PullRequestRef;
+  readonly headSha?: string | undefined;
+}): PullRequestImageResource | null {
+  let repositoryUrl: URL;
+  try {
+    repositoryUrl = new URL(input.repositoryUrl);
+  } catch {
+    return null;
+  }
+  if (repositoryUrl.protocol !== "https:" && repositoryUrl.protocol !== "http:") return null;
+  const repositorySegments = repositoryUrl.pathname.split("/").filter(Boolean);
+  if (repositorySegments.length !== 2) return null;
+  const repository = `${repositorySegments[0]}/${repositorySegments[1]}`;
+  const authored = input.source.trim().replace(/^<|>$/gu, "");
+  const withoutSuffix = authored.split(/[?#]/u, 1)[0] ?? "";
+
+  let revision: string | undefined;
+  let imagePath: string | undefined;
+  const blobRelative = /^\.\.\/blob\/([^/]+)\/(.+)$/u.exec(withoutSuffix);
+  if (blobRelative) {
+    revision = blobRelative[1];
+    imagePath = blobRelative[2];
+  } else if (/^https?:\/\//iu.test(withoutSuffix)) {
+    let absolute: URL;
+    try {
+      absolute = new URL(withoutSuffix);
+    } catch {
+      return null;
+    }
+    if (absolute.host.toLowerCase() !== repositoryUrl.host.toLowerCase()) return null;
+    const segments = absolute.pathname.split("/").filter(Boolean);
+    if (
+      segments[0] !== repositorySegments[0] ||
+      segments[1] !== repositorySegments[1] ||
+      (segments[2] !== "blob" && segments[2] !== "raw") ||
+      segments.length < 5
+    ) {
+      return null;
+    }
+    revision = segments[3];
+    imagePath = segments.slice(4).join("/");
+  } else if (withoutSuffix.startsWith("/")) {
+    const segments = withoutSuffix.split("/").filter(Boolean);
+    if (
+      segments[0] !== repositorySegments[0] ||
+      segments[1] !== repositorySegments[1] ||
+      (segments[2] !== "blob" && segments[2] !== "raw") ||
+      segments.length < 5
+    ) {
+      return null;
+    }
+    revision = segments[3];
+    imagePath = segments.slice(4).join("/");
+  } else if (!withoutSuffix.startsWith("../") && !withoutSuffix.includes(":")) {
+    revision = input.headSha;
+    imagePath = withoutSuffix.replace(/^\.\//u, "");
+  }
+
+  const path = imagePath === undefined ? null : safeRepositoryImagePath(imagePath);
+  if (revision === undefined || !GIT_REVISION_PATTERN.test(revision) || path === null) return null;
+  return {
+    _tag: "pull-request-image",
+    projectId: input.reference.projectId,
+    number: input.reference.number,
+    ...(input.reference.expectedAccountId === undefined
+      ? {}
+      : { expectedAccountId: input.reference.expectedAccountId }),
+    host: repositoryUrl.host,
+    repository,
+    revision,
+    path,
+  };
+}
 
 /** `id` is positional on purpose: the same attachment can be embedded twice in one body. */
 export type PullRequestBodySegment =

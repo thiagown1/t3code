@@ -8,6 +8,7 @@ import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
@@ -65,9 +66,13 @@ import {
   FilesystemBrowseError,
   AssetWorkspaceContextNotFoundError,
   AssetWorkspaceContextResolutionError,
+  AssetPullRequestImageFetchError,
   RpcClientId,
   EnvironmentAuthorizationError,
   ThreadId,
+  ThreadBundleExportError,
+  ThreadBundleImportError,
+  ThreadProviderHandoffRpcError,
   type TerminalAttachStreamEvent,
   type TerminalError,
   type TerminalEvent,
@@ -75,6 +80,9 @@ import {
   type PullRequestRef,
   WS_METHODS,
   WsRpcGroup,
+  WORKTREE_SETUP_ACTIVITY_KIND,
+  worktreeSetupActivityId,
+  type WorktreeSetupSnapshot,
 } from "@t3tools/contracts";
 import { resolveServerBackgroundActivitySettings } from "@t3tools/shared/backgroundActivitySettings";
 import { HttpRouter, HttpServerRequest, HttpServerRespondable } from "effect/unstable/http";
@@ -97,6 +105,9 @@ import {
 } from "./orchestration/Normalizer.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
+import { runThreadProviderHandoff } from "./orchestration/ThreadProviderHandoffCoordinator.ts";
+import { makeProjectionTurnRepository } from "./persistence/Layers/ProjectionTurns.ts";
+import * as ThreadProviderHandoffStore from "./persistence/ThreadProviderHandoffStore.ts";
 import { ThreadDeletionReactor } from "./orchestration/Services/ThreadDeletionReactor.ts";
 import {
   observeRpcEffect as instrumentRpcEffect,
@@ -133,6 +144,8 @@ import * as GitWorkflowService from "./git/GitWorkflowService.ts";
 import { linkCreatedPullRequest } from "./git/linkCreatedPullRequest.ts";
 import * as ReviewService from "./review/ReviewService.ts";
 import * as ProjectSetupScriptRunner from "./project/ProjectSetupScriptRunner.ts";
+import * as ProjectCloneTracker from "./project/ProjectCloneTracker.ts";
+import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolver.ts";
 import * as WorktreeSetupTracker from "./project/WorktreeSetupTracker.ts";
 import * as AgentSessionScanner from "./project/AgentSessionScanner.ts";
 import { importRecentAgentThreads } from "./project/AgentSessionImporter.ts";
@@ -145,6 +158,29 @@ import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import * as HostResources from "./resourceTelemetry/HostResources.ts";
+import {
+  claudeMcpInventorySourcesFromSettings,
+  codexMcpInventorySourcesFromSettings,
+  cursorMcpInventorySourcesFromSettings,
+  loadEnvironmentBundleServerInventory,
+  openCodeMcpInventorySourcesFromSettings,
+} from "./environment/EnvironmentBundleInventory.ts";
+import { resolveEnvironmentBundleCredentialReferences } from "./environment/EnvironmentBundleCredentials.ts";
+import {
+  applyEnvironmentBundle,
+  planEnvironmentBundleApply,
+} from "./environment/EnvironmentBundleApply.ts";
+import { exportThreadBundleFromProjection } from "./orchestration/ThreadBundleExport.ts";
+import {
+  buildThreadBundleImportCommand,
+  threadBundleImportPlansMatch,
+} from "./orchestration/ThreadBundleImport.ts";
+import { planThreadBundleImportFromProjection } from "./orchestration/ThreadBundleImportPlan.ts";
+import {
+  prepareThreadBundleAttachments,
+  publishThreadBundleAttachments,
+} from "./orchestration/ThreadBundleAttachmentStore.ts";
+import { summarizeResourceTelemetry } from "./resourceTelemetry/ResourceTelemetrySummary.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
 import * as UsageService from "./usage/UsageService.ts";
@@ -170,6 +206,7 @@ import * as SessionStore from "./auth/SessionStore.ts";
 import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http.ts";
 import * as RelayClient from "@t3tools/shared/relayClient";
 const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
+const isThreadProviderHandoffRpcError = Schema.is(ThreadProviderHandoffRpcError);
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 const CONFIG_DISCOVERY_TIMEOUT = Duration.seconds(5);
@@ -497,6 +534,8 @@ const makeWsRpcLayer = (
       const crypto = yield* Crypto.Crypto;
       const sql = yield* SqlClient.SqlClient;
       const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
+      const projectionTurns = yield* makeProjectionTurnRepository;
+      const handoffStore = yield* ThreadProviderHandoffStore.make;
       /** A reference's host-level link key; the project's own host where the ref names none. */
       const resolvePullRequestSyncKey = (reference: PullRequestRef) =>
         reference.host !== undefined && reference.repository.includes("/")
@@ -605,6 +644,17 @@ const makeWsRpcLayer = (
       });
       const projectSetupScriptRunner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
       const worktreeSetupTracker = yield* WorktreeSetupTracker.WorktreeSetupTracker;
+      const projectCloneTracker = yield* ProjectCloneTracker.ProjectCloneTracker;
+      const repositoryIdentityResolver =
+        yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
+      // Clone hooks run on the tracker's fiber, outside any RPC, so the
+      // normalizer's services are captured here rather than inherited.
+      const normalizerContext = yield* Effect.context<
+        | FileSystem.FileSystem
+        | Path.Path
+        | ServerConfig.ServerConfig
+        | WorkspacePaths.WorkspacePaths
+      >();
       const agentSessionScanner = yield* AgentSessionScanner.AgentSessionScanner;
       const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
       const backgroundPolicy = yield* BackgroundPolicy.BackgroundPolicy;
@@ -761,6 +811,44 @@ const makeWsRpcLayer = (
           ),
         );
 
+      // The worktree setup's durable record: one activity per thread, upserted
+      // by a fixed id when the setup starts and again when it settles. Live
+      // progress keeps streaming from the tracker; this is what a reload or
+      // another client reads. Best effort: the thread may already be gone
+      // after a failed bootstrap.
+      const recordWorktreeSetup = (snapshot: WorktreeSetupSnapshot) =>
+        serverCommandId("worktree-setup-activity").pipe(
+          Effect.flatMap((commandId) =>
+            dispatchFromClient({
+              type: "thread.activity.append",
+              commandId,
+              threadId: snapshot.threadId,
+              activity: {
+                id: EventId.make(worktreeSetupActivityId(snapshot.threadId)),
+                tone:
+                  snapshot.phase === "failed" ||
+                  snapshot.stages.some((stage) => stage.status === "failed")
+                    ? "error"
+                    : "info",
+                kind: WORKTREE_SETUP_ACTIVITY_KIND,
+                summary:
+                  snapshot.phase === "running"
+                    ? "Setting up worktree"
+                    : snapshot.phase === "done"
+                      ? "Worktree ready"
+                      : snapshot.phase === "cancelled"
+                        ? "Worktree setup cancelled"
+                        : "Worktree setup failed",
+                payload: snapshot,
+                turnId: null,
+                createdAt: snapshot.startedAt,
+              },
+              createdAt: snapshot.endedAt ?? snapshot.startedAt,
+            }),
+          ),
+          Effect.ignoreCause({ log: true }),
+        );
+
       const toBootstrapDispatchCommandCauseError = (cause: Cause.Cause<unknown>) => {
         const error = Cause.squash(cause);
         return isOrchestrationDispatchCommandError(error)
@@ -792,6 +880,8 @@ const makeWsRpcLayer = (
         switch (event.type) {
           case "project.created":
           case "project.meta-updated":
+          case "firstmate.domain-event":
+            if (event.aggregateKind !== "project") return Effect.succeed(Option.none());
             return projectUpsertOrRemove(ProjectId.make(event.aggregateId), event.sequence);
           case "project.deleted":
             return Effect.succeed(
@@ -1003,6 +1093,30 @@ const makeWsRpcLayer = (
           // one so terminals the user opened meanwhile survive.
           let setupTerminalId: string | null = null;
 
+          // Set once the checkout starts; see the session.set below.
+          let preparingSessionSet = false;
+          const markPreparingSessionFailed = (detail: string) =>
+            Effect.gen(function* () {
+              const failedAt = yield* nowIso;
+              yield* dispatchFromClient({
+                type: "thread.session.set",
+                commandId: yield* serverCommandId("bootstrap-thread-preparing-failed"),
+                threadId,
+                session: {
+                  threadId,
+                  status: "error",
+                  providerName: null,
+                  providerInstanceId:
+                    bootstrap?.createThread?.modelSelection.instanceId ??
+                    command.modelSelection?.instanceId,
+                  runtimeMode: command.runtimeMode,
+                  activeTurnId: null,
+                  lastError: detail.trim().length > 0 ? detail : "Worktree setup failed.",
+                  updatedAt: failedAt,
+                },
+                createdAt: failedAt,
+              });
+            });
           const cleanupCreatedThread = () =>
             createdThread
               ? serverCommandId("bootstrap-thread-delete").pipe(
@@ -1098,15 +1212,16 @@ const makeWsRpcLayer = (
           const threadId = command.threadId;
           const track = (effect: Effect.Effect<void>) => (tracked ? effect : Effect.void);
 
-          // Runs the setup script and, for tracked bootstraps, waits for it to
-          // exit so the card can show the exit code and the agent stage never
-          // starts on a half-installed tree. Untracked callers keep the old
-          // fire-and-forget behavior.
+          // Starts the setup script. For tracked bootstraps it returns the
+          // effect that waits for the script to exit and records the outcome
+          // on the card; whether the agent stage waits on it depends on the
+          // script's `async` flag. Returns null when nothing is left to await.
+          // Untracked callers keep the old fire-and-forget behavior.
           const runSetupProgram = () =>
             Effect.gen(function* () {
               if (!bootstrap?.runSetupScript || !targetWorktreePath) {
                 yield* track(worktreeSetupTracker.stageStatus(threadId, "setup-script", "skipped"));
-                return;
+                return null;
               }
               const worktreePath = targetWorktreePath;
               const requestedAt = yield* nowIso;
@@ -1183,21 +1298,38 @@ const makeWsRpcLayer = (
                   }),
                 );
               if (!tracked || !setupResult?.completion) {
-                return;
+                return null;
               }
               // The setup script is best effort, like the untracked path: a
               // failed install must not throw away the worktree the user just
               // waited for. The card keeps the failed stage and its terminal.
-              const completion = yield* setupResult.completion;
-              if (completion.exitCode === 0) {
-                yield* worktreeSetupTracker.stageStatus(threadId, "setup-script", "done");
-                return;
+              // Forked right away so the terminal listener behind `completion`
+              // is always consumed, even when the turn dispatch fails before
+              // anyone would otherwise wait on it. The tracker update is a
+              // no-op once the snapshot has been dropped.
+              const completionFiber = yield* setupResult.completion.pipe(
+                Effect.flatMap((completion) => {
+                  if (completion.exitCode === 0) {
+                    return worktreeSetupTracker.stageStatus(threadId, "setup-script", "done");
+                  }
+                  const detail =
+                    completion.exitCode === null
+                      ? "terminal closed before the script finished"
+                      : `exit ${completion.exitCode}`;
+                  return worktreeSetupTracker.stageStatus(
+                    threadId,
+                    "setup-script",
+                    "failed",
+                    detail,
+                  );
+                }),
+                Effect.forkDetach,
+              );
+              if (!setupResult.async) {
+                yield* Fiber.join(completionFiber);
+                return null;
               }
-              const detail =
-                completion.exitCode === null
-                  ? "terminal closed before the script finished"
-                  : `exit ${completion.exitCode}`;
-              yield* worktreeSetupTracker.stageStatus(threadId, "setup-script", "failed", detail);
+              return completionFiber;
             });
 
           const bootstrapProgram = Effect.gen(function* () {
@@ -1221,6 +1353,7 @@ const makeWsRpcLayer = (
                 yield* gitWorkflow.fetchRemote({
                   cwd: prepareWorktree.projectCwd,
                   remoteName: "origin",
+                  refName: prepareWorktree.baseBranch,
                 });
                 const remoteBaseExists = yield* gitWorkflow.remoteBranchExists({
                   cwd: prepareWorktree.projectCwd,
@@ -1271,6 +1404,12 @@ const makeWsRpcLayer = (
             }
 
             if (prepareWorktree && !shouldPrepareWorktree) {
+              if (prepareWorktree.requireWorktree) {
+                return yield* new OrchestrationDispatchCommandError({
+                  message:
+                    "A separate worktree requires a Git repository and a base branch with a commit.",
+                });
+              }
               // Not a git repo, or the base has no commit: the thread runs in
               // the project checkout instead. The card says so and moves on.
               yield* track(
@@ -1303,11 +1442,59 @@ const makeWsRpcLayer = (
               // every delete for the prior incarnation committed before it.
               // Drain through that event before setup or turn start can own
               // terminals and provider sessions under the reused thread id.
-              yield* threadDeletionReactor.drainThrough(created.sequence);
               createdThread = true;
+              yield* threadDeletionReactor.drainThrough(created.sequence);
+              // Persist the send now rather than with the turn: the thread is
+              // real from here on, so any client (or a reload) sees the message
+              // while the worktree is still being prepared. The turn start
+              // later references this id instead of re-sending the text.
+              yield* dispatchFromClient({
+                type: "thread.message.user.append",
+                commandId: yield* serverCommandId("bootstrap-thread-message"),
+                threadId: command.threadId,
+                message: {
+                  messageId: command.message.messageId,
+                  text: command.message.text,
+                  attachments: command.message.attachments,
+                  ...(command.message.context !== undefined
+                    ? { context: command.message.context }
+                    : {}),
+                },
+                createdAt: command.createdAt,
+              });
+              if (tracked) {
+                const running = yield* worktreeSetupTracker.get(threadId);
+                if (running) yield* recordWorktreeSetup(running);
+              }
             }
 
             if (prepareWorktree && shouldPrepareWorktree && worktreeBaseRef) {
+              if (bootstrap?.createThread && createdThread) {
+                // The checkout and setup script can run for minutes before the
+                // turn starts, and the created thread carries no message or
+                // turn until then. Project a starting session now so every
+                // client lists the thread as working and a reopened thread
+                // knows to follow the setup stream. A failed or cancelled setup
+                // deletes the thread, so nothing lingers.
+                const preparingAt = yield* nowIso;
+                yield* dispatchFromClient({
+                  type: "thread.session.set",
+                  commandId: yield* serverCommandId("bootstrap-thread-preparing"),
+                  threadId,
+                  session: {
+                    threadId,
+                    status: "starting",
+                    providerName: null,
+                    providerInstanceId: bootstrap.createThread.modelSelection.instanceId,
+                    runtimeMode: command.runtimeMode,
+                    activeTurnId: null,
+                    lastError: null,
+                    updatedAt: preparingAt,
+                  },
+                  createdAt: preparingAt,
+                });
+                preparingSessionSet = true;
+              }
               yield* worktreeSetupTracker.stageStatus(threadId, "checkout", "running");
               let checkoutTotal: number | null = null;
               const worktree = yield* gitWorkflow.createWorktree(
@@ -1400,7 +1587,7 @@ const makeWsRpcLayer = (
               yield* refreshGitStatus(targetWorktreePath);
             }
 
-            yield* runSetupProgram();
+            const pendingSetupScript = yield* runSetupProgram();
 
             yield* track(worktreeSetupTracker.stageStatus(threadId, "agent", "running"));
             // Past this point a cancel would roll back a thread whose turn has
@@ -1409,27 +1596,31 @@ const makeWsRpcLayer = (
             const started = yield* Effect.uninterruptible(
               dispatchFromClient(finalTurnStartCommand),
             );
-            yield* track(
-              worktreeSetupTracker
-                .stageStatus(threadId, "agent", "done")
-                .pipe(Effect.andThen(worktreeSetupTracker.finish(threadId, "done"))),
-            );
+            yield* track(worktreeSetupTracker.stageStatus(threadId, "agent", "done"));
+            // An async setup script outlives the handoff: the snapshot stays
+            // running so the client keeps its row next to the agent's work,
+            // and settles when the script exits. The turn already started, so
+            // the wait cannot fail the dispatch.
+            const settle = tracked
+              ? worktreeSetupTracker
+                  .finish(threadId, "done")
+                  .pipe(
+                    Effect.flatMap((snapshot) =>
+                      snapshot ? recordWorktreeSetup(snapshot) : Effect.void,
+                    ),
+                  )
+              : Effect.void;
+            if (pendingSetupScript) {
+              yield* Fiber.join(pendingSetupScript).pipe(
+                Effect.ignoreCause({ log: true }),
+                Effect.andThen(settle),
+                Effect.forkDetach,
+              );
+            } else {
+              yield* settle;
+            }
             return started;
           });
-
-          const runBootstrap = tracked
-            ? Effect.gen(function* () {
-                const fiber = yield* Effect.forkChild(bootstrapProgram);
-                yield* worktreeSetupTracker.begin({
-                  threadId,
-                  branch: bootstrap?.prepareWorktree?.branch ?? null,
-                  baseRef: bootstrap?.prepareWorktree?.baseBranch ?? null,
-                  stages: ["fetch", "checkout", "submodules", "setup-script", "agent"],
-                  fiber,
-                });
-                return yield* Fiber.join(fiber);
-              })
-            : bootstrapProgram;
 
           const cleanupAndFail = (
             cause: Cause.Cause<unknown>,
@@ -1441,23 +1632,39 @@ const makeWsRpcLayer = (
                   Effect.logWarning("bootstrap thread cleanup failed", {
                     threadId,
                     detail: Cause.pretty(cleanupCause),
-                  }).pipe(Effect.flatMap(() => Effect.fail(dispatchError))),
+                  }).pipe(
+                    // The thread outlived its setup. Its preparing session
+                    // must not read as working forever, so record the failure
+                    // on it instead.
+                    Effect.andThen(
+                      preparingSessionSet
+                        ? markPreparingSessionFailed(dispatchError.message).pipe(
+                            Effect.ignoreCause({ log: true }),
+                          )
+                        : Effect.void,
+                    ),
+                    Effect.flatMap(() => Effect.fail(dispatchError)),
+                  ),
                 onSuccess: (threadDeleted) =>
                   Effect.fail(
-                    threadDeleted
+                    threadDeleted ||
+                      (bootstrap?.createThread &&
+                        bootstrap.prepareWorktree?.requireWorktree === true &&
+                        !createdThread)
                       ? new OrchestrationDispatchCommandError({
                           message: dispatchError.message,
                           ...(dispatchError.cause !== undefined
                             ? { cause: dispatchError.cause }
                             : {}),
-                          bootstrapThreadDisposition: "deleted",
+                          bootstrapThreadDisposition: threadDeleted ? "deleted" : "not-created",
                         })
                       : dispatchError,
                   ),
               }),
             );
 
-          return yield* runBootstrap.pipe(
+          const settledBootstrapProgram = bootstrapProgram.pipe(
+            Effect.interruptible,
             Effect.catchCause((cause) => {
               const dispatchError = toBootstrapDispatchCommandCauseError(cause);
               if (Cause.hasInterruptsOnly(cause)) {
@@ -1493,7 +1700,15 @@ const makeWsRpcLayer = (
                         Effect.uninterruptible,
                       )
                     : Effect.void;
-                return track(worktreeSetupTracker.finish(threadId, "cancelled")).pipe(
+                return track(
+                  worktreeSetupTracker
+                    .finish(threadId, "cancelled")
+                    .pipe(
+                      Effect.flatMap((snapshot) =>
+                        snapshot ? recordWorktreeSetup(snapshot) : Effect.void,
+                      ),
+                    ),
+                ).pipe(
                   Effect.andThen(removeCreatedWorktree),
                   Effect.andThen(
                     tracked
@@ -1508,10 +1723,47 @@ const makeWsRpcLayer = (
                 );
               }
               return track(
-                worktreeSetupTracker.finish(threadId, "failed", dispatchError.message),
+                worktreeSetupTracker
+                  .finish(threadId, "failed", dispatchError.message)
+                  .pipe(
+                    Effect.flatMap((snapshot) =>
+                      snapshot ? recordWorktreeSetup(snapshot) : Effect.void,
+                    ),
+                  ),
               ).pipe(Effect.andThen(cleanupAndFail(cause, dispatchError)));
             }),
+            // Cancellation must finish recording and rollback after the bootstrap is interrupted.
+            Effect.uninterruptible,
           );
+
+          // The bootstrap outlives the connection that asked for it: a reload
+          // or a dropped socket must not abandon a half-made worktree, and
+          // the thread it created is already visible to every client. The
+          // RPC only waits on the detached fiber; a user cancel interrupts it
+          // through the tracker.
+          const runBootstrap = tracked
+            ? Effect.gen(function* () {
+                // Fork and register as one step: a detached fiber keeps going
+                // if the caller is interrupted, so it must never exist without
+                // the tracker entry that cancel and the stage updates key on.
+                const fiber = yield* Effect.uninterruptible(
+                  Effect.gen(function* () {
+                    const fiber = yield* Effect.forkDetach(settledBootstrapProgram);
+                    yield* worktreeSetupTracker.begin({
+                      threadId,
+                      branch: bootstrap?.prepareWorktree?.branch ?? null,
+                      baseRef: bootstrap?.prepareWorktree?.baseBranch ?? null,
+                      stages: ["fetch", "checkout", "submodules", "setup-script", "agent"],
+                      fiber,
+                    });
+                    return fiber;
+                  }),
+                );
+                return yield* Fiber.join(fiber);
+              })
+            : settledBootstrapProgram;
+
+          return yield* runBootstrap;
         });
 
       const dispatchNormalizedCommand = (
@@ -1552,9 +1804,8 @@ const makeWsRpcLayer = (
           const providers = options.usageLimitsCommand
             ? withUsageLimitsCommands(currentProviders, yield* usageLimitSources.current)
             : currentProviders;
-          const settings = ServerSettings.redactServerSettingsForClient(
-            yield* serverSettings.getSettings,
-          );
+          const rawSettings = yield* serverSettings.getSettings;
+          const settings = ServerSettings.redactServerSettingsForClient(rawSettings);
           const environment = yield* serverEnvironment.getDescriptor;
           const auth = yield* serverAuth.getDescriptor();
           const availableEditors: ReadonlyArray<EditorId> = yield* resolveAvailableEditorsForConfig(
@@ -1565,6 +1816,13 @@ const makeWsRpcLayer = (
                 externalLauncher.resolveFileManagerRevealKind(),
               )
             : undefined;
+          const environmentBundleInventory = yield* loadEnvironmentBundleServerInventory({
+            cwd: config.cwd,
+            codexMcpSources: codexMcpInventorySourcesFromSettings(rawSettings),
+            claudeMcpSources: claudeMcpInventorySourcesFromSettings(rawSettings),
+            cursorMcpSources: cursorMcpInventorySourcesFromSettings(rawSettings),
+            openCodeMcpSources: openCodeMcpInventorySourcesFromSettings(rawSettings),
+          });
 
           return {
             environment,
@@ -1574,6 +1832,7 @@ const makeWsRpcLayer = (
             keybindings: keybindingsConfig.keybindings,
             issues: keybindingsConfig.issues,
             providers,
+            environmentBundleInventory,
             availableEditors,
             // Same discovery-with-timeout treatment as editors: a slow probe
             // must not stall server.getConfig, so it degrades to no targets.
@@ -1602,6 +1861,7 @@ const makeWsRpcLayer = (
                 }),
             threadResumeCompletionMarker: true,
             threadSnapshotPagination: true,
+            reasoningMessages: true,
           };
         });
 
@@ -1615,71 +1875,16 @@ const makeWsRpcLayer = (
           observeRpcEffect(
             ORCHESTRATION_WS_METHODS.dispatchCommand,
             Effect.gen(function* () {
+              yield* ProjectCloneTracker.rejectCommandsDuringClone(projectCloneTracker, command);
               const normalizedCommand = yield* normalizeDispatchCommand(command);
-              // Archive removes the thread from the client, so this transport
-              // closes its session and terminals after the command lands.
-              // Settlement cleanup is driven by thread.settled events in the
-              // provider reactor, including settlements that have no client.
-              const archiveCommand =
-                normalizedCommand.type === "thread.archive" ? normalizedCommand : undefined;
-              // Best-effort on purpose: the user's archive must not
-              // fail because this cleanup read blipped, so a failed read
-              // logs and skips the stop instead of propagating.
-              const shouldStopSessionAfterCommand = archiveCommand
-                ? yield* projectionSnapshotQuery.getThreadShellById(archiveCommand.threadId).pipe(
-                    Effect.map(
-                      Option.match({
-                        onNone: () => false,
-                        onSome: (thread) =>
-                          thread.session !== null && thread.session.status !== "stopped",
-                      }),
-                    ),
-                    Effect.catchCause((cause) =>
-                      Effect.logWarning(
-                        "failed to read thread session state before session-stop check",
-                        { threadId: archiveCommand.threadId, cause },
-                      ).pipe(Effect.as(false)),
-                    ),
-                  )
-                : false;
               const result = yield* dispatchNormalizedCommand(normalizedCommand).pipe(
                 Effect.tapError(() => cleanupFailedUploadedAttachments(command, normalizedCommand)),
               );
               yield* recordClientCommandAnalytics(normalizedCommand);
-              if (archiveCommand) {
-                if (shouldStopSessionAfterCommand) {
-                  yield* Effect.gen(function* () {
-                    const stopCommand = yield* normalizeDispatchCommand({
-                      type: "thread.session.stop",
-                      commandId: CommandId.make(
-                        `session-stop-for-archive:${archiveCommand.commandId}`,
-                      ),
-                      threadId: archiveCommand.threadId,
-                      createdAt: yield* nowIso,
-                    });
-
-                    yield* dispatchNormalizedCommand(stopCommand);
-                  }).pipe(
-                    Effect.catchCause((cause) =>
-                      Effect.logWarning("failed to stop provider session during archive", {
-                        threadId: archiveCommand.threadId,
-                        cause,
-                      }),
-                    ),
-                  );
-                }
-
-                // Archive removes the thread from view, so its user-opened
-                // terminal panes close with it.
-                yield* terminalManager.close({ threadId: archiveCommand.threadId }).pipe(
-                  Effect.catch((error) =>
-                    Effect.logWarning("failed to close thread terminals after archive", {
-                      threadId: archiveCommand.threadId,
-                      error: error.message,
-                    }),
-                  ),
-                );
-              }
+              yield* ProjectCloneTracker.discardCloneForDeletedProject(
+                projectCloneTracker,
+                normalizedCommand,
+              );
               return result;
             }).pipe(
               Effect.mapError((cause) =>
@@ -1914,6 +2119,50 @@ const makeWsRpcLayer = (
             ),
             { "rpc.aggregate": "orchestration" },
           ),
+        [ORCHESTRATION_WS_METHODS.previewThreadCleanup]: (input) =>
+          observeRpcEffect(
+            ORCHESTRATION_WS_METHODS.previewThreadCleanup,
+            providerService.previewThreadCleanup(input.threadId).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new OrchestrationGetSnapshotError({
+                    message: "Failed to preview thread cleanup",
+                    cause,
+                  }),
+              ),
+            ),
+            { "rpc.aggregate": "orchestration" },
+          ),
+        [ORCHESTRATION_WS_METHODS.handoffThread]: (input) =>
+          observeRpcEffect(
+            ORCHESTRATION_WS_METHODS.handoffThread,
+            runThreadProviderHandoff(input, {
+              snapshots: projectionSnapshotQuery,
+              turns: projectionTurns,
+              providers: providerRegistry,
+              store: handoffStore,
+              directory: providerSessionDirectory,
+              providerService,
+              dispatch: dispatchFromClient,
+              nextCommandId: (purpose) =>
+                crypto.randomUUIDv4.pipe(
+                  Effect.orDie,
+                  Effect.map((uuid) => CommandId.make(`server:${purpose}:${uuid}`)),
+                ),
+              nowIso,
+              newHandoffId: crypto.randomUUIDv4.pipe(Effect.orDie),
+            }).pipe(
+              Effect.mapError((cause) =>
+                isThreadProviderHandoffRpcError(cause)
+                  ? cause
+                  : new ThreadProviderHandoffRpcError({
+                      code: "unknown",
+                      detail: "The provider handoff could not be completed safely.",
+                    }),
+              ),
+            ),
+            { "rpc.aggregate": "orchestration" },
+          ),
         [ORCHESTRATION_WS_METHODS.subscribeThread]: (input) =>
           observeRpcStreamEffect(
             ORCHESTRATION_WS_METHODS.subscribeThread,
@@ -1927,7 +2176,7 @@ const makeWsRpcLayer = (
                 Stream.filter(isThisThreadDetailEvent),
                 Stream.map((event) => ({
                   kind: "event" as const,
-                  event,
+                  event: projectActivityEvent(event, input.reasoningMessages === true),
                 })),
               );
 
@@ -1997,7 +2246,7 @@ const makeWsRpcLayer = (
                       Stream.filter(isThisThreadDetailEvent),
                       Stream.map((event) => ({
                         kind: "event" as const,
-                        event: projectActivityEvent(event),
+                        event: projectActivityEvent(event, input.reasoningMessages === true),
                       })),
                       Stream.mapError(
                         (cause) =>
@@ -2068,7 +2317,10 @@ const makeWsRpcLayer = (
               return Stream.concat(
                 Stream.make({
                   kind: "snapshot" as const,
-                  snapshot: projectThreadDetailSnapshot(snapshot.value),
+                  snapshot: projectThreadDetailSnapshot(
+                    snapshot.value,
+                    input.reasoningMessages === true,
+                  ),
                 }),
                 afterSnapshot,
               );
@@ -2325,6 +2577,218 @@ const makeWsRpcLayer = (
               "rpc.aggregate": "server",
             },
           ),
+        [WS_METHODS.serverResolveEnvironmentBundleCredentials]: ({ credentialRefs }) =>
+          observeRpcEffect(
+            WS_METHODS.serverResolveEnvironmentBundleCredentials,
+            Effect.succeed(resolveEnvironmentBundleCredentialReferences(credentialRefs)),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.serverPlanEnvironmentBundleApply]: ({ current, incoming }) =>
+          observeRpcEffect(
+            WS_METHODS.serverPlanEnvironmentBundleApply,
+            Effect.gen(function* () {
+              const providers = yield* providerRegistry.getProviders;
+              const rawSettings = yield* serverSettings.getSettings.pipe(Effect.orDie);
+              const serverInventory = yield* loadEnvironmentBundleServerInventory({
+                cwd: config.cwd,
+                codexMcpSources: codexMcpInventorySourcesFromSettings(rawSettings),
+                claudeMcpSources: claudeMcpInventorySourcesFromSettings(rawSettings),
+                cursorMcpSources: cursorMcpInventorySourcesFromSettings(rawSettings),
+                openCodeMcpSources: openCodeMcpInventorySourcesFromSettings(rawSettings),
+              });
+              return yield* planEnvironmentBundleApply({
+                current,
+                incoming,
+                providers,
+                serverInventory,
+                settings: rawSettings,
+                cwd: config.cwd,
+              });
+            }),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.serverApplyEnvironmentBundle]: ({ current, incoming, expectedPlan }) =>
+          observeRpcEffect(
+            WS_METHODS.serverApplyEnvironmentBundle,
+            applyEnvironmentBundle({
+              current,
+              incoming,
+              expectedPlan,
+              cwd: config.cwd,
+              getProviders: providerRegistry.getProviders,
+              getSettings: serverSettings.getSettings,
+              updateSettings: serverSettings.updateSettings,
+              getServerInventory: serverSettings.getSettings.pipe(
+                Effect.orDie,
+                Effect.flatMap((rawSettings) =>
+                  loadEnvironmentBundleServerInventory({
+                    cwd: config.cwd,
+                    codexMcpSources: codexMcpInventorySourcesFromSettings(rawSettings),
+                    claudeMcpSources: claudeMcpInventorySourcesFromSettings(rawSettings),
+                    cursorMcpSources: cursorMcpInventorySourcesFromSettings(rawSettings),
+                    openCodeMcpSources: openCodeMcpInventorySourcesFromSettings(rawSettings),
+                  }),
+                ),
+              ),
+              refreshWorkspaceSnapshot: providerRegistry.refreshWorkspaceSnapshot,
+              refreshProviderInstance: providerRegistry.refreshInstance,
+            }),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.serverExportThreadBundle]: ({ threadIds }) =>
+          observeRpcEffect(
+            WS_METHODS.serverExportThreadBundle,
+            Effect.gen(function* () {
+              const environment = yield* serverEnvironment.getDescriptor;
+              const bundleId = yield* crypto.randomUUIDv4.pipe(
+                Effect.mapError(
+                  () =>
+                    new ThreadBundleExportError({
+                      reason: "snapshot-failed",
+                      message: "Failed to generate the Thread Bundle identifier",
+                    }),
+                ),
+              );
+              return yield* exportThreadBundleFromProjection(
+                {
+                  threadIds,
+                  sourceEnvironmentId: environment.environmentId,
+                  bundleId,
+                  exportedAt: yield* nowIso,
+                },
+                projectionSnapshotQuery,
+              );
+            }),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.serverPlanThreadBundleImport]: ({ bundle }) =>
+          observeRpcEffect(
+            WS_METHODS.serverPlanThreadBundleImport,
+            Effect.gen(function* () {
+              const providers = yield* providerRegistry.getProviders.pipe(
+                Effect.mapError(
+                  () =>
+                    new ThreadBundleImportError({
+                      reason: "snapshot-failed",
+                      message: "Failed to read provider availability for Thread Bundle import",
+                    }),
+                ),
+              );
+              return yield* planThreadBundleImportFromProjection(
+                bundle,
+                projectionSnapshotQuery,
+                providers
+                  .filter(
+                    (provider) =>
+                      provider.enabled &&
+                      provider.status !== "disabled" &&
+                      provider.availability !== "unavailable",
+                  )
+                  .map((provider) => provider.instanceId),
+              );
+            }),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.serverImportThreadBundle]: ({ bundle, expectedPlan }) =>
+          observeRpcEffect(
+            WS_METHODS.serverImportThreadBundle,
+            Effect.gen(function* () {
+              const providers = yield* providerRegistry.getProviders.pipe(
+                Effect.mapError(
+                  () =>
+                    new ThreadBundleImportError({
+                      reason: "snapshot-failed",
+                      message: "Failed to read provider availability for Thread Bundle import",
+                    }),
+                ),
+              );
+              const currentPlan = yield* planThreadBundleImportFromProjection(
+                bundle,
+                projectionSnapshotQuery,
+                providers
+                  .filter(
+                    (provider) =>
+                      provider.enabled &&
+                      provider.status !== "disabled" &&
+                      provider.availability !== "unavailable",
+                  )
+                  .map((provider) => provider.instanceId),
+              );
+              if (!threadBundleImportPlansMatch(expectedPlan, currentPlan)) {
+                return yield* new ThreadBundleImportError({
+                  reason: "plan-changed",
+                  message: "Thread Bundle import plan changed; generate a new dry run",
+                });
+              }
+              if (!currentPlan.canImport) {
+                return yield* new ThreadBundleImportError({
+                  reason: "blocked",
+                  message: "Thread Bundle import is blocked until every thread is ready",
+                });
+              }
+              const commandId = yield* crypto.randomUUIDv4.pipe(
+                Effect.map((uuid) => CommandId.make(`server:thread-bundle-import:${uuid}`)),
+                Effect.mapError(
+                  () =>
+                    new ThreadBundleImportError({
+                      reason: "persistence-failed",
+                      message: "Failed to prepare the Thread Bundle import",
+                    }),
+                ),
+              );
+              const preparedAttachments = yield* Effect.try({
+                try: () => prepareThreadBundleAttachments(bundle),
+                catch: () =>
+                  new ThreadBundleImportError({
+                    reason: "plan-changed",
+                    message: "Thread Bundle attachment validation changed; generate a new dry run",
+                  }),
+              });
+              const command = yield* Effect.try({
+                try: () =>
+                  buildThreadBundleImportCommand({
+                    bundle,
+                    plan: currentPlan,
+                    commandId,
+                    preparedAttachments,
+                  }),
+                catch: () =>
+                  new ThreadBundleImportError({
+                    reason: "plan-changed",
+                    message: "Thread Bundle import plan no longer matches this bundle",
+                  }),
+              });
+              yield* publishThreadBundleAttachments({
+                attachmentsDir: config.attachmentsDir,
+                prepared: preparedAttachments,
+              }).pipe(
+                Effect.mapError(
+                  () =>
+                    new ThreadBundleImportError({
+                      reason: "persistence-failed",
+                      message: "Thread Bundle attachments were not persisted",
+                    }),
+                ),
+              );
+              yield* dispatchFromClient(command).pipe(
+                Effect.mapError(
+                  () =>
+                    new ThreadBundleImportError({
+                      reason: "persistence-failed",
+                      message: "Thread Bundle import was not persisted",
+                    }),
+                ),
+              );
+              return {
+                bundleId: bundle.bundleId,
+                importedThreads: currentPlan.items.map((item) => ({
+                  threadId: item.targetThreadId,
+                  projectId: item.targetProjectId!,
+                })),
+              };
+            }),
+            { "rpc.aggregate": "server" },
+          ),
         [WS_METHODS.serverDiscoverSourceControl]: (_input) =>
           observeRpcEffect(
             WS_METHODS.serverDiscoverSourceControl,
@@ -2525,6 +2989,18 @@ const makeWsRpcLayer = (
             withPullRequestViewer(input, pullRequests.diffFileContents(input)),
             { "rpc.aggregate": "pull-requests" },
           ),
+        [WS_METHODS.pullRequestsFilesViewed]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.pullRequestsFilesViewed,
+            withPullRequestViewer(input, pullRequests.filesViewed(input)),
+            { "rpc.aggregate": "pull-requests" },
+          ),
+        [WS_METHODS.pullRequestsSetFilesViewed]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.pullRequestsSetFilesViewed,
+            withPullRequestViewer(input, pullRequests.setFilesViewed(input)),
+            { "rpc.aggregate": "pull-requests" },
+          ),
         [WS_METHODS.pullRequestsRunAction]: (input) =>
           observeRpcEffect(
             WS_METHODS.pullRequestsRunAction,
@@ -2594,11 +3070,11 @@ const makeWsRpcLayer = (
         [WS_METHODS.pullRequestsInvalidate]: (input) =>
           observeRpcEffect(
             WS_METHODS.pullRequestsInvalidate,
-            pullRequests.invalidate(input).pipe(
+            pullRequests.invalidate(input, { notifyReaders: true }).pipe(
               // A reader asking for fresh host state also wants the thread badges it feeds to
               // catch up, including a merged link the sweep would otherwise never revisit.
               Effect.andThen(
-                input.reference === undefined
+                input.reference === undefined || input.filesViewedOnly === true
                   ? Effect.void
                   : resolvePullRequestSyncKey(input.reference).pipe(
                       Effect.flatMap((key) =>
@@ -2657,6 +3133,65 @@ const makeWsRpcLayer = (
               "rpc.aggregate": "source-control",
             },
           ),
+        [WS_METHODS.projectCloneStart]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.projectCloneStart,
+            projectCloneTracker.start(input, {
+              createProject: (project) =>
+                Effect.gen(function* () {
+                  const normalizedCommand = yield* normalizeDispatchCommand({
+                    type: "project.create",
+                    commandId: yield* serverCommandId("project-clone-create"),
+                    projectId: project.projectId,
+                    title: project.title,
+                    workspaceRoot: project.workspaceRoot,
+                    createWorkspaceRootIfMissing: true,
+                    createdAt: project.createdAt,
+                  });
+                  yield* dispatchNormalizedCommand(normalizedCommand);
+                  yield* recordClientCommandAnalytics(normalizedCommand);
+                }).pipe(Effect.provideContext(normalizerContext)),
+              onCloned: (project) =>
+                // The project was created against an empty directory, so its
+                // cached identity is "not a repository" until this refresh.
+                // Re-emitting the project shell carries the new identity to
+                // every client without a round trip.
+                repositoryIdentityResolver.resolve(project.workspaceRoot, { refresh: true }).pipe(
+                  Effect.andThen(
+                    Effect.gen(function* () {
+                      const command = yield* normalizeDispatchCommand({
+                        type: "project.meta.update",
+                        commandId: yield* serverCommandId("project-clone-done"),
+                        projectId: project.projectId,
+                      });
+                      yield* dispatchNormalizedCommand(command);
+                    }),
+                  ),
+                  Effect.andThen(refreshGitStatus(project.workspaceRoot)),
+                  Effect.ignoreCause({ log: true }),
+                  Effect.provideContext(normalizerContext),
+                ),
+            }),
+            { "rpc.aggregate": "source-control" },
+          ),
+        [WS_METHODS.projectCloneCancel]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.projectCloneCancel,
+            projectCloneTracker
+              .cancel(input.projectId)
+              .pipe(Effect.map((applied) => ({ applied }))),
+            { "rpc.aggregate": "source-control" },
+          ),
+        [WS_METHODS.projectCloneRetry]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.projectCloneRetry,
+            projectCloneTracker.retry(input.projectId).pipe(Effect.map((applied) => ({ applied }))),
+            { "rpc.aggregate": "source-control" },
+          ),
+        [WS_METHODS.subscribeProjectClones]: () =>
+          observeRpcStream(WS_METHODS.subscribeProjectClones, projectCloneTracker.stream, {
+            "rpc.aggregate": "source-control",
+          }),
         [WS_METHODS.sourceControlPublishRepository]: (input) =>
           observeRpcEffect(
             WS_METHODS.sourceControlPublishRepository,
@@ -2806,10 +3341,38 @@ const makeWsRpcLayer = (
             WS_METHODS.assetsCreateUrl,
             Effect.gen(function* () {
               const path = yield* Path.Path;
+              if (input.resource._tag === "pull-request-image") {
+                const resource = input.resource;
+                const load = Effect.gen(function* () {
+                  const gitHubCli = yield* GitHubCli.GitHubCli;
+                  return yield* issueAssetUrl({ resource, gitHubCli });
+                }).pipe(Effect.provide(GitHubCli.layer));
+                return yield* withPullRequestViewer(
+                  {
+                    projectId: resource.projectId,
+                    host: resource.host,
+                    ...(resource.expectedAccountId === undefined
+                      ? {}
+                      : { expectedAccountId: resource.expectedAccountId }),
+                    repository: resource.repository,
+                    number: resource.number,
+                  },
+                  load,
+                ).pipe(
+                  Effect.catchTags({
+                    PullRequestUnavailableError: (cause) =>
+                      new AssetPullRequestImageFetchError({ resource, cause }),
+                    PullRequestOperationError: (cause) =>
+                      new AssetPullRequestImageFetchError({ resource, cause }),
+                  }),
+                );
+              }
               // An absolute media path can be linked from a thread on another environment.
               if (
                 input.resource._tag === "attachment" ||
                 input.resource._tag === "native-app-icon" ||
+                // GitHub media names the repository it authenticates through itself.
+                input.resource._tag === "github-media" ||
                 (input.resource._tag === "media-file" && path.isAbsolute(input.resource.path))
               ) {
                 return yield* issueAssetUrl({ resource: input.resource });
@@ -3293,10 +3856,6 @@ const makeWsRpcLayer = (
                 })),
               );
 
-              yield* providerRegistry
-                .refresh()
-                .pipe(Effect.ignoreCause({ log: true }), Effect.forkScoped);
-
               const liveUpdates = Stream.merge(
                 keybindingsUpdates,
                 Stream.merge(
@@ -3385,6 +3944,18 @@ const makeWsRpcLayer = (
             Stream.unwrap(
               Effect.map(resourceTelemetry.subscribe, ({ latest, changes }) =>
                 Stream.concat(Stream.make(latest), changes),
+              ),
+            ),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.subscribeResourceTelemetrySummary]: (_input) =>
+          observeRpcStream(
+            WS_METHODS.subscribeResourceTelemetrySummary,
+            Stream.unwrap(
+              Effect.map(resourceTelemetry.subscribe, ({ latest, changes }) =>
+                Stream.concat(Stream.make(latest), changes).pipe(
+                  Stream.map((snapshot) => summarizeResourceTelemetry(snapshot)),
+                ),
               ),
             ),
             { "rpc.aggregate": "server" },

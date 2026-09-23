@@ -650,6 +650,9 @@ const taskAgentLinkageFields = {
   model: Schema.optional(TrimmedNonEmptyStringSchema),
   /** Reasoning effort when known (e.g. "high"). Open string: provider vocabularies differ. */
   effort: Schema.optional(TrimmedNonEmptyStringSchema),
+  /** Provenance is optional for compatibility with legacy providers/events. */
+  modelSource: Schema.optional(Schema.Literals(["explicit", "inherited", "unknown"])),
+  effortSource: Schema.optional(Schema.Literals(["explicit", "inherited", "unknown"])),
   toolUseId: Schema.optional(TrimmedNonEmptyStringSchema),
   parentAgentId: Schema.optional(TrimmedNonEmptyStringSchema),
   workflowName: Schema.optional(TrimmedNonEmptyStringSchema),

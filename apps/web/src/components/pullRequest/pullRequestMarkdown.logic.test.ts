@@ -1,6 +1,65 @@
 import { describe, expect, it } from "vite-plus/test";
+import { ProjectId } from "@t3tools/contracts";
 
-import { splitPullRequestBody } from "./pullRequestMarkdown.logic";
+import {
+  pullRequestImageResourceFromSource,
+  splitPullRequestBody,
+} from "./pullRequestMarkdown.logic";
+
+const SHA = "d21a35866e0a7c5866b9896354eece15d82f0610";
+const reference = {
+  projectId: ProjectId.make("project-1"),
+  repository: "acme/widgets",
+  number: 42,
+} as const;
+
+describe("pullRequestImageResourceFromSource", () => {
+  it("resolves GitHub blob-relative and head-relative images", () => {
+    const base = { repositoryUrl: "https://github.com/acme/widgets", reference, headSha: SHA };
+    expect(
+      pullRequestImageResourceFromSource({
+        ...base,
+        source: `../blob/${SHA}/docs/screens/before.png?raw=true`,
+      }),
+    ).toEqual({
+      _tag: "pull-request-image",
+      projectId: "project-1",
+      number: 42,
+      host: "github.com",
+      repository: "acme/widgets",
+      revision: SHA,
+      path: "docs/screens/before.png",
+    });
+    expect(pullRequestImageResourceFromSource({ ...base, source: "./docs/after.webp" })).toEqual({
+      _tag: "pull-request-image",
+      projectId: "project-1",
+      number: 42,
+      host: "github.com",
+      repository: "acme/widgets",
+      revision: SHA,
+      path: "docs/after.webp",
+    });
+  });
+
+  it("accepts only same-repository immutable GitHub paths", () => {
+    const base = { repositoryUrl: "https://github.com/acme/widgets", reference, headSha: SHA };
+    expect(
+      pullRequestImageResourceFromSource({
+        ...base,
+        source: `https://github.com/acme/widgets/blob/${SHA}/docs/screen.png`,
+      }),
+    ).not.toBeNull();
+    for (const source of [
+      `https://github.com/other/widgets/blob/${SHA}/screen.png`,
+      "../secrets.png",
+      `../blob/main/screen.png`,
+      `../blob/${SHA}/../secret.png`,
+      "javascript:alert(1)",
+    ]) {
+      expect(pullRequestImageResourceFromSource({ ...base, source })).toBeNull();
+    }
+  });
+});
 
 describe("pull request body segmentation", () => {
   it("keeps a plain body as a single markdown run", () => {

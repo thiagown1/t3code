@@ -18,12 +18,14 @@ import {
   buildBranchNamePrompt,
   buildCommitMessagePrompt,
   buildPrContentPrompt,
+  buildRoundSummaryPrompt,
   buildThreadTitlePrompt,
 } from "./TextGenerationPrompts.ts";
 import * as TextGeneration from "./TextGeneration.ts";
 import {
   sanitizeCommitSubject,
   sanitizePrTitle,
+  sanitizeRoundSummary,
   sanitizeThreadTitle,
 } from "./TextGenerationUtils.ts";
 import * as OpenCodeRuntime from "../provider/opencodeRuntime.ts";
@@ -34,6 +36,7 @@ const OpenCodeTextGenerationOperation = Schema.Literals([
   "generatePrContent",
   "generateBranchName",
   "generateThreadTitle",
+  "generateRoundSummary",
 ]);
 
 type OpenCodeTextGenerationOperation = typeof OpenCodeTextGenerationOperation.Type;
@@ -435,6 +438,7 @@ export const makeOpenCodeTextGeneration = Effect.fn("makeOpenCodeTextGeneration"
       const { prompt, outputSchema } = buildThreadTitlePrompt({
         message: input.message,
         previousTitle: input.previousTitle,
+        linkedContext: input.linkedContext,
         attachments: input.attachments,
       });
       const generated = yield* runOpenCodeJson({
@@ -448,7 +452,27 @@ export const makeOpenCodeTextGeneration = Effect.fn("makeOpenCodeTextGeneration"
 
       return {
         title: sanitizeThreadTitle(generated.title),
+        ...(generated.needsRefinement ? { needsRefinement: true } : {}),
       };
+    });
+
+  const generateRoundSummary: TextGeneration.TextGeneration["Service"]["generateRoundSummary"] =
+    Effect.fn("OpenCodeTextGeneration.generateRoundSummary")(function* (input) {
+      const { prompt, outputSchema } = buildRoundSummaryPrompt({
+        topicTitle: input.topicTitle,
+        topicSummary: input.topicSummary,
+        transcript: input.transcript,
+        policy: input.policy,
+      });
+      const generated = yield* runOpenCodeJson({
+        operation: "generateRoundSummary",
+        cwd: input.cwd,
+        prompt,
+        outputSchemaJson: outputSchema,
+        modelSelection: input.modelSelection,
+      });
+
+      return { summary: sanitizeRoundSummary(generated.summary) };
     });
 
   return {
@@ -456,5 +480,6 @@ export const makeOpenCodeTextGeneration = Effect.fn("makeOpenCodeTextGeneration"
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
+    generateRoundSummary,
   } satisfies TextGeneration.TextGeneration["Service"];
 });

@@ -34,6 +34,7 @@ import type {
   ThreadPullRequestKey,
 } from "@t3tools/contracts";
 import { faviconUrlForOrigin } from "@t3tools/shared/favicon";
+import { githubMediaFetchUrl } from "@t3tools/shared/githubMedia";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -52,6 +53,7 @@ import { inlineCodeFilePathCandidate } from "@t3tools/client-runtime/markdown-li
 import { mediaFileReference, mediaUrlReference } from "@t3tools/client-runtime/media-reference";
 import { mediaKindFromPath, mediaMimeTypeFromExtension } from "@t3tools/shared/filePreview";
 import * as Cause from "effect/Cause";
+import { sourceControlRepositorySelector } from "@t3tools/shared/sourceControl";
 import { AsyncResult } from "effect/unstable/reactivity";
 import React, {
   Children,
@@ -194,6 +196,7 @@ import {
 } from "../browser/openFileInPreview";
 import { resolveLinkTarget } from "../browser/browserLinkTarget";
 import { PullRequestLinkPreview } from "./pullRequest/PullRequestLinkPreview";
+import { MermaidDiagram } from "./chat/MermaidDiagram";
 
 interface ChatMarkdownProps {
   text: string;
@@ -211,15 +214,26 @@ interface ChatMarkdownProps {
   lineBreaks?: boolean;
   /** Parse sanitized raw HTML instead of displaying its source text. */
   parseRawHtml?: boolean;
+  /** Render fenced Mermaid diagrams. Kept opt-in so ordinary chat code blocks stay lightweight. */
+  renderMermaidDiagrams?: boolean;
+  /** Offer a per-block control that lazily renders completed Mermaid fences. */
+  offerMermaidRendering?: boolean;
   /** Append a prompt that invokes a newly created artifact-template skill. */
   onUseArtifactTemplate?: ((template: CodexArtifactTemplate) => void) | undefined;
   /** Directory that anchors relative links and images; defaults to `cwd`. Set
       to the file's own directory when rendering a markdown file. */
   imageBaseDir?: string | undefined;
+  /** Resolves host-specific markdown images to an authenticated server asset. */
+  resolveImageResource?:
+    | ((source: string) => Extract<AssetResource, { readonly _tag: "pull-request-image" }> | null)
+    | undefined;
   onImageExpand?: ((preview: ExpandedImagePreview) => void) | undefined;
   extraRemarkPlugins?: NonNullable<ReactMarkdownOptions["remarkPlugins"]>;
   /** Renders a `t3-context://` link as a chip; without it the link shows its label as text. */
   renderContextReference?: ((reference: ChatMarkdownContextReference) => ReactNode) | undefined;
+  /** Loads GitHub-hosted media through `cwd`'s GitHub credential, which a private repository's
+      uploads need; without it those images and videos load unauthenticated and 404. */
+  githubMedia?: boolean | undefined;
   /** Levels added to each markdown heading in the accessibility tree so the
       text nests under the heading that introduces it, such as a chat message's
       author. Rendered tags and their styling are unchanged. */
@@ -912,12 +926,19 @@ function MarkdownCodeBlock({
   language,
   fenceTitle,
   theme,
+  mermaidView,
   children,
 }: {
   code: string;
   language: string;
   fenceTitle: string | null;
   theme: "light" | "dark";
+  mermaidView?:
+    | {
+        rendered: boolean;
+        onToggle: () => void;
+      }
+    | undefined;
   children: ReactNode;
 }) {
   const [copied, setCopied] = useState(false);
@@ -925,6 +946,7 @@ function MarkdownCodeBlock({
   const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const wrapLabel = wrapped ? "Disable line wrap" : "Wrap lines";
   const copyLabel = copied ? "Copied" : "Copy code";
+  const mermaidLabel = mermaidView?.rendered ? "Show source" : "Render diagram";
 
   const handleCopy = useCallback(() => {
     if (typeof navigator === "undefined" || navigator.clipboard == null) {
@@ -969,6 +991,7 @@ function MarkdownCodeBlock({
       className="chat-markdown-codeblock my-[0.65rem] overflow-hidden rounded-[var(--radius)] border border-border/70 bg-secondary leading-snug dark:border-transparent dark:bg-input/32"
       data-language={language}
       data-wrap={wrapped ? "true" : "false"}
+      data-mermaid-view={mermaidView ? (mermaidView.rendered ? "diagram" : "source") : undefined}
     >
       <div className="chat-markdown-codeblock-header flex items-center justify-between gap-2 pt-1.5 pr-1.5 pb-0 pl-3 select-none">
         <span className="inline-flex min-w-0 items-center gap-[0.4rem] [font-family:var(--font-mono,ui-monospace,SFMono-Regular,monospace)] [font-size:0.6875rem]">
@@ -979,24 +1002,50 @@ function MarkdownCodeBlock({
           />
         </span>
         <span className="flex items-center gap-0.5" role="toolbar" aria-label="Code block actions">
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-xs"
-                  className="chat-markdown-chrome-action"
-                  aria-pressed={wrapped}
-                  onClick={() => setWrapped((value) => !value)}
-                  aria-label={wrapLabel}
-                />
-              }
-            >
-              <WrapTextIcon className="size-3" />
-            </TooltipTrigger>
-            <TooltipPopup side="top">{wrapLabel}</TooltipPopup>
-          </Tooltip>
+          {mermaidView ? (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-xs"
+                    className="chat-markdown-chrome-action"
+                    aria-pressed={mermaidView.rendered}
+                    onClick={mermaidView.onToggle}
+                    aria-label={mermaidLabel}
+                  />
+                }
+              >
+                {mermaidView.rendered ? (
+                  <FileTextIcon className="size-3" />
+                ) : (
+                  <PresentationIcon className="size-3" />
+                )}
+              </TooltipTrigger>
+              <TooltipPopup side="top">{mermaidLabel}</TooltipPopup>
+            </Tooltip>
+          ) : null}
+          {!mermaidView?.rendered ? (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-xs"
+                    className="chat-markdown-chrome-action"
+                    aria-pressed={wrapped}
+                    onClick={() => setWrapped((value) => !value)}
+                    aria-label={wrapLabel}
+                  />
+                }
+              >
+                <WrapTextIcon className="size-3" />
+              </TooltipTrigger>
+              <TooltipPopup side="top">{wrapLabel}</TooltipPopup>
+            </Tooltip>
+          ) : null}
           <Tooltip>
             <TooltipTrigger
               render={
@@ -1018,6 +1067,42 @@ function MarkdownCodeBlock({
       </div>
       {children}
     </div>
+  );
+}
+
+function OnDemandMermaidCodeBlock({
+  code,
+  language,
+  fenceTitle,
+  theme,
+  sourceContent,
+}: {
+  code: string;
+  language: string;
+  fenceTitle: string | null;
+  theme: "light" | "dark";
+  sourceContent: ReactNode;
+}) {
+  const [renderedSource, setRenderedSource] = useState<string | null>(null);
+  const rendered = renderedSource === code;
+
+  return (
+    <MarkdownCodeBlock
+      code={code}
+      language={language}
+      fenceTitle={fenceTitle}
+      theme={theme}
+      mermaidView={{
+        rendered,
+        onToggle: () => setRenderedSource(rendered ? null : code),
+      }}
+    >
+      {rendered ? (
+        <MermaidDiagram source={code} appearance={theme} fallback={sourceContent} />
+      ) : (
+        sourceContent
+      )}
+    </MarkdownCodeBlock>
   );
 }
 
@@ -1573,7 +1658,14 @@ export const ChatMarkdownAssetImage = memo(function ChatMarkdownAssetImage(props
   readonly environmentId: EnvironmentId;
   readonly resource: Extract<
     AssetResource,
-    { readonly _tag: "attachment" | "workspace-file" | "media-file" }
+    {
+      readonly _tag:
+        | "attachment"
+        | "workspace-file"
+        | "media-file"
+        | "github-media"
+        | "pull-request-image";
+    }
   >;
   readonly kind?: "image" | "video";
   readonly alt: string;
@@ -1584,6 +1676,18 @@ export const ChatMarkdownAssetImage = memo(function ChatMarkdownAssetImage(props
   /** Caps the box height in rem while keeping the image's ratio; 30 by default. */
   readonly maxHeightRem?: number | undefined;
   readonly style?: CSSProperties | undefined;
+  readonly className?: string | undefined;
+  /** Sanitized authored attributes (`id`, `align`, …) that fragment links and layout rely on. */
+  readonly imageProps?:
+    | Omit<ComponentProps<"img">, "src" | "alt" | "className" | "style">
+    | undefined;
+  /** Where the media also lives on the web, for the failure state's escape hatch. */
+  readonly originalUrl?: string | undefined;
+  /** The workspace media frame, on by default; off for media that keeps the author's own box. */
+  readonly framed?: boolean | undefined;
+  /** Loaded instead of the failure state when no URL can be signed, such as against a server
+      too old to know this resource. Only safe when the client can reach it directly. */
+  readonly fallbackSrc?: string | undefined;
   readonly workspaceRoot?: string | undefined;
   readonly onImageExpand?: ((preview: ExpandedImagePreview) => void) | undefined;
 }) {
@@ -1596,9 +1700,19 @@ export const ChatMarkdownAssetImage = memo(function ChatMarkdownAssetImage(props
       : resource._tag === "workspace-file" && props.workspaceRoot
         ? `${props.workspaceRoot.replace(/[\\/]+$/, "")}/${resource.path}`
         : undefined;
-  const reference = path ? mediaFileReference(path, props.workspaceRoot) : undefined;
-  const relativePath = reference?.relativePath;
-  const src = assetUrl._tag === "Success" ? assetUrl.url + (props.srcFragment ?? "") : null;
+  const reference = path
+    ? mediaFileReference(path, props.workspaceRoot)
+    : props.originalUrl
+      ? mediaUrlReference(props.originalUrl)
+      : undefined;
+  const relativePath = reference?.kind === "file" ? reference.relativePath : undefined;
+  const fallbackSrc = assetUrl._tag === "Failure" ? props.fallbackSrc : undefined;
+  const src =
+    assetUrl._tag === "Success"
+      ? assetUrl.url + (props.srcFragment ?? "")
+      : fallbackSrc === undefined
+        ? null
+        : fallbackSrc + (props.srcFragment ?? "");
   // The server reads the pixel size from the file header, so the slot can be
   // the image's final box instead of a 16:9 guess. An authored size wins; a
   // caller's height cap shrinks the box while keeping the ratio.
@@ -1615,9 +1729,11 @@ export const ChatMarkdownAssetImage = memo(function ChatMarkdownAssetImage(props
     kind: props.kind ?? "image",
     name: props.alt || (props.kind ?? "image"),
     src,
-    asset: { environmentId: props.environmentId, resource },
+    ...(fallbackSrc === undefined
+      ? { asset: { environmentId: props.environmentId, resource } }
+      : {}),
     ...(reference ? { reference } : {}),
-    ...(relativePath && resource._tag !== "attachment"
+    ...(relativePath && (resource._tag === "media-file" || resource._tag === "workspace-file")
       ? {
           onOpenFile: () =>
             useRightPanelStore
@@ -1634,9 +1750,10 @@ export const ChatMarkdownAssetImage = memo(function ChatMarkdownAssetImage(props
     return (
       <ChatMarkdownVideo
         src={src}
-        sourceFailed={assetUrl._tag === "Failure"}
+        sourceFailed={assetUrl._tag === "Failure" && fallbackSrc === undefined}
         alt={props.alt}
         copyMarkdown={props.copyMarkdown}
+        originalUrl={props.originalUrl}
         style={props.style}
         mediaIdentity={JSON.stringify([props.environmentId, props.resource, props.srcFragment])}
         onRetry={refreshAssetUrl}
@@ -1649,13 +1766,18 @@ export const ChatMarkdownAssetImage = memo(function ChatMarkdownAssetImage(props
     <ChatMarkdownImage
       key={JSON.stringify([props.environmentId, props.resource, props.srcFragment])}
       src={src}
-      sourceFailed={assetUrl._tag === "Failure"}
+      sourceFailed={assetUrl._tag === "Failure" && fallbackSrc === undefined}
       alt={props.alt}
       copyMarkdown={props.copyMarkdown}
       standalone={props.standalone ?? true}
-      className={CHAT_MARKDOWN_WORKSPACE_IMAGE_CLASS_NAME}
+      className={cn(
+        props.framed === false ? undefined : CHAT_MARKDOWN_WORKSPACE_IMAGE_CLASS_NAME,
+        props.className,
+      )}
       style={style}
+      imageProps={props.imageProps}
       actionsSource={actionsSource}
+      originalUrl={props.originalUrl}
       onImageExpand={props.onImageExpand}
     />
   );
@@ -2223,9 +2345,13 @@ function useChatMarkdownState({
   skills = EMPTY_MARKDOWN_SKILLS,
   onUseArtifactTemplate,
   imageBaseDir,
+  resolveImageResource,
   onImageExpand,
   renderContextReference,
   headingLevelOffset = 0,
+  githubMedia = false,
+  renderMermaidDiagrams = false,
+  offerMermaidRendering = false,
 }: ChatMarkdownProps) {
   const { resolvedTheme } = useTheme();
   const [localMediaPreview, setLocalMediaPreview] = useState<ExpandedImagePreview | null>(null);
@@ -2623,9 +2749,13 @@ function useChatMarkdownState({
       environmentId,
       expandMedia,
       fileLinkChip,
+      githubMedia,
       renderContextReference,
+      renderMermaidDiagrams,
+      offerMermaidRendering,
       headingLevelOffset,
       imageBaseDir,
+      resolveImageResource,
       inlineCodeFileLinkMetaByText,
       isStreaming,
       linkTargetPreference,
@@ -2652,9 +2782,13 @@ function useChatMarkdownState({
       environmentId,
       expandMedia,
       fileLinkChip,
+      githubMedia,
       renderContextReference,
+      renderMermaidDiagrams,
+      offerMermaidRendering,
       headingLevelOffset,
       imageBaseDir,
+      resolveImageResource,
       inlineCodeFileLinkMetaByText,
       isStreaming,
       linkTargetPreference,
@@ -2868,7 +3002,7 @@ const CHAT_MARKDOWN_COMPONENTS = {
               input: {
                 projectId: pullRequestProject.id,
                 repository:
-                  pullRequestProject.repositoryIdentity?.displayName ??
+                  sourceControlRepositorySelector(pullRequestProject.repositoryIdentity) ??
                   pullRequestCandidate.repository,
                 number: pullRequestCandidate.number,
               },
@@ -3081,9 +3215,16 @@ const CHAT_MARKDOWN_COMPONENTS = {
     );
   },
   img: function MarkdownImage({ node, title, src, alt, ...props }) {
-    const { expandMedia, cwd, imageBaseDir, threadRef, renderContextReference } = use(
-      ChatMarkdownRendererContext,
-    );
+    const {
+      expandMedia,
+      cwd,
+      environmentId,
+      githubMedia,
+      imageBaseDir,
+      threadRef,
+      renderContextReference,
+      resolveImageResource,
+    } = use(ChatMarkdownRendererContext);
     const imageExpand = use(MarkdownLinkContext) ? undefined : expandMedia;
     const contextReference = typeof src === "string" ? parseComposerContextHref(src) : null;
     if (contextReference) {
@@ -3107,8 +3248,55 @@ const CHAT_MARKDOWN_COMPONENTS = {
     const copyMarkdown = markdownImageCopy(altText, srcString, authoredTitle);
     const { className, style: _style, width, height, ...imageProps } = props;
     const authoredSizeStyle = authoredImageSizeStyle(width, height);
+    const resolvedImageResource = resolveImageResource?.(classifiedSrc) ?? null;
+    if (resolvedImageResource !== null && environmentId !== null) {
+      return (
+        <ChatMarkdownAssetImage
+          environmentId={environmentId}
+          resource={resolvedImageResource}
+          alt={altText}
+          copyMarkdown={copyMarkdown}
+          standalone={standalone}
+          style={authoredSizeStyle}
+          onImageExpand={imageExpand}
+        />
+      );
+    }
     const imageSource = classifyMarkdownImageSource(classifiedSrc, imageBaseDir ?? cwd);
     const kind = mediaKindFromPath(classifiedSrc) ?? "image";
+    const directUri = imageSource._tag === "Direct" ? imageSource.uri : null;
+    const githubMediaUrl =
+      directUri === null ? null : githubMediaFetchUrl(resolveProtocolRelativeMediaUrl(directUri));
+    if (
+      githubMedia &&
+      cwd !== undefined &&
+      environmentId !== null &&
+      directUri !== null &&
+      githubMediaUrl !== null
+    ) {
+      return (
+        <ChatMarkdownAssetImage
+          environmentId={environmentId}
+          resource={{ _tag: "github-media", cwd, url: githubMediaUrl }}
+          alt={altText}
+          kind={kind}
+          copyMarkdown={copyMarkdown}
+          standalone={standalone}
+          className={className}
+          style={authoredSizeStyle}
+          imageProps={imageProps}
+          srcFragment={markdownImageSourceFragment(classifiedSrc)}
+          originalUrl={resolveProtocolRelativeMediaUrl(directUri)}
+          // A pull request body draws its own boxes; keep the author's, not the workspace frame.
+          framed={false}
+          // A server too old to sign this resource, or one with no route to GitHub, still leaves
+          // the public half of these working exactly as it did before. The canonical URL, not the
+          // authored one: a `blob` link addresses the page, and only the raw host has the bytes.
+          fallbackSrc={githubMediaUrl}
+          onImageExpand={imageExpand}
+        />
+      );
+    }
     if (imageSource._tag === "Direct") {
       const mediaSrc = resolveProtocolRelativeMediaUrl(imageSource.uri);
       const originalUrl =
@@ -3177,7 +3365,13 @@ const CHAT_MARKDOWN_COMPONENTS = {
     return <MarkdownDetails open={detailsOpen}>{children}</MarkdownDetails>;
   },
   pre: function MarkdownPre({ node, children, ...props }) {
-    const { resolvedTheme, diffThemeName, isStreaming } = use(ChatMarkdownRendererContext);
+    const {
+      resolvedTheme,
+      diffThemeName,
+      isStreaming,
+      renderMermaidDiagrams,
+      offerMermaidRendering,
+    } = use(ChatMarkdownRendererContext);
     const codeBlock = extractCodeBlock(children);
     if (!codeBlock) {
       return <pre {...props}>{children}</pre>;
@@ -3185,36 +3379,57 @@ const CHAT_MARKDOWN_COMPONENTS = {
 
     const language = extractFenceLanguage(codeBlock.className);
     const fenceTitle = extractFenceTitle(extractPreCodeMeta(node));
-    return (
+    const sourceContent = (
+      <RenderErrorBoundary
+        resetKeys={[codeBlock.code, language, diffThemeName, isStreaming]}
+        fallback={<pre {...props}>{children}</pre>}
+      >
+        {/* Reserve the block's height but stay hidden until Shiki has colored
+            it, so plain text never flashes before the highlighted version. */}
+        <Suspense
+          fallback={
+            <pre {...props} className="invisible" aria-hidden>
+              {children}
+            </pre>
+          }
+        >
+          <SuspenseShikiCodeBlock
+            className={codeBlock.className}
+            code={codeBlock.code}
+            themeName={diffThemeName}
+            isStreaming={isStreaming}
+          />
+        </Suspense>
+      </RenderErrorBoundary>
+    );
+    const sourceBlock = (
       <MarkdownCodeBlock
         code={codeBlock.code}
         language={language}
         fenceTitle={fenceTitle}
         theme={resolvedTheme}
       >
-        <RenderErrorBoundary
-          resetKeys={[codeBlock.code, language, diffThemeName, isStreaming]}
-          fallback={<pre {...props}>{children}</pre>}
-        >
-          {/* Reserve the block's height but stay hidden until Shiki has colored
-              it, so plain text never flashes before the highlighted version. */}
-          <Suspense
-            fallback={
-              <pre {...props} className="invisible" aria-hidden>
-                {children}
-              </pre>
-            }
-          >
-            <SuspenseShikiCodeBlock
-              className={codeBlock.className}
-              code={codeBlock.code}
-              themeName={diffThemeName}
-              isStreaming={isStreaming}
-            />
-          </Suspense>
-        </RenderErrorBoundary>
+        {sourceContent}
       </MarkdownCodeBlock>
     );
+    if (language.toLowerCase() !== "mermaid") return sourceBlock;
+    if (renderMermaidDiagrams) {
+      return (
+        <MermaidDiagram source={codeBlock.code} appearance={resolvedTheme} fallback={sourceBlock} />
+      );
+    }
+    if (offerMermaidRendering && !isStreaming) {
+      return (
+        <OnDemandMermaidCodeBlock
+          code={codeBlock.code}
+          language={language}
+          fenceTitle={fenceTitle}
+          theme={resolvedTheme}
+          sourceContent={sourceContent}
+        />
+      );
+    }
+    return sourceBlock;
   },
 } satisfies Components;
 

@@ -63,6 +63,8 @@ export interface RuntimeSubagent {
   readonly role: string | null;
   readonly model: string | null;
   readonly effort: string | null;
+  readonly modelSource: "explicit" | "inherited" | "unknown" | null;
+  readonly effortSource: "explicit" | "inherited" | "unknown" | null;
   readonly status: RuntimeSubagentStatus;
   readonly activationCount: number;
   readonly usage: SubagentUsage | null;
@@ -140,6 +142,25 @@ function appendActivity(
 
 function asString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function sourceFromPayload(value: unknown): RuntimeSubagent["modelSource"] {
+  return value === "explicit" || value === "inherited" || value === "unknown" ? value : null;
+}
+
+/** Only authoritative provenance is rendered; legacy/unknown rows stay silent. */
+export function formatSubagentSourceLabel(
+  modelSource: RuntimeSubagent["modelSource"],
+  effortSource: RuntimeSubagent["effortSource"],
+): string | null {
+  const labels: Array<string> = [];
+  if (modelSource === "inherited" || modelSource === "explicit") {
+    labels.push(`modelo ${modelSource === "inherited" ? "herdado" : "explícito"}`);
+  }
+  if (effortSource === "inherited" || effortSource === "explicit") {
+    labels.push(`esforço ${effortSource === "inherited" ? "herdado" : "explícito"}`);
+  }
+  return labels.length > 0 ? labels.join(" · ") : null;
 }
 
 function asCount(value: unknown): number | undefined {
@@ -232,6 +253,8 @@ interface MutableAgent {
   role: string | null;
   model: string | null;
   effort: string | null;
+  modelSource: RuntimeSubagent["modelSource"];
+  effortSource: RuntimeSubagent["effortSource"];
   status: RuntimeSubagentStatus;
   activationCount: number;
   usage: SubagentUsage | null;
@@ -289,6 +312,8 @@ function getOrCreate(
     role: asString(payload.role) ?? null,
     model: asString(payload.model) ?? null,
     effort: asString(payload.effort) ?? null,
+    modelSource: sourceFromPayload(payload.modelSource),
+    effortSource: sourceFromPayload(payload.effortSource),
     status: "pending",
     activationCount: 0,
     usage: null,
@@ -326,6 +351,14 @@ function fillMetadata(agent: MutableAgent, payload: Record<string, unknown>): vo
   if (model) agent.model = model;
   const effort = asString(payload.effort);
   if (effort) agent.effort = effort;
+  const modelSource = sourceFromPayload(payload.modelSource);
+  if (modelSource && (modelSource !== "unknown" || agent.modelSource === null)) {
+    agent.modelSource = modelSource;
+  }
+  const effortSource = sourceFromPayload(payload.effortSource);
+  if (effortSource && (effortSource !== "unknown" || agent.effortSource === null)) {
+    agent.effortSource = effortSource;
+  }
   const parentAgentId = asString(payload.parentAgentId);
   if (parentAgentId) {
     agent.parentAgentId = parentAgentId;

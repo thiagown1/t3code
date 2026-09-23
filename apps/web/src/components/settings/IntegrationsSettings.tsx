@@ -114,6 +114,9 @@ import { ProjectDefaultsSettings } from "./ProjectDefaultsSettings";
 import { useSettingsScope } from "./SettingsScopeContext";
 import { BrowserImportWizard, type WizardTarget } from "./BrowserImportWizard";
 import type { ImportOutcome } from "./browserImportWizard.logic";
+import { CapabilityProfileSettings } from "./CapabilityProfileSettings";
+import { EnvironmentBundleSettings } from "./EnvironmentBundleSettings";
+import { ThreadBundleSettings } from "./ThreadBundleSettings";
 
 const FILL_VALUE = "fill";
 const RESPONSIVE_VALUE = "responsive";
@@ -1346,6 +1349,9 @@ export function IntegrationsSettingsPanel() {
         )}
       </SettingsSection>
       <DeviceIntegrationSettings />
+      <CapabilityProfileSettings />
+      <EnvironmentBundleSettings />
+      <ThreadBundleSettings />
     </SettingsPageContainer>
   );
 }

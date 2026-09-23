@@ -12,6 +12,7 @@
  * @module ProviderService
  */
 import type {
+  ProviderDriverKind,
   ProviderInterruptTurnInput,
   ProviderInstanceId,
   ProviderRespondToRequestInput,
@@ -26,6 +27,7 @@ import type {
   MessageId,
   ThreadId,
   ProviderTurnStartResult,
+  ThreadCleanupPreview,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
@@ -34,6 +36,13 @@ import type * as Stream from "effect/Stream";
 import type { ProviderServiceError } from "../Errors.ts";
 import type { ProviderAdapterCapabilities } from "./ProviderAdapter.ts";
 import type { ProviderInstanceRoutingInfo } from "./ProviderAdapterRegistry.ts";
+
+export type ProviderConversationArchiveResult =
+  | {
+      readonly provider: ProviderDriverKind;
+      readonly status: "archived" | "unsupported";
+    }
+  | { readonly status: "not-linked" };
 
 /**
  * ProviderServiceShape - Service API for provider session and turn orchestration.
@@ -46,6 +55,25 @@ export interface ProviderServiceShape {
     threadId: ThreadId,
     input: ProviderSessionStartInput,
   ) => Effect.Effect<ProviderSession, ProviderServiceError>;
+
+  /** Prepare another provider while keeping the current binding and session alive. */
+  readonly stageHandoffTarget?: (
+    threadId: ThreadId,
+    input: ProviderSessionStartInput,
+  ) => Effect.Effect<ProviderSession, ProviderServiceError>;
+  /** Send context to the staged provider and wait for its turn to finish. */
+  readonly sendStagedHandoffContext?: (
+    input: ProviderSendTurnInput,
+  ) => Effect.Effect<ProviderTurnStartResult, ProviderServiceError>;
+  readonly commitStagedHandoffTarget?: (
+    threadId: ThreadId,
+  ) => Effect.Effect<ProviderSession, ProviderServiceError>;
+  readonly finalizeStagedHandoffTarget?: (
+    threadId: ThreadId,
+  ) => Effect.Effect<void, ProviderServiceError>;
+  readonly abortStagedHandoffTarget?: (
+    threadId: ThreadId,
+  ) => Effect.Effect<void, ProviderServiceError>;
 
   /**
    * Send a provider turn.
@@ -87,6 +115,20 @@ export interface ProviderServiceShape {
   readonly stopSession: (
     input: ProviderStopSessionInput,
   ) => Effect.Effect<void, ProviderServiceError>;
+
+  /** Archive the provider-native conversation when its adapter exposes a
+   * supported API. Missing bindings and unsupported providers return explicit
+   * results and are never emulated through browser automation or
+   * provider-owned files. */
+  readonly archiveConversation: (
+    threadId: ThreadId,
+  ) => Effect.Effect<ProviderConversationArchiveResult, ProviderServiceError>;
+
+  /** Describe local and provider cleanup effects without starting a runtime,
+   * calling an adapter, or mutating persisted state. */
+  readonly previewThreadCleanup: (
+    threadId: ThreadId,
+  ) => Effect.Effect<ThreadCleanupPreview, ProviderServiceError>;
 
   /**
    * List active provider sessions.

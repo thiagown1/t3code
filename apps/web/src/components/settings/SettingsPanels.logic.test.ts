@@ -1,6 +1,7 @@
 import {
   DEFAULT_SERVER_SETTINGS,
   DEFAULT_UNIFIED_SETTINGS,
+  IsoDateTime,
   ProviderDriverKind,
   ProviderInstanceId,
   type ProviderInstanceConfig,
@@ -9,6 +10,7 @@ import { getBackgroundActivityPresetSettings } from "@t3tools/shared/backgroundA
 import * as Duration from "effect/Duration";
 import { describe, expect, it } from "vite-plus/test";
 import {
+  archiveReceiptPresentation,
   backgroundActivitySharedPolicySettings,
   buildProviderInstanceUpdatePatch,
   formatDiagnosticsDescription,
@@ -19,6 +21,52 @@ import {
   projectGroupingModeFromToggle,
   resolveBackgroundActivityProfileOption,
 } from "./SettingsPanels.logic";
+
+describe("archive receipt presentation", () => {
+  const baseReceipt = {
+    local: { status: "archived" as const, transcript: "preserved" as const },
+    runtime: { status: "succeeded" as const },
+    terminals: { status: "succeeded" as const, history: "preserved" as const },
+    tone: "info" as const,
+    summary: "Archive completed.",
+    createdAt: IsoDateTime.make("2026-09-15T00:00:00.000Z"),
+  };
+
+  it("keeps pending and unlinked archive outcomes neutral", () => {
+    expect(archiveReceiptPresentation(null)).toEqual({
+      text: "Archive result pending",
+      tone: "neutral",
+    });
+    expect(
+      archiveReceiptPresentation({
+        ...baseReceipt,
+        provider: { status: "not-linked" },
+      }),
+    ).toEqual({ text: "Archive completed.", tone: "neutral" });
+  });
+
+  it("distinguishes archived, unsupported, and failed provider outcomes", () => {
+    expect(
+      archiveReceiptPresentation({
+        ...baseReceipt,
+        provider: { status: "archived", provider: ProviderDriverKind.make("codex") },
+      }).tone,
+    ).toBe("success");
+    expect(
+      archiveReceiptPresentation({
+        ...baseReceipt,
+        provider: { status: "unsupported", provider: ProviderDriverKind.make("claudeAgent") },
+      }).tone,
+    ).toBe("warning");
+    expect(
+      archiveReceiptPresentation({
+        ...baseReceipt,
+        provider: { status: "failed" },
+        tone: "error",
+      }).tone,
+    ).toBe("error");
+  });
+});
 
 describe("typography settings restore", () => {
   it("detects family and size changes by font row", () => {

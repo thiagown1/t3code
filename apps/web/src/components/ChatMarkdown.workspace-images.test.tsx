@@ -1,4 +1,4 @@
-import { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
@@ -168,6 +168,35 @@ describe("ChatMarkdown workspace images", () => {
       { _tag: "media-file", threadId: threadRef.threadId, path: "/tmp/embed-test/2.png" },
       { _tag: "media-file", threadId: threadRef.threadId, path: "/tmp/embed-test/5.png" },
     ]);
+    expect(html).not.toContain("Image unavailable");
+  });
+
+  it("loads a host-resolved pull request image without a thread", () => {
+    const resource = {
+      _tag: "pull-request-image" as const,
+      projectId: ProjectId.make("project-1"),
+      number: 2123,
+      host: "github.com",
+      repository: "acme/widgets",
+      revision: "d21a35866e0a7c5866b9896354eece15d82f0610",
+      path: "docs/before.png",
+    };
+    const resolveImageResource = vi.fn(() => resource);
+    const html = renderToStaticMarkup(
+      <ChatMarkdown
+        cwd="/workspace/project"
+        environmentId={threadRef.environmentId}
+        text="![Before](../blob/d21a35866e0a7c5866b9896354eece15d82f0610/docs/before.png?raw=true)"
+        resolveImageResource={resolveImageResource}
+      />,
+    );
+
+    expect(resolveImageResource).toHaveBeenCalledWith(
+      "../blob/d21a35866e0a7c5866b9896354eece15d82f0610/docs/before.png?raw=true",
+    );
+    expect(testState.resources).toEqual([resource]);
+    expect(html).toContain('src="https://signed.test/workspace-image.svg"');
+    expect(html).toContain('alt="Before"');
     expect(html).not.toContain("Image unavailable");
   });
 

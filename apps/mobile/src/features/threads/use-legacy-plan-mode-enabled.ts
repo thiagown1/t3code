@@ -5,9 +5,8 @@ import { mobilePreferencesAtom } from "../../state/preferences";
 import { resolveLegacyPlanModeEnabled } from "./legacy-plan-mode";
 
 /**
- * Mobile preferences are device-local, matching the desktop client setting.
- * Keep the legacy composer mode hidden until the preference has loaded and is
- * explicitly enabled.
+ * Keep compatibility with older device preferences while promoting T3's
+ * interaction mode to a standard composer control once preferences hydrate.
  */
 export function useLegacyPlanModeState(): { readonly enabled: boolean; readonly loaded: boolean } {
   const preferences = useAtomValue(mobilePreferencesAtom);

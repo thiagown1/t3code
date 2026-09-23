@@ -154,6 +154,11 @@
   "packageOverrides": [
     {
       "license": "MIT",
+      "name": "khroma",
+      "sourceUrl": "https://github.com/fabiospampinato/khroma"
+    },
+    {
+      "license": "MIT",
       "name": "@react-grab/cli",
       "sourceUrl": "https://github.com/aidenybai/react-grab/tree/main/packages/cli",
       "generatedNotice": {

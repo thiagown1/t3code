@@ -1,14 +1,18 @@
 import {
+  FirstMateWorkspaceState,
+  FirstMateTopicId,
   ProjectId,
   ThreadId,
   TurnId,
   ProviderInstanceId,
   OrchestrationProposedPlanId,
 } from "@t3tools/contracts";
+import { createEmptyFirstMateWorkspace } from "@t3tools/shared/firstMate";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as Statement from "effect/unstable/sql/Statement";
 
@@ -34,6 +38,7 @@ const projectionRepositoriesLayer = it.layer(
     SqlitePersistenceMemory,
   ),
 );
+const decodeFirstMateJson = Schema.decodeEffect(Schema.fromJsonString(FirstMateWorkspaceState));
 
 projectionRepositoriesLayer("Projection repositories", (it) => {
   it.effect("selects the latest-turn plan before checking implementation status", () =>
@@ -333,6 +338,57 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
     }),
   );
 
+  it.effect("round-trips FirstMate workspace state as project JSON", () =>
+    Effect.gen(function* () {
+      const projects = yield* ProjectionProjectRepository;
+      const sql = yield* SqlClient.SqlClient;
+      const projectId = ProjectId.make("project-firstmate-state");
+      const now = "2026-09-14T20:00:00.000Z";
+      const empty = createEmptyFirstMateWorkspace(projectId, now);
+      const firstMate = {
+        ...empty,
+        topics: [
+          {
+            id: FirstMateTopicId.make("topic-storage"),
+            projectId,
+            title: "Storage pressure",
+            summary: "Observe connected machine storage.",
+            stage: "testing" as const,
+            threadId: null,
+            responsibleAgentId: null,
+            latestRoundSummary: null,
+            createdAt: now,
+            updatedAt: now,
+            completedAt: null,
+          },
+        ],
+      };
+
+      yield* projects.upsert({
+        projectId,
+        title: "FirstMate state",
+        workspaceRoot: "/tmp/project-firstmate-state",
+        defaultModelSelection: null,
+        defaultThreadEnvMode: null,
+        autoPull: false,
+        scripts: [],
+        firstMate,
+        createdAt: now,
+        updatedAt: now,
+        deletedAt: null,
+      });
+
+      const raw = yield* sql<{ readonly firstMate: string | null }>`
+        SELECT firstmate_json AS "firstMate"
+        FROM projection_projects
+        WHERE project_id = ${projectId}
+      `;
+      assert.deepEqual(yield* decodeFirstMateJson(raw[0]?.firstMate ?? "null"), firstMate);
+      const persisted = yield* projects.getById({ projectId });
+      assert.deepEqual(Option.getOrThrow(persisted).firstMate, firstMate);
+    }),
+  );
+
   it.effect("stores JSON for thread model options", () =>
     Effect.gen(function* () {
       const threads = yield* ProjectionThreadRepository;
@@ -354,6 +410,7 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
         createdAt: "2026-03-24T00:00:00.000Z",
         updatedAt: "2026-03-24T00:00:00.000Z",
         archivedAt: null,
+        deliveryStatus: null,
         settledOverride: null,
         settledAt: null,
         unsettledAt: null,
@@ -418,6 +475,7 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
         createdAt: "2026-03-24T00:00:00.000Z",
         updatedAt: "2026-03-25T00:00:00.000Z",
         archivedAt: null,
+        deliveryStatus: "waiting-deploy",
         settledOverride: "settled",
         settledAt: "2026-03-25T00:00:00.000Z",
         unsettledAt: null,
@@ -443,6 +501,7 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
       assert.strictEqual(row.snoozedUntil, "2026-03-26T09:00:00.000Z");
       assert.strictEqual(row.snoozedAt, "2026-03-25T00:00:00.000Z");
       assert.strictEqual(row.pinnedAt, "2026-03-25T00:00:00.000Z");
+      assert.strictEqual(row.deliveryStatus, "waiting-deploy");
 
       // Un-settle to the keep-active pin and wake the snooze; confirm the
       // flips persist.
@@ -501,6 +560,7 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
         createdAt: "2026-03-24T00:00:00.000Z",
         updatedAt: "2026-03-24T00:00:00.000Z",
         archivedAt: null,
+        deliveryStatus: null,
         settledOverride: null,
         settledAt: null,
         unsettledAt: null,

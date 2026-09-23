@@ -6,7 +6,7 @@ import * as SchemaTransformation from "effect/SchemaTransformation";
 export const TrimmedString = Schema.String.pipe(
   Schema.decodeTo(
     Schema.String,
-    SchemaTransformation.transformOrFail({
+    SchemaTransformation.transformEffect({
       decode: (value) => Effect.succeed(value.trim()),
       encode: (value) => Effect.succeed(value.trim()),
     }),
@@ -119,6 +119,8 @@ export const MessageId = makeEntityId("MessageId");
 export type MessageId = typeof MessageId.Type;
 export const TurnId = makeEntityId("TurnId");
 export type TurnId = typeof TurnId.Type;
+export const ThreadQueuedMessageId = makeEntityId("ThreadQueuedMessageId");
+export type ThreadQueuedMessageId = typeof ThreadQueuedMessageId.Type;
 export const AuthSessionId = makeEntityId("AuthSessionId");
 export type AuthSessionId = typeof AuthSessionId.Type;
 export const RpcClientId = NonNegativeInt.pipe(Schema.brand("RpcClientId"));

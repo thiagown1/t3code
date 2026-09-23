@@ -1,6 +1,9 @@
 import {
   CommandId,
   EnvironmentId,
+  FirstMateDecisionId,
+  FirstMateTopicId,
+  MessageId,
   ORCHESTRATION_WS_METHODS,
   ProjectId,
   ThreadId,
@@ -23,9 +26,17 @@ import * as RpcSession from "../rpc/session.ts";
 import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
 import {
   archiveThread,
+  cancelFirstMateDecision,
+  createFirstMateTopic,
   createProject,
+  linkFirstMateSupervisor,
+  openFirstMateDecision,
+  recordFirstMateRouting,
   revertThreadCheckpoint,
   reorderActiveThread,
+  resolveFirstMateDecision,
+  selectFirstMateTopic,
+  setFirstMateRoutingEvaluationMode,
   settleThread,
   stopThreadSession,
   unsettleThread,
@@ -97,6 +108,198 @@ describe("environment commands", () => {
           title: "Project",
           workspaceRoot: "/workspace/project",
           createdAt: "2026-06-06T00:00:00.000Z",
+        },
+      ]);
+    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+  );
+
+  it.effect("dispatches a FirstMate decision with its selected option", () =>
+    Effect.gen(function* () {
+      const dispatched: ClientOrchestrationCommand[] = [];
+      const supervisor = yield* makeSupervisor(dispatched);
+
+      yield* resolveFirstMateDecision({
+        commandId: CommandId.make("resolve-firstmate-decision"),
+        projectId: ProjectId.make("project-1"),
+        decisionId: FirstMateDecisionId.make("decision-1"),
+        selectedOptionId: "feature-flag",
+        createdAt: "2026-09-14T21:00:00.000Z",
+      }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+
+      expect(dispatched).toEqual([
+        {
+          type: "firstmate.decision.resolve",
+          commandId: "resolve-firstmate-decision",
+          projectId: "project-1",
+          decisionId: "decision-1",
+          selectedOptionId: "feature-flag",
+          createdAt: "2026-09-14T21:00:00.000Z",
+        },
+      ]);
+    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+  );
+
+  it.effect("dispatches FirstMate topic and decision creation with generated metadata", () =>
+    Effect.gen(function* () {
+      const dispatched: ClientOrchestrationCommand[] = [];
+      const supervisor = yield* makeSupervisor(dispatched);
+
+      yield* createFirstMateTopic({
+        projectId: ProjectId.make("project-1"),
+        topicId: FirstMateTopicId.make("topic-1"),
+        title: "Decision inbox",
+        summary: "Show pending decisions globally.",
+        stage: "implementation",
+        threadId: null,
+        responsibleAgentId: "firstmate",
+        createdAt: "2026-09-14T20:59:00.000Z",
+      }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+      yield* openFirstMateDecision({
+        projectId: ProjectId.make("project-1"),
+        decisionId: FirstMateDecisionId.make("decision-1"),
+        topicId: FirstMateTopicId.make("topic-1"),
+        source: { kind: "firstmate", sourceId: "release" },
+        question: "Deploy behind a feature flag?",
+        options: [{ id: "flag", label: "Use flag", description: "Keep activation separate." }],
+        recommendedOptionId: "flag",
+        blocking: true,
+        createdAt: "2026-09-14T21:00:00.000Z",
+      }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+
+      expect(dispatched.map((command) => command.type)).toEqual([
+        "firstmate.topic.create",
+        "firstmate.decision.open",
+      ]);
+      expect(dispatched.every((command) => command.commandId.length > 0)).toBe(true);
+    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+  );
+
+  it.effect("dispatches persistent FirstMate topic selection", () =>
+    Effect.gen(function* () {
+      const dispatched: ClientOrchestrationCommand[] = [];
+      const supervisor = yield* makeSupervisor(dispatched);
+
+      yield* selectFirstMateTopic({
+        commandId: CommandId.make("select-firstmate-topic"),
+        projectId: ProjectId.make("project-1"),
+        topicId: FirstMateTopicId.make("topic-1"),
+        createdAt: "2026-09-14T21:00:30.000Z",
+      }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+
+      expect(dispatched).toEqual([
+        {
+          type: "firstmate.topic.select",
+          commandId: "select-firstmate-topic",
+          projectId: "project-1",
+          topicId: "topic-1",
+          createdAt: "2026-09-14T21:00:30.000Z",
+        },
+      ]);
+    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+  );
+
+  it.effect("dispatches an explicit FirstMate supervisor link", () =>
+    Effect.gen(function* () {
+      const dispatched: ClientOrchestrationCommand[] = [];
+      const supervisor = yield* makeSupervisor(dispatched);
+
+      yield* linkFirstMateSupervisor({
+        commandId: CommandId.make("link-firstmate-supervisor"),
+        projectId: ProjectId.make("project-1"),
+        threadId: ThreadId.make("thread-supervisor"),
+        createdAt: "2026-09-14T21:00:45.000Z",
+      }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+
+      expect(dispatched).toEqual([
+        {
+          type: "firstmate.supervisor.link",
+          commandId: "link-firstmate-supervisor",
+          projectId: "project-1",
+          threadId: "thread-supervisor",
+          createdAt: "2026-09-14T21:00:45.000Z",
+        },
+      ]);
+    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+  );
+
+  it.effect("dispatches a FirstMate routing receipt without the message body", () =>
+    Effect.gen(function* () {
+      const dispatched: ClientOrchestrationCommand[] = [];
+      const supervisor = yield* makeSupervisor(dispatched);
+
+      yield* recordFirstMateRouting({
+        commandId: CommandId.make("record-firstmate-routing"),
+        projectId: ProjectId.make("project-1"),
+        messageId: MessageId.make("message-1"),
+        sourceThreadId: ThreadId.make("thread-supervisor"),
+        topicId: FirstMateTopicId.make("topic-1"),
+        destinationThreadId: ThreadId.make("thread-worker"),
+        reason: "selected-topic",
+        evaluation: null,
+        createdAt: "2026-09-14T21:00:50.000Z",
+      }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+
+      expect(dispatched).toEqual([
+        {
+          type: "firstmate.routing.record",
+          commandId: "record-firstmate-routing",
+          projectId: "project-1",
+          messageId: "message-1",
+          sourceThreadId: "thread-supervisor",
+          topicId: "topic-1",
+          destinationThreadId: "thread-worker",
+          reason: "selected-topic",
+          evaluation: null,
+          createdAt: "2026-09-14T21:00:50.000Z",
+        },
+      ]);
+      expect(dispatched[0]).not.toHaveProperty("message");
+    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+  );
+
+  it.effect("dispatches the opt-in FirstMate shadow evaluation mode", () =>
+    Effect.gen(function* () {
+      const dispatched: ClientOrchestrationCommand[] = [];
+      const supervisor = yield* makeSupervisor(dispatched);
+
+      yield* setFirstMateRoutingEvaluationMode({
+        commandId: CommandId.make("set-firstmate-routing-mode"),
+        projectId: ProjectId.make("project-1"),
+        mode: "shadow",
+        createdAt: "2026-09-14T21:00:55.000Z",
+      }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+
+      expect(dispatched).toEqual([
+        {
+          type: "firstmate.routing-evaluation-mode.set",
+          commandId: "set-firstmate-routing-mode",
+          projectId: "project-1",
+          mode: "shadow",
+          createdAt: "2026-09-14T21:00:55.000Z",
+        },
+      ]);
+    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+  );
+
+  it.effect("dispatches an explicit FirstMate decision cancellation", () =>
+    Effect.gen(function* () {
+      const dispatched: ClientOrchestrationCommand[] = [];
+      const supervisor = yield* makeSupervisor(dispatched);
+
+      yield* cancelFirstMateDecision({
+        commandId: CommandId.make("cancel-firstmate-decision"),
+        projectId: ProjectId.make("project-1"),
+        decisionId: FirstMateDecisionId.make("decision-2"),
+        createdAt: "2026-09-14T21:01:00.000Z",
+      }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+
+      expect(dispatched).toEqual([
+        {
+          type: "firstmate.decision.cancel",
+          commandId: "cancel-firstmate-decision",
+          projectId: "project-1",
+          decisionId: "decision-2",
+          createdAt: "2026-09-14T21:01:00.000Z",
         },
       ]);
     }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),

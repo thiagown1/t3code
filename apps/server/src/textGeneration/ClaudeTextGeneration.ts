@@ -24,13 +24,16 @@ import {
   buildBranchNamePrompt,
   buildCommitMessagePrompt,
   buildPrContentPrompt,
+  buildRoundSummaryPrompt,
   buildThreadTitlePrompt,
 } from "./TextGenerationPrompts.ts";
 import {
   normalizeCliError,
   sanitizeCommitSubject,
   sanitizePrTitle,
+  sanitizeRoundSummary,
   sanitizeThreadTitle,
+  summarizeCliFailure,
   toJsonSchemaObject,
 } from "./TextGenerationUtils.ts";
 import {
@@ -102,7 +105,8 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
       | "generateCommitMessage"
       | "generatePrContent"
       | "generateBranchName"
-      | "generateThreadTitle",
+      | "generateThreadTitle"
+      | "generateRoundSummary",
     value: unknown,
     detail: string,
   ): Effect.Effect<string, TextGenerationError> =>
@@ -132,7 +136,8 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
       | "generateCommitMessage"
       | "generatePrContent"
       | "generateBranchName"
-      | "generateThreadTitle";
+      | "generateThreadTitle"
+      | "generateRoundSummary";
     cwd: string;
     prompt: string;
     outputSchemaJson: S;
@@ -250,13 +255,11 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
       );
 
       if (exitCode !== 0) {
-        const stderrDetail = stderr.trim();
-        const stdoutDetail = stdout.trim();
-        const detail = stderrDetail.length > 0 ? stderrDetail : stdoutDetail;
+        const detail = summarizeCliFailure({ stdout, stderr });
         return yield* new TextGenerationError({
           operation,
           detail:
-            detail.length > 0
+            detail !== undefined
               ? `Claude CLI command failed: ${detail}`
               : `Claude CLI command failed with code ${exitCode}.`,
         });
@@ -392,6 +395,7 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
       const { prompt, outputSchema } = buildThreadTitlePrompt({
         message: input.message,
         previousTitle: input.previousTitle,
+        linkedContext: input.linkedContext,
         attachments: input.attachments,
       });
 
@@ -405,7 +409,28 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
 
       return {
         title: sanitizeThreadTitle(generated.title),
+        ...(generated.needsRefinement ? { needsRefinement: true } : {}),
       };
+    });
+
+  const generateRoundSummary: TextGeneration.TextGeneration["Service"]["generateRoundSummary"] =
+    Effect.fn("ClaudeTextGeneration.generateRoundSummary")(function* (input) {
+      const { prompt, outputSchema } = buildRoundSummaryPrompt({
+        topicTitle: input.topicTitle,
+        topicSummary: input.topicSummary,
+        transcript: input.transcript,
+        policy: input.policy,
+      });
+
+      const generated = yield* runClaudeJson({
+        operation: "generateRoundSummary",
+        cwd: input.cwd,
+        prompt,
+        outputSchemaJson: outputSchema,
+        modelSelection: input.modelSelection,
+      });
+
+      return { summary: sanitizeRoundSummary(generated.summary) };
     });
 
   return {
@@ -413,5 +438,6 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
+    generateRoundSummary,
   } satisfies TextGeneration.TextGeneration["Service"];
 });

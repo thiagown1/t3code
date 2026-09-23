@@ -106,6 +106,7 @@ describe("ElectronApp", () => {
 
       assert.deepEqual(metadata, {
         appVersion: "1.2.3",
+        appName: "T3 Code",
         appPath: "/app",
         isPackaged: true,
         resourcesPath: process.resourcesPath,

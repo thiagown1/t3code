@@ -15,6 +15,7 @@ import {
   parseThreadSegmentFromAttachmentId,
   resolveAttachmentPathById,
   sweepStalePendingAttachments,
+  toSafeThreadAttachmentSegment,
 } from "./attachmentStore.ts";
 
 describe("attachmentStore", () => {
@@ -48,6 +49,18 @@ describe("attachmentStore", () => {
       return;
     }
     expect(parseThreadSegmentFromAttachmentId(attachmentId)).toBe("thread-foo");
+  });
+
+  it("isolates long imported bundle thread ids by their full identity", () => {
+    const sharedPrefix = `bundle:${"environment-prefix-".repeat(8)}`;
+    const first = toSafeThreadAttachmentSegment(`${sharedPrefix}:thread-one`);
+    const second = toSafeThreadAttachmentSegment(`${sharedPrefix}:thread-two`);
+
+    expect(first).toMatch(/^bundle-[a-f0-9]{40}$/);
+    expect(second).toMatch(/^bundle-[a-f0-9]{40}$/);
+    expect(first).not.toBe(second);
+    expect(toSafeThreadAttachmentSegment(`${sharedPrefix}:thread-one`)).toBe(first);
+    expect(toSafeThreadAttachmentSegment("ordinary-thread")).toBe("ordinary-thread");
   });
 
   it("reserves the pending attachment segment", () => {

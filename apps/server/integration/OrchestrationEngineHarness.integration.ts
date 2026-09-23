@@ -39,6 +39,7 @@ import { ProviderAdapterRegistry } from "../src/provider/Services/ProviderAdapte
 import { makeProviderRegistryLayer } from "../src/provider/testUtils/providerRegistryMock.ts";
 import { ProviderSessionDirectoryLive } from "../src/provider/Layers/ProviderSessionDirectory.ts";
 import { ServerSettingsService } from "../src/serverSettings.ts";
+import * as StorageCleanup from "../src/storageCleanup.ts";
 import { makeProviderServiceLive } from "../src/provider/Layers/ProviderService.ts";
 import { makeCodexAdapter } from "../src/provider/Layers/CodexAdapter.ts";
 import {
@@ -66,9 +67,14 @@ import {
   type OrchestrationEngineShape,
 } from "../src/orchestration/Services/OrchestrationEngine.ts";
 import { ThreadDeletionReactor } from "../src/orchestration/Services/ThreadDeletionReactor.ts";
+import { ThreadArchiveReactor } from "../src/orchestration/Services/ThreadArchiveReactor.ts";
+import { ThreadQueuedMessageReactor } from "../src/orchestration/Services/ThreadQueuedMessageReactor.ts";
+import * as FirstMateDecisionDeliveryReactor from "../src/orchestration/FirstMateDecisionDeliveryReactor.ts";
+import * as FirstMateRequestDecisionReactor from "../src/orchestration/FirstMateRequestDecisionReactor.ts";
 import * as ThreadSettlementReactor from "../src/orchestration/ThreadSettlementReactor.ts";
 import * as PullRequestSyncReactor from "../src/orchestration/PullRequestSyncReactor.ts";
 import * as ThreadPullRequestReactor from "../src/orchestration/ThreadPullRequestReactor.ts";
+import * as FirstMateRoundSummaryReactor from "../src/orchestration/FirstMateRoundSummaryReactor.ts";
 import { OrchestrationReactor } from "../src/orchestration/Services/OrchestrationReactor.ts";
 import { ProjectionSnapshotQuery } from "../src/orchestration/Services/ProjectionSnapshotQuery.ts";
 import {
@@ -352,7 +358,7 @@ export const makeOrchestrationIntegrationHarness = (
       Layer.provideMerge(runtimeServicesLayer),
       Layer.provideMerge(
         Layer.mock(PullRequestService.PullRequestService)({
-          refreshAfterTurn: Effect.void,
+          refreshAfterTurn: () => Effect.void,
         }),
       ),
       Layer.provideMerge(
@@ -384,6 +390,12 @@ export const makeOrchestrationIntegrationHarness = (
       Layer.provideMerge(VcsProcess.layer),
     );
     const orchestrationReactorLayer = OrchestrationReactorLive.pipe(
+      Layer.provideMerge(
+        Layer.succeed(StorageCleanup.StorageCleanup, {
+          start: () => Effect.void,
+          drain: Effect.void,
+        }),
+      ),
       Layer.provideMerge(runtimeIngestionLayer),
       Layer.provideMerge(providerCommandReactorLayer),
       Layer.provideMerge(checkpointReactorLayer),
@@ -394,13 +406,42 @@ export const makeOrchestrationIntegrationHarness = (
         }),
       ),
       Layer.provideMerge(
+        Layer.succeed(ThreadArchiveReactor, {
+          start: () => Effect.void,
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.succeed(ThreadQueuedMessageReactor, {
+          start: () => Effect.void,
+          drain: Effect.void,
+        }),
+      ),
+      Layer.provideMerge(
         Layer.succeed(ThreadPullRequestReactor.ThreadPullRequestReactor, {
           start: () => Effect.void,
           drain: Effect.void,
         }),
       ),
       Layer.provideMerge(
+        Layer.succeed(FirstMateRoundSummaryReactor.FirstMateRoundSummaryReactor, {
+          start: () => Effect.void,
+          drain: Effect.void,
+        }),
+      ),
+      Layer.provideMerge(
         Layer.succeed(ThreadSettlementReactor.ThreadSettlementReactor, {
+          start: () => Effect.void,
+          drain: Effect.void,
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.succeed(FirstMateDecisionDeliveryReactor.FirstMateDecisionDeliveryReactor, {
+          start: () => Effect.void,
+          drain: Effect.void,
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.succeed(FirstMateRequestDecisionReactor.FirstMateRequestDecisionReactor, {
           start: () => Effect.void,
           drain: Effect.void,
         }),

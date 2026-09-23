@@ -10,6 +10,7 @@ import type {
   PullRequestChecksState,
   PullRequestCheck,
   PullRequestComment,
+  PullRequestFileViewed,
   PullRequestCommit,
   PullRequestInvolvement,
   PullRequestLabel,
@@ -73,6 +74,8 @@ export interface ProviderChangeRequest {
   readonly url: string;
   readonly author: PullRequestActor | null;
   readonly headBranch: string;
+  /** Exact head commit where a provider returns it with the row/detail. */
+  readonly headSha?: string | null;
   readonly headRepositoryNameWithOwner?: string | null;
   readonly baseBranch: string;
   readonly state: PullRequestState;
@@ -99,6 +102,8 @@ export interface ProviderChangeRequestSummary {
   readonly title: string;
   readonly url: string;
   readonly headBranch: string;
+  /** Exact head observed by the same read as `checks`, where the provider exposes it. */
+  readonly headSha?: string | null;
   readonly baseBranch: string;
   readonly state: PullRequestState;
   /** Present when the host says an open pull request is still a draft. */
@@ -113,6 +118,7 @@ export interface ProviderChangeRequestSummary {
   readonly changedFiles?: number | undefined;
   readonly reviewDecision?: PullRequestReviewDecision | null | undefined;
   readonly checksState?: PullRequestChecksState | null | undefined;
+  readonly checks?: ReadonlyArray<PullRequestCheck> | undefined;
   readonly mergeability?: PullRequestMergeability | undefined;
 }
 
@@ -256,6 +262,32 @@ export interface ProviderDiffSlice {
 export interface ProviderDiffFileContents {
   readonly oldContents: string;
   readonly newContents: string;
+}
+
+export interface ProviderFilesViewed {
+  readonly files: ReadonlyArray<PullRequestFileViewed>;
+  /** The host has more files than were read, so the ones missing here are not "unviewed". */
+  readonly truncated: boolean;
+}
+
+/**
+ * What version each of the asked-for files is at, on the change request's head. Opaque strings,
+ * compared only against one another, where the empty string is the answer for a file the change
+ * request deletes rather than a gap. A path is absent only where the read could not say, so a
+ * provider converts its host's own absences on the way here.
+ *
+ * The whole path a version travels, and the three senses of null along it, are in
+ * `docs/internals/pull-request-file-revisions.md`.
+ */
+export interface ProviderFileRevisions {
+  readonly revisions: ReadonlyMap<string, string>;
+  /**
+   * Whether these are every file the change request carries rather than only the paths asked
+   * about. A host with no per-file version reads the whole change to answer for one file, and
+   * saying so is what keeps the next tick, naming a path nothing asked about before, from making
+   * it read the whole change again. False for a read cut short, which cannot speak past the cut.
+   */
+  readonly complete?: boolean;
 }
 
 export interface ProviderRepositoryRef {
@@ -447,6 +479,40 @@ export interface PullRequestProviderApi {
       readonly newPath: string;
     },
   ) => Effect.Effect<ProviderDiffFileContents, PullRequestProviderError>;
+
+  /**
+   * Which files the reader has already cleared. Only called when `capabilities.viewedFiles` is
+   * `"host"`, and read apart from the patch: this moves with every press rather than every push.
+   */
+  readonly getFilesViewed?: (
+    input: ProviderRepositoryRef & { readonly number: number },
+  ) => Effect.Effect<ProviderFilesViewed, PullRequestProviderError>;
+
+  /**
+   * Clears files, or puts them back. Only called when `capabilities.viewedFiles` is `"host"`.
+   * A host with no bulk form is still owed one round trip for the batch rather than one per file,
+   * since the point of gathering presses is that the host is asked once.
+   */
+  readonly setFilesViewed?: (
+    input: ProviderRepositoryRef & {
+      readonly number: number;
+      readonly files: ReadonlyArray<{ readonly path: string; readonly viewed: boolean }>;
+    },
+  ) => Effect.Effect<void, PullRequestProviderError>;
+
+  /**
+   * What version the head has of each of these files. Required of a host whose
+   * `capabilities.viewedFiles` is `"environment"`, and unused by one that keeps the marks itself:
+   * the marks live here, but only the host can say whether what a reader cleared last week is
+   * still what is in front of them. Asked for the marked paths alone, so the cost follows how
+   * much of the change request has been read rather than how large it is.
+   */
+  readonly getFileRevisions?: (
+    input: ProviderRepositoryRef & {
+      readonly number: number;
+      readonly paths: ReadonlyArray<string>;
+    },
+  ) => Effect.Effect<ProviderFileRevisions, PullRequestProviderError>;
 
   readonly runAction: (
     input: ProviderRepositoryRef & {

@@ -29,6 +29,31 @@ also send files to T3 Code through another app's system share sheet.
 
 See [images and videos](#images-and-videos-in-messages) for previewing and saving media.
 
+## Send while the agent is working
+
+On web and desktop, a message sent during a running turn waits at the end of the conversation as a
+dashed bubble. It goes out on its own when the agent finishes its next tool
+call, or when the turn ends. Use the arrow under the bubble to send it right
+away, or the X to move it back into the composer. Stop returns every queued
+message to the composer.
+
+On web and desktop, press `Alt+Enter` while the agent is working to keep the
+message queued until the current turn finishes. Tool calls during that turn do
+not send it early.
+
+Queued messages survive reloads and app restarts. Images and completed uploads
+remain attached. A file whose upload had not finished is restored as a
+needs-reattach item instead of being silently dropped.
+
+In **Settings → General → Follow-up behavior**, choose **Queue** to keep this
+behavior or **Steer** to send new messages immediately. This setting applies to
+the current client. Messages already queued keep their place.
+
+Use `Cmd+Shift+Enter` on macOS or `Ctrl+Shift+Enter` on Windows and Linux to send
+the oldest queued message now. Change `thread.steerQueuedMessage` in
+**Settings → Keybindings** to use another shortcut. It leaves the current draft
+in the composer and waits if the agent needs an approval or an answer.
+
 ## Queue messages offline on mobile
 
 Mobile keeps local copies of draft attachments, so you can preview them and queue
@@ -49,6 +74,14 @@ project's configured model takes precedence; resetting that project setting
 returns to the remembered selection.
 
 Leaving reasoning level or service tier unset uses the provider's own configuration.
+
+## Change providers in an existing thread
+
+On web and desktop, choose a model from another provider in the composer and confirm
+**Transfer conversation**. T3 Code sends the saved conversation context to the new provider
+before changing the thread's provider. Wait for the transfer to finish before sending another
+message. If the new provider cannot accept the context, the original provider remains available.
+The confirmation reports when attachments or private provider data cannot be transferred.
 
 ## Quote an assistant response
 
@@ -87,7 +120,10 @@ into a normal draft.
 On web and desktop, choose **Edit from here** beneath a sent message to rewind
 the conversation to before that message. Choose **Revert and keep changes** to
 leave workspace files as they are, or **Revert files too** to restore them as well.
-The selected prompt and its attachments return to the composer for editing and
+File restore is only offered for threads running in a worktree, and it is
+refused when another thread or agent session also uses that directory, since
+restoring would erase their changes. A thread that works in the project directory
+rewinds the conversation only. The selected prompt and its attachments return to the composer for editing and
 resending. Any unsent draft stays above the restored prompt.
 
 This removes the selected message and later conversation from the active thread
@@ -114,7 +150,8 @@ recording started, ready for you to review and edit before sending.
 The first use may download Apple's speech model and needs a network connection.
 Later transcription works offline for that language. Recordings can be up to five
 minutes long. Canceling, leaving the screen, or an audio interruption discards the
-recording and preserves your existing draft.
+recording and preserves your existing draft. While recording, the screen stays
+awake; it can sleep normally once recording stops.
 
 Transcription runs on your device. T3 Code deletes the temporary audio after
 transcription or cancellation; only the message text is sent when you submit.
@@ -131,8 +168,43 @@ Show skills in slash menu**. Only skills enabled for the provider are listed.
 Provider commands must start the message to run. T3 Code commands such as
 `/model` and `/plan`, and skill mentions, work on any line.
 
+Use `/parallel <objective>` in an existing thread to
+start linked work without leaving or interrupting the current conversation. The
+new thread receives a bounded snapshot of completed messages and the active plan,
+runs with independent state, and keeps a **Back to source** link. If the original
+conversation advances afterward, the linked thread marks its snapshot as stale.
+The legacy `/paralelo` spelling remains accepted as an alias.
+
+## Choose how the agent works
+
+The interaction mode stays visible in the composer for providers that support
+it. **Execute** allows the agent to perform the requested work. **Plan** keeps
+the conversation read-only while you explore decisions and produces a durable
+plan artifact in the thread. The selected mode is restored with the thread.
+
+When a planning turn finishes with an actionable plan, choose **Implement
+plan** to start a linked execution thread. The planning conversation and its
+artifact remain available in the original thread.
+
 Send `/compact` in an existing conversation to reduce context usage when the
 provider supports it. Web and desktop also offer compaction from the context meter.
+
+## Monitor context usage
+
+After a provider reports context telemetry, T3 Code keeps a compact context row
+above the composer on web, desktop, and mobile. The row shows the active context
+percentage and rounded token counts so it stays readable while you work.
+
+Open the row for the provider's exact active and maximum token counts, total
+tokens processed, model, source, update time, and the last turn's input, cache,
+output, and reasoning counts. A missing value is shown as **Not reported**; T3
+Code does not estimate provider measurements. Web and desktop also offer
+**Compact context** there when the provider supports manual compaction.
+
+The same detail view identifies automatic, manual, and provider-native
+compaction, its reported threshold, the latest before/after counts, and the
+compaction history loaded for the conversation. Mobile includes the same
+information in its context summary.
 
 ## Context in your message
 
