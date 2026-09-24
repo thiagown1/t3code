@@ -79,6 +79,24 @@ The supervisor chat renders the same pending decisions as cards above its
 composer, narrowed to that project. Both surfaces build on the one inbox model
 so aggregation and blocking-first ordering cannot drift apart.
 
+The supervisor chat's Decisions panel is a queue rather than a list: it adds
+work that needs the user without a card (a failed or interrupted delegated run,
+a delegated PR with failing, action-required or conflicting checks, a pending
+provider request with no card yet) and walks it one item at a time. Priority
+comes from `firstMateQueuePriority` in `FirstMateDecisionQueue.logic.ts`: a
+paused agent first, then turn reviews by the judge's outcome and confidence
+(persisted on the card as `source.verdict`), supervisor questions, failed runs,
+PR checks, and last the reviews where the judge leaned towards acting alone;
+equal priorities put the newer item first. The item on screen is pinned: new or
+more urgent items only reorder the list behind it. A reply goes to the thread as
+a queued message (`after-current-turn`), so it never interrupts a running turn.
+
+A turn-review card asks about a turn that has ended, so starting the next turn
+cancels it in the decider, whether the user replied in the thread or from the
+queue. While a thread runs, the topic panel also ignores its PR-derived status
+(each PR still shows its own), so a working thread never reads as "waiting for
+you" or "blocked".
+
 Resolving a decision records the selected persisted option, rather than only a
 generic resolved flag. Existing stored decisions and events decode with a null
 selection for backward compatibility. After a successful resolve or cancel

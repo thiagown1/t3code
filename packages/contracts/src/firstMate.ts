@@ -67,6 +67,15 @@ export const FirstMateDecisionOption = Schema.Struct({
 });
 export type FirstMateDecisionOption = typeof FirstMateDecisionOption.Type;
 
+export const FirstMateTurnReviewVerdict = Schema.Struct({
+  outcome: Schema.Literals(["done", "continue", "needs_user", "blocked"]),
+  /** 0-1 confidence in `outcome`. */
+  outcomeConfidence: Schema.Finite,
+  /** 0-1 likelihood that the next step stays inside the original request. */
+  inScope: Schema.Finite,
+});
+export type FirstMateTurnReviewVerdict = typeof FirstMateTurnReviewVerdict.Type;
+
 export const FirstMateDecisionSource = Schema.Union([
   Schema.Struct({
     kind: Schema.Literals(["user-input", "approval"]),
@@ -92,6 +101,12 @@ export const FirstMateDecisionSource = Schema.Union([
     kind: Schema.Literal("turn-review"),
     threadId: ThreadId,
     turnId: TurnId,
+    /**
+     * What the judge concluded, kept so the decision queue can rank cards by
+     * how sure the judge was that the user is needed. Absent on cards opened
+     * before it was recorded.
+     */
+    verdict: Schema.optional(FirstMateTurnReviewVerdict),
   }),
 ]);
 export type FirstMateDecisionSource = typeof FirstMateDecisionSource.Type;
