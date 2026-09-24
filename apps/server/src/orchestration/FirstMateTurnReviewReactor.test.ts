@@ -320,7 +320,12 @@ describe("FirstMateTurnReviewReactor", () => {
         {
           type: "firstmate.decision.open",
           projectId: PROJECT_ID,
-          source: { kind: "turn-review", threadId: WORKER_THREAD_ID, turnId: TURN_ID },
+          source: {
+            kind: "turn-review",
+            threadId: WORKER_THREAD_ID,
+            turnId: TURN_ID,
+            verdict: { outcome: "needs_user", outcomeConfidence: 0.9, inScope: 0.2 },
+          },
           question: "Added tests; all pass. Want me to deploy it?",
           options: [{ id: "continue" }, { id: "mark-done" }, { id: "answer-myself" }],
           recommendedOptionId: "answer-myself",

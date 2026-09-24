@@ -24,6 +24,7 @@ export interface FirstMateDecisionInboxItem {
   readonly originTitle: string;
   readonly responsibleAgentId: string | null;
   readonly threadId: ThreadId | null;
+  readonly source: FirstMateDecision["source"];
   readonly question: string;
   readonly options: FirstMateDecision["options"];
   readonly recommendedOptionId: string | null;
@@ -104,6 +105,7 @@ export function buildFirstMateDecisionInboxModel(input: {
           responsibleAgentId:
             topic !== null ? topic.responsibleAgentId : (thread?.modelSelection.instanceId ?? null),
           threadId: thread?.id ?? null,
+          source: decision.source,
           question: decision.question,
           options: decision.options,
           recommendedOptionId: decision.recommendedOptionId,

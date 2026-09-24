@@ -527,6 +527,7 @@ import {
 } from "./firstMate/FirstMateRouteConfirmation";
 import { FirstMateDecisionFeed } from "./firstMate/FirstMateDecisionFeed";
 import { FirstMateDecisionsPanel } from "./firstMate/FirstMateDecisionsPanel";
+import type { ReplyToFirstMateThreadRequest } from "./firstMate/FirstMateDecisionQueue";
 import { RunInTerminalContext } from "./chat/runInTerminal";
 import { buildFirstMateChatDecisionFeed } from "./firstMate/FirstMateDecisionFeed.logic";
 import type { ResolveFirstMateDecisionRequest } from "./firstMate/FirstMateDecisionInbox";
@@ -2450,6 +2451,36 @@ export default function ChatView(props: ChatViewProps) {
       });
     },
     [cancelFirstMateDecision],
+  );
+  // A reply from the decision queue waits behind a running turn instead of
+  // interrupting it, and starts right away on an idle thread.
+  const replyToFirstMateThread = useCallback(
+    async (request: ReplyToFirstMateThreadRequest) => {
+      const result = await enqueueThreadMessage({
+        environmentId: request.environmentId,
+        input: {
+          threadId: request.threadId,
+          queuedMessageId: ThreadQueuedMessageId.make(randomUUID()),
+          message: {
+            messageId: newMessageId(),
+            role: "user",
+            text: request.text,
+            attachments: [],
+          },
+          dispatchTiming: "after-current-turn",
+          queuedAfterActivityId: null,
+          createdAt: new Date().toISOString(),
+        },
+      });
+      if (result._tag === "Success") return true;
+      toastManager.add({
+        type: "error",
+        title: "Could not send the reply",
+        description: "The thread did not accept the message. Try again from the thread.",
+      });
+      return false;
+    },
+    [enqueueThreadMessage],
   );
   const [confirmingFirstMateTopicState, setConfirmingFirstMateTopicState] = useState<{
     readonly threadKey: string;
@@ -10270,6 +10301,7 @@ export default function ChatView(props: ChatViewProps) {
         threads={allThreadShells}
         onResolveDecision={resolveFirstMateDecisionFromFeed}
         onCancelDecision={cancelFirstMateDecisionFromFeed}
+        onReply={replyToFirstMateThread}
         onOpenThread={(threadRef) =>
           void navigate({
             to: "/$environmentId/$threadId",

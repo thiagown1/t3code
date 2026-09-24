@@ -266,7 +266,16 @@ export const make = Effect.gen(function* () {
         createdAt,
         decisionId,
         topicId: topic?.id ?? null,
-        source: { kind: "turn-review", threadId: thread.id, turnId: input.turnId },
+        source: {
+          kind: "turn-review",
+          threadId: thread.id,
+          turnId: input.turnId,
+          verdict: {
+            outcome: verdict.outcome,
+            outcomeConfidence: verdict.outcomeConfidence,
+            inScope: verdict.inScope,
+          },
+        },
         question:
           lastAssistantText.length > 0
             ? tail(lastAssistantText, MAX_QUESTION_CHARS)
