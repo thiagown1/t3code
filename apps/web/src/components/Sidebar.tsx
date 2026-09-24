@@ -253,6 +253,7 @@ import {
   type UnlinkFirstMateSupervisorRequest,
   type OpenFirstMateRequest,
 } from "./firstMate/FirstMateTopicsPanel";
+import { firstMateListedThreadKeys } from "./firstMate/FirstMateTopicsPanel.logic";
 import { finalizeFirstMateShellCommand } from "./firstMate/firstMateShellCommand";
 import {
   liveFirstMateThreadId,
@@ -2591,8 +2592,13 @@ export default function Sidebar() {
         override holds until all of them appear in canonical state. */
     readonly assignedKeys: ReadonlyMap<string, string>;
   } | null>(null);
+  const firstMateListedKeys = useMemo(
+    () => firstMateListedThreadKeys(projects, scopedProjectKeys),
+    [projects, scopedProjectKeys],
+  );
   const {
     pinnedThreads,
+    firstMateListedThreads,
     draggableThreadKeys,
     activeReorderableThreadKeys,
     activeThreads,
@@ -2616,6 +2622,7 @@ export default function Sidebar() {
     const active: EnvironmentThreadShell[] = [];
     const snoozed: EnvironmentThreadShell[] = [];
     const settled: EnvironmentThreadShell[] = [];
+    const listedByFirstMate: EnvironmentThreadShell[] = [];
     const draggable = new Set<string>();
     const activeReorderable = new Set<string>();
     for (const thread of visible) {
@@ -2657,6 +2664,11 @@ export default function Sidebar() {
         settled.push(thread);
       } else if (thread.pinnedAt != null) {
         pinned.push(thread);
+      } else if (firstMateListedKeys.has(threadKey)) {
+        // The FirstMate panel above already lists this thread under its topic
+        // (or as the supervisor chat); a second active card would only repeat
+        // it. Pins and the shelves are explicit user placement and keep it.
+        listedByFirstMate.push(thread);
       } else {
         active.push(thread);
       }
@@ -2677,6 +2689,7 @@ export default function Sidebar() {
               preferredIds: optimisticDrop.order,
               getId: (thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
             }),
+      firstMateListedThreads: listedByFirstMate,
       draggableThreadKeys: draggable,
       activeReorderableThreadKeys: activeReorderable,
       activeThreads:
@@ -2696,15 +2709,29 @@ export default function Sidebar() {
       settledThreads: sortSettledThreadsForSidebar(settled),
       snoozeNow: preciseNow,
     };
-  }, [nowMinute, optimisticDrop, scopedProjectKeys, serverConfigs, snoozeWakeTick, threads]);
+  }, [
+    firstMateListedKeys,
+    nowMinute,
+    optimisticDrop,
+    scopedProjectKeys,
+    serverConfigs,
+    snoozeWakeTick,
+    threads,
+  ]);
 
   const threadSearchInputRef = useRef<HTMLInputElement>(null);
   const [threadSearchQuery, setThreadSearchQuery] = useState("");
   const [activeSearchResultIndex, setActiveSearchResultIndex] = useState(0);
   const isSearchingThreads = threadSearchQuery.trim().length > 0;
   const searchableThreads = useMemo(
-    () => [...pinnedThreads, ...activeThreads, ...snoozedThreads, ...settledThreads],
-    [activeThreads, pinnedThreads, settledThreads, snoozedThreads],
+    () => [
+      ...pinnedThreads,
+      ...activeThreads,
+      ...firstMateListedThreads,
+      ...snoozedThreads,
+      ...settledThreads,
+    ],
+    [activeThreads, firstMateListedThreads, pinnedThreads, settledThreads, snoozedThreads],
   );
   const threadSearchResults = useMemo(
     () => searchSidebarThreads(searchableThreads, threadSearchQuery),
@@ -4890,6 +4917,7 @@ export default function Sidebar() {
           onArchiveThread={handleFirstMateArchiveThread}
           onOpenThread={navigateToThread}
           activeThread={firstMateLinkableThread}
+          routeThreadKey={routeThreadKey}
           onOpenFirstMate={handleOpenFirstMate}
         />
         <SidebarGroup className="ps-[calc(var(--sidebar-content-inset)+1px)] pe-[var(--sidebar-content-inset)] pb-1 pt-0 flex-1">

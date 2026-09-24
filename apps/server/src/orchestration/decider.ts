@@ -1763,6 +1763,37 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           },
         });
       }
+      // A turn-review card asks the user about the turn that just ended. A new
+      // turn is the answer (their reply, or a continue), so the card leaves the
+      // inbox now instead of holding the topic at "waiting for you" until this
+      // turn ends too.
+      const firstMate = readModel.projects.find(
+        (project) => project.id === targetThread.projectId,
+      )?.firstMate;
+      for (const decision of firstMate?.decisions ?? []) {
+        if (
+          decision.status !== "pending" ||
+          decision.source.kind !== "turn-review" ||
+          decision.source.threadId !== command.threadId
+        ) {
+          continue;
+        }
+        lifecycleResetEvents.push({
+          ...(yield* withEventBase({
+            aggregateKind: "project",
+            aggregateId: targetThread.projectId,
+            occurredAt: command.createdAt,
+            commandId: command.commandId,
+          })),
+          type: "firstmate.domain-event",
+          payload: {
+            type: "firstmate.decision-cancelled",
+            projectId: targetThread.projectId,
+            decisionId: decision.id,
+            occurredAt: command.createdAt,
+          },
+        });
+      }
       return [
         ...lifecycleResetEvents,
         ...(userMessageEvent ? [userMessageEvent] : []),
