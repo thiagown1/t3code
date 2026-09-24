@@ -92,7 +92,7 @@ const JEV_QUESTIONS = {
 } as const;
 
 /** @internal Exported for tests. */
-export function verdictFromJevAnswers(answers: JevAnswers): TurnReviewVerdict {
+function verdictFromJevAnswers(answers: JevAnswers): TurnReviewVerdict {
   const outcome = answers.outcome;
   const inScope = answers.in_scope;
   if (outcome?.type !== "choice") return TURN_REVIEW_NEEDS_USER;
@@ -105,6 +105,7 @@ export function verdictFromJevAnswers(answers: JevAnswers): TurnReviewVerdict {
   };
 }
 
+/** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* () {
   const jev = yield* JevDecisions;
   const textGeneration = yield* TextGeneration.TextGeneration;

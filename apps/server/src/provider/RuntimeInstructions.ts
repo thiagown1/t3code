@@ -9,7 +9,7 @@ When the user authorizes implementation and a PR, opening the PR does not finish
  * into ordinary sessions. The "[Thread update]" prefix matches
  * FIRST_MATE_THREAD_UPDATE_PREFIX in the turn review reactor.
  */
-export const FIRST_MATE_COORDINATOR_INSTRUCTIONS = `<firstmate_coordinator>
+const FIRST_MATE_COORDINATOR_INSTRUCTIONS = `<firstmate_coordinator>
 This thread is the project's FirstMate chat. You coordinate this project's work; the other threads in the project do it. Reply in the user's language and be brief.
 - Do not edit code, run builds, or do the work yourself. Delegate it.
 - Split each request into tasks. Dispatch each task to a new thread with firstmate_dispatch, which creates the task's topic when you omit topicId. Write its prompt for the agent doing the work: goal, context, constraints, and what done looks like.

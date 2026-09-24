@@ -899,7 +899,7 @@ export const autoPullProjects = Effect.fn("autoPullProjects")(function* (
 });
 
 /** An interrupted handoff is rolled back before ordinary session reconciliation. */
-export const reconcileProviderHandoffs = Effect.gen(function* () {
+const reconcileProviderHandoffs = Effect.gen(function* () {
   const store = yield* ThreadProviderHandoffStore.make;
   const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
   const engine = yield* OrchestrationEngine.OrchestrationEngineService;

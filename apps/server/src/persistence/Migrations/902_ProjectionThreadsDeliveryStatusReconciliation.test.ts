@@ -44,15 +44,19 @@ it.layer(NodeSqliteClient.layerMemory())(
           WHERE migration_id >= 52
           ORDER BY migration_id
         `;
-        assert.deepEqual(migrations, [
-          { migrationId: 52, name: "ProjectionThreadTitleState" },
-          { migrationId: 53, name: "PullRequestFilesViewed" },
-          { migrationId: 900, name: "ProjectionThreadsDeliveryStatus" },
-          { migrationId: 901, name: "ProjectionProjectsFirstMate" },
-          { migrationId: 902, name: "ProjectionThreadsDeliveryStatusReconciliation" },
-          { migrationId: 903, name: "ThreadProviderHandoffs" },
-          { migrationId: 904, name: "PullRequestSupervision" },
-        ]);
+        // Only what this reconciliation is about: 52 stays recorded once under
+        // upstream's name, and the fork's delivery-status migrations ran. Later
+        // migrations are not listed so adding one does not break this test.
+        assert.deepEqual(
+          migrations.filter((migration) => migration.migrationId <= 902),
+          [
+            { migrationId: 52, name: "ProjectionThreadTitleState" },
+            { migrationId: 53, name: "PullRequestFilesViewed" },
+            { migrationId: 900, name: "ProjectionThreadsDeliveryStatus" },
+            { migrationId: 901, name: "ProjectionProjectsFirstMate" },
+            { migrationId: 902, name: "ProjectionThreadsDeliveryStatusReconciliation" },
+          ],
+        );
       }),
     );
   },

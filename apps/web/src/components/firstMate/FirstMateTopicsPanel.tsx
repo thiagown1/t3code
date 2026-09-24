@@ -14,7 +14,6 @@ import {
   ChevronDownIcon,
   CircleDotIcon,
   CompassIcon,
-  GitPullRequestIcon,
   Layers3Icon,
   MessageCircleQuestionIcon,
   RocketIcon,
@@ -22,6 +21,7 @@ import {
 } from "lucide-react";
 import { useMemo, useState } from "react";
 
+import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
 import { Tooltip, TooltipTrigger, TooltipPopup } from "~/components/ui/tooltip";
 import { cn } from "~/lib/utils";
 import {
@@ -321,7 +321,10 @@ export function FirstMateTopicsPanel({
                               <span className="flex min-w-0 items-center gap-1 text-[10px] leading-4 text-sidebar-muted-foreground" />
                             }
                           >
-                            <GitPullRequestIcon aria-hidden className="size-2.5 shrink-0" />
+                            <PullRequestGlyph.pullRequest
+                              aria-hidden
+                              className="size-2.5 shrink-0"
+                            />
                             <span className="shrink-0">#{pullRequest.number}</span>
                             {pullRequest.headSha === null ? null : (
                               <span className="shrink-0 font-mono">
