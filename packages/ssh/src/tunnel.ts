@@ -512,7 +512,32 @@ if ! t3_runtime_ready; then
     else printf 'Remote host needs curl or wget to download %s.\\n' "$T3_ARCHIVE" >&2; exit 1
     fi
   }
-  t3_fetch "$T3_RELEASE_BASE_URL/v$T3_ARCHIVE_VERSION/SHA256SUMS" "$T3_STAGING/SHA256SUMS" @@T3_ARCHIVE_CHECKSUMS_SECONDS@@
+  # A server already running here (a systemd service, another client's
+  # launch) is reused rather than replaced, so it only needs some installed
+  # runner to talk to it. That keeps a host whose clients run versions with
+  # no published archive (forks, local builds) reachable.
+  t3_reusable_runtime_dir() {
+    T3_EXTERNAL_PID="$(sed -n 's/.*"pid":\\([0-9][0-9]*\\).*/\\1/p' "$HOME/.t3/userdata/server-runtime.json" 2>/dev/null || true)"
+    [ -n "$T3_EXTERNAL_PID" ] && kill -0 "$T3_EXTERNAL_PID" 2>/dev/null || return 1
+    for T3_CANDIDATE in $(ls -1dt "$HOME/.t3/runtime/versions"/*/ 2>/dev/null); do
+      T3_CANDIDATE="\${T3_CANDIDATE%/}"
+      if [ -x "$T3_CANDIDATE/t3" ] && [ "$(cat "$T3_CANDIDATE/.install-complete" 2>/dev/null)" = "$(basename "$T3_CANDIDATE")" ]; then
+        printf '%s\\n' "$T3_CANDIDATE"
+        return 0
+      fi
+    done
+    return 1
+  }
+  if ! t3_fetch "$T3_RELEASE_BASE_URL/v$T3_ARCHIVE_VERSION/SHA256SUMS" "$T3_STAGING/SHA256SUMS" @@T3_ARCHIVE_CHECKSUMS_SECONDS@@; then
+    T3_FALLBACK_DIR="$(t3_reusable_runtime_dir || true)"
+    if [ -z "$T3_FALLBACK_DIR" ]; then
+      printf 'No t3 %s release archive is published at %s.\\n' "$T3_ARCHIVE_VERSION" "$T3_RELEASE_BASE_URL" >&2
+      exit 1
+    fi
+    printf 't3 %s has no release archive; reusing the running server through %s.\\n' "$T3_ARCHIVE_VERSION" "$T3_FALLBACK_DIR" >&2
+  fi
+fi
+if ! t3_runtime_ready && [ -z "\${T3_FALLBACK_DIR:-}" ]; then
   t3_fetch "$T3_RELEASE_BASE_URL/v$T3_ARCHIVE_VERSION/$T3_ARCHIVE" "$T3_STAGING/$T3_ARCHIVE" @@T3_ARCHIVE_DOWNLOAD_SECONDS@@
   T3_EXPECTED="$(grep " \\*\\{0,1\\}$T3_ARCHIVE$" "$T3_STAGING/SHA256SUMS" | cut -d' ' -f1)"
   if command -v sha256sum >/dev/null 2>&1; then
@@ -538,7 +563,7 @@ if [ -n "\${T3_LOCK:-}" ]; then
   rm -rf "$T3_LOCK"
   trap - EXIT
 fi
-exec "$T3_RUNTIME_DIR/t3" "$@"
+exec "\${T3_FALLBACK_DIR:-$T3_RUNTIME_DIR}/t3" "$@"
 `;
 
 const REMOTE_LAUNCH_SCRIPT = `set -eu

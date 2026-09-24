@@ -123,7 +123,7 @@ describe("ssh tunnel scripts", () => {
     assert.include(script, 'T3_RUNTIME_DIR="$HOME/.t3/runtime/versions/$T3_ARCHIVE_VERSION"');
     assert.include(script, 'T3_ARCHIVE="t3-$T3_ARCHIVE_VERSION-$T3_PLATFORM-$T3_ARCH.tar.gz"');
     assert.include(script, "SHA256SUMS");
-    assert.include(script, 'exec "$T3_RUNTIME_DIR/t3" "$@"');
+    assert.include(script, 'exec "${T3_FALLBACK_DIR:-$T3_RUNTIME_DIR}/t3" "$@"');
     assert.notInclude(script, "npx");
     assert.notInclude(script, "npm exec");
     assert.notInclude(script, "t3@latest");
@@ -801,6 +801,54 @@ describe("archive runner script", () => {
         const afterUnowned = yield* runRunner(home, runner);
         assert.equal(afterUnowned.exitCode, 0, afterUnowned.stderr);
         assert.isFalse(yield* fs.exists(lock));
+      }).pipe(Effect.provide(NodeServices.layer)),
+    60_000,
+  );
+
+  it.effect.skipIf(windowsHost)(
+    "reuses an installed runner for a running server when the version has no archive",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-archive-fallback-" });
+        const runner = `${root}/run-t3.sh`;
+        yield* fs.writeFileString(
+          runner,
+          buildRemoteT3RunnerScript({
+            archiveVersion,
+            releaseBaseUrl: `file://${root}/missing-mirror`,
+          }),
+        );
+        const home = `${root}/home`;
+        const installed = `${home}/.t3/runtime/versions/0.0.1`;
+        yield* fs.makeDirectory(installed, { recursive: true });
+        yield* fs.writeFileString(`${installed}/t3`, "#!/bin/sh\necho t3 v0.0.1\n");
+        yield* fs.chmod(`${installed}/t3`, 0o755);
+        yield* fs.writeFileString(`${installed}/.install-complete`, "0.0.1\n");
+
+        // No server is running: a missing archive is still an error.
+        const withoutServer = yield* runRunner(home, runner);
+        assert.notEqual(withoutServer.exitCode, 0);
+        assert.include(withoutServer.stderr, "release archive is published");
+
+        // A live server (this test process) makes the installed runner usable.
+        yield* fs.makeDirectory(`${home}/.t3/userdata`, { recursive: true });
+        yield* fs.writeFileString(
+          `${home}/.t3/userdata/server-runtime.json`,
+          `{"version":1,"pid":${process.pid},"port":3773}`,
+        );
+        const withServer = yield* runRunner(home, runner);
+        assert.equal(withServer.exitCode, 0, withServer.stderr);
+        assert.include(withServer.stdout, "t3 v0.0.1");
+        assert.isFalse(yield* fs.exists(`${home}/.t3/runtime/versions/${archiveVersion}`));
+
+        // A dead server pid does not count.
+        yield* fs.writeFileString(
+          `${home}/.t3/userdata/server-runtime.json`,
+          `{"version":1,"pid":999999,"port":3773}`,
+        );
+        const deadServer = yield* runRunner(home, runner);
+        assert.notEqual(deadServer.exitCode, 0);
       }).pipe(Effect.provide(NodeServices.layer)),
     60_000,
   );
