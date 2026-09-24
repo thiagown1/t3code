@@ -30,7 +30,7 @@ import type { SqlError } from "effect/unstable/sql/SqlError";
 /** Ids at or above this belong to this fork; below it belongs to upstream. */
 export const FORK_MIGRATION_ID_FLOOR = 900;
 
-export const MIGRATIONS_TABLE = "effect_sql_migrations";
+const MIGRATIONS_TABLE = "effect_sql_migrations";
 
 export type MigrationEntry = readonly [
   id: number,

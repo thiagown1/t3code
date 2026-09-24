@@ -19,8 +19,8 @@ import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstab
 import { OpenRouterApiKey } from "./OpenRouterApiKey.ts";
 
 /** The alpha endpoint. One constant so moving it is a one-line change. */
-export const JEV_DECISIONS_URL = "https://openrouter.ai/api/alpha/decisions";
-export const JEV_MODEL = "typesafe/jev-1.13";
+const JEV_DECISIONS_URL = "https://openrouter.ai/api/alpha/decisions";
+const JEV_MODEL = "typesafe/jev-1.13";
 
 export type JevQuestion =
   | {
@@ -73,6 +73,7 @@ export class JevDecisions extends Context.Service<
   }
 >()("t3/firstMate/JevDecisions") {}
 
+/** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* () {
   const httpClient = yield* HttpClient.HttpClient;
   const apiKey = yield* OpenRouterApiKey;

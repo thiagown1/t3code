@@ -25,8 +25,8 @@ export interface TurnReviewVerdict {
 
 export type TurnReviewAction = "mark-done" | "continue" | "open-decision";
 
-export const TURN_REVIEW_CONFIDENCE_THRESHOLD = 0.8;
-export const TURN_REVIEW_IN_SCOPE_THRESHOLD = 0.8;
+const TURN_REVIEW_CONFIDENCE_THRESHOLD = 0.8;
+const TURN_REVIEW_IN_SCOPE_THRESHOLD = 0.8;
 /** Automatic continues allowed in a row before the user has to weigh in. */
 export const TURN_REVIEW_MAX_AUTO_CONTINUES = 5;
 

@@ -107,7 +107,7 @@ function tail(text: string, limit: number): string {
 }
 
 /** Decision id for one reviewed turn; deterministic so a replay cannot open two cards. */
-export function turnReviewDecisionId(threadId: ThreadId, turnId: TurnId): FirstMateDecisionId {
+function turnReviewDecisionId(threadId: ThreadId, turnId: TurnId): FirstMateDecisionId {
   return FirstMateDecisionId.make(`turn-review:${threadId}:${turnId}`);
 }
 
