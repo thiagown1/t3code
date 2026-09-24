@@ -644,4 +644,13 @@ describe("FirstMate topic read model", () => {
       }),
     ).toBe("monitoring");
   });
+
+  it("shows a completed topic as working while its thread runs again", () => {
+    expect(deriveFirstMateTopicStatus(baseTopic, { ...baseFacts, sessionStatus: "running" })).toBe(
+      "working",
+    );
+    expect(deriveFirstMateTopicStatus(baseTopic, { ...baseFacts, sessionStatus: "ready" })).toBe(
+      "completed",
+    );
+  });
 });

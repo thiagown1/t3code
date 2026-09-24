@@ -9,12 +9,15 @@ import {
   ProjectId,
   ProviderInstanceId,
   ThreadId,
+  TurnId,
+  type FirstMateDecision,
   type ThreadPullRequestLink,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
   buildFirstMatePanelModel,
+  firstMateListedThreadKeys,
   firstMatePanelPullRequests,
   linkableSupervisorThread,
 } from "./FirstMateTopicsPanel.logic";
@@ -348,6 +351,125 @@ describe("FirstMate topics panel model", () => {
       status: "waiting-deploy",
       postMergeActionRequired: false,
     });
+  });
+});
+
+describe("a thread the user is already talking to", () => {
+  const running = {
+    threadId,
+    status: "running" as const,
+    providerName: "codex",
+    runtimeMode: "full-access" as const,
+    activeTurnId: TurnId.make("turn-2"),
+    lastError: null,
+    updatedAt: now,
+  };
+  const implementing = {
+    ...workspace,
+    topics: workspace.topics.map((topic) => ({
+      ...topic,
+      stage: "implementation" as const,
+      completedAt: null,
+    })),
+  };
+  const turnReview = (overrides: Partial<FirstMateDecision> = {}): FirstMateDecision => ({
+    id: FirstMateDecisionId.make("turn-review:thread-1:turn-1"),
+    projectId,
+    topicId,
+    source: { kind: "turn-review", threadId, turnId: TurnId.make("turn-1") },
+    question: "Should I also migrate the old rows?",
+    options: [],
+    recommendedOptionId: null,
+    selectedOptionId: null,
+    blocking: true,
+    status: "pending",
+    createdAt: now,
+    updatedAt: now,
+    resolvedAt: null,
+    ...overrides,
+  });
+
+  // Reported: the user answered in the thread, the thread was working, and the
+  // topic still said "Waiting for you" because the review card of the previous
+  // turn stayed pending until the new turn ended.
+  it("does not wait on a turn-review card once the thread runs again", () => {
+    const projects = [project({ ...implementing, decisions: [turnReview()] })];
+    const idle = buildFirstMatePanelModel({
+      projects,
+      threads: [thread()],
+      scopedProjectKeys: null,
+    });
+    const answered = buildFirstMatePanelModel({
+      projects,
+      threads: [thread({ session: running })],
+      scopedProjectKeys: null,
+    });
+
+    expect(idle.items[0]).toMatchObject({ status: "waiting-user", pendingDecisionCount: 1 });
+    expect(answered.items[0]).toMatchObject({ status: "implementing", pendingDecisionCount: 0 });
+  });
+
+  it("still waits on a provider request raised while the thread runs", () => {
+    const model = buildFirstMatePanelModel({
+      projects: [project(implementing)],
+      threads: [thread({ session: running, hasPendingApprovals: true })],
+      scopedProjectKeys: null,
+    });
+
+    expect(model.items[0]?.status).toBe("waiting-user");
+  });
+
+  // Reported: a topic whose PRs had all merged said "Waiting for you" while its
+  // thread was visibly working on the follow-up.
+  it("keeps PR state per PR but never turns a running thread into waiting or blocked", () => {
+    const merged = pullRequest(21, {
+      state: "merged",
+      mergedAt: now,
+      checksState: "passing",
+      checks: [{ name: "CI", status: "success", description: null, url: null }],
+    });
+    const actionRequired = pullRequest(22, {
+      checks: [{ name: "Review", status: "action-required", description: null, url: null }],
+    });
+    const build = (pullRequests: ThreadPullRequestLink[], session: typeof running | null) =>
+      buildFirstMatePanelModel({
+        projects: [project(implementing)],
+        threads: [thread({ pullRequests, session })],
+        scopedProjectKeys: null,
+        nowMs: Date.parse(now),
+      }).items[0];
+
+    expect(build([merged], null)?.status).toBe("waiting-user");
+    expect(build([merged], running)?.status).toBe("implementing");
+    expect(build([actionRequired], null)?.status).toBe("blocked");
+    expect(build([actionRequired], running)).toMatchObject({
+      status: "implementing",
+      pullRequests: [{ number: 22, status: "action-required" }],
+    });
+  });
+});
+
+describe("firstMateListedThreadKeys", () => {
+  const supervisorThreadId = ThreadId.make("thread-supervisor");
+  const undelegated = {
+    ...workspace.topics[0]!,
+    id: FirstMateTopicId.make("topic-2"),
+    threadId: null,
+  };
+
+  it("lists the supervisor chat and every delegated topic thread, scoped to the project", () => {
+    const projects = [
+      project({ ...workspace, supervisorThreadId, topics: [...workspace.topics, undelegated] }),
+    ];
+
+    expect([...firstMateListedThreadKeys(projects, null)].toSorted()).toEqual([
+      `${environmentId}:${threadId}`,
+      `${environmentId}:${supervisorThreadId}`,
+    ]);
+    expect(
+      firstMateListedThreadKeys(projects, new Set([`${environmentId}:another-project`])).size,
+    ).toBe(0);
+    expect(firstMateListedThreadKeys([project(undefined)], null).size).toBe(0);
   });
 });
 

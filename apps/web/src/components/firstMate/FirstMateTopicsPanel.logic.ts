@@ -12,6 +12,7 @@ import type {
   ThreadPullRequestLink,
   ThreadId,
 } from "@t3tools/contracts";
+import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
 import { deriveFirstMateTopicReadModel } from "@t3tools/shared/firstMate";
 
 export type FirstMatePanelAvailability = "ready" | "empty" | "unavailable";
@@ -242,8 +243,17 @@ export function buildFirstMatePanelModel(input: {
         topic.threadId === null
           ? null
           : (threadByKey.get(`${project.environmentId}:${topic.threadId}`) ?? null);
+      const running =
+        thread?.session?.status === "running" || thread?.session?.status === "starting";
+      // A turn-review card asks about a turn that has ended. Once the thread
+      // runs again the user already answered it; the server cancels the card,
+      // and until that lands (or on an older server) it must not read as
+      // "waiting for you" on a thread that is visibly working.
       const pendingFirstMateDecisionCount = workspace.decisions.filter(
-        (decision) => decision.topicId === topic.id && decision.status === "pending",
+        (decision) =>
+          decision.topicId === topic.id &&
+          decision.status === "pending" &&
+          !(running && decision.source.kind === "turn-review"),
       ).length;
       const readModel = deriveFirstMateTopicReadModel(topic, {
         sessionStatus: thread?.session?.status ?? null,
@@ -268,8 +278,11 @@ export function buildFirstMatePanelModel(input: {
         selected: workspace.selectedTopicId === topic.id,
         title: topic.title,
         summary: topic.summary,
+        // A running thread is doing the work its PRs are waiting on, so the PR
+        // state (still shown per PR) does not turn the topic into "blocked" or
+        // "waiting for you" until the thread stops again.
         status:
-          thread?.deliveryStatus == null || thread.deliveryStatus === "waiting-ci"
+          !running && (thread?.deliveryStatus == null || thread.deliveryStatus === "waiting-ci")
             ? statusFromPullRequests(readModel.operationalStatus, pullRequests)
             : readModel.operationalStatus,
         pendingDecisionCount: readModel.pendingDecisionCount,
@@ -306,6 +319,39 @@ export function buildFirstMatePanelModel(input: {
           }
         : null,
   };
+}
+
+/**
+ * Scoped keys of every thread the FirstMate panel already
+ * lists: each project's supervisor chat and every delegated topic's thread.
+ * The sidebar leaves these out of its active list so one thread is not shown
+ * twice; search, pins and the snoozed/settled shelves still reach them.
+ */
+export function firstMateListedThreadKeys(
+  projects: ReadonlyArray<EnvironmentProject>,
+  scopedProjectKeys: ReadonlySet<string> | null,
+): ReadonlySet<string> {
+  const keys = new Set<string>();
+  for (const project of projects) {
+    const workspace = project.firstMate;
+    if (workspace == null) continue;
+    if (
+      scopedProjectKeys !== null &&
+      !scopedProjectKeys.has(`${project.environmentId}:${project.id}`)
+    ) {
+      continue;
+    }
+    if (workspace.supervisorThreadId !== null) {
+      keys.add(
+        scopedThreadKey(scopeThreadRef(project.environmentId, workspace.supervisorThreadId)),
+      );
+    }
+    for (const topic of workspace.topics) {
+      if (topic.threadId === null) continue;
+      keys.add(scopedThreadKey(scopeThreadRef(project.environmentId, topic.threadId)));
+    }
+  }
+  return keys;
 }
 
 export const FIRST_MATE_STATUS_LABELS: Record<FirstMateTopicOperationalStatus, string> = {

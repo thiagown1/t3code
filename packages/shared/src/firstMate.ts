@@ -646,7 +646,11 @@ export function deriveFirstMateTopicStatus(
   if (facts.deliveryStatus !== null) return facts.deliveryStatus;
   if (facts.sessionStatus === "error" || facts.sessionStatus === "interrupted") return "blocked";
   if (facts.backgroundLiveness !== null) return facts.backgroundLiveness;
-  if (topic.stage === "completed") return "completed";
+  // A topic the supervisor closed can be picked up again in its thread; while
+  // that thread runs, "completed" would hide live work.
+  if (topic.stage === "completed") {
+    return facts.sessionStatus === "running" ? "working" : "completed";
+  }
   if (facts.sessionStatus === "starting") return "queued";
   return stageStatus[topic.stage];
 }

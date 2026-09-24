@@ -8,7 +8,9 @@ import type {
   FirstMateRoutingEvaluationMode,
   ProjectId,
   ScopedThreadRef,
+  ThreadId,
 } from "@t3tools/contracts";
+import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
 import {
   ArchiveIcon,
   ChevronDownIcon,
@@ -19,7 +21,7 @@ import {
   RocketIcon,
   Unlink2Icon,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 
 import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
 import { Tooltip, TooltipTrigger, TooltipPopup } from "~/components/ui/tooltip";
@@ -65,6 +67,11 @@ interface FirstMateTopicsPanelProps {
   readonly onOpenThread: (thread: ScopedThreadRef) => void;
   /** The thread the user is looking at, so the panel can offer to adopt it. */
   readonly activeThread?: LinkableSupervisorThread | undefined;
+  /**
+   * Scoped key of the thread on screen. Its row in the sessions list is left
+   * out when this panel lists it, so the panel marks it instead.
+   */
+  readonly routeThreadKey?: string | null;
   readonly onOpenFirstMate: (request: OpenFirstMateRequest) => Promise<boolean>;
 }
 
@@ -122,6 +129,40 @@ function pullRequestDescription(pullRequest: FirstMatePanelItem["pullRequests"][
   return `${pullRequest.repository}#${pullRequest.number}${pullRequest.headSha === null ? "" : ` at ${pullRequest.headSha}`}: ${PULL_REQUEST_STATUS_LABELS[pullRequest.status]}`;
 }
 
+const ROW_ICON_BUTTON_CLASS =
+  "my-1 flex w-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-sidebar-muted-foreground outline-none hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring disabled:opacity-50";
+
+/** An icon-only row action. The icon alone never explains itself, so every one carries a tooltip. */
+function RowIconButton(props: {
+  readonly label: string;
+  readonly tooltip: string;
+  readonly className?: string;
+  readonly disabled?: boolean;
+  readonly pressed?: boolean;
+  readonly onClick: () => void;
+  readonly children: ReactNode;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <button
+            type="button"
+            aria-label={props.label}
+            aria-pressed={props.pressed}
+            disabled={props.disabled}
+            onClick={props.onClick}
+            className={cn(ROW_ICON_BUTTON_CLASS, props.className)}
+          />
+        }
+      >
+        {props.children}
+      </TooltipTrigger>
+      <TooltipPopup>{props.tooltip}</TooltipPopup>
+    </Tooltip>
+  );
+}
+
 export function FirstMateTopicsPanel({
   projects,
   threads,
@@ -134,8 +175,12 @@ export function FirstMateTopicsPanel({
   onArchiveThread,
   onOpenThread,
   activeThread,
+  routeThreadKey = null,
   onOpenFirstMate,
 }: FirstMateTopicsPanelProps) {
+  const isOnScreen = (environmentId: EnvironmentId, threadId: ThreadId | null) =>
+    threadId !== null &&
+    routeThreadKey === scopedThreadKey(scopeThreadRef(environmentId, threadId));
   const [expanded, setExpanded] = useState(true);
   const [linkingSupervisor, setLinkingSupervisor] = useState(false);
   const [unlinkingKey, setUnlinkingKey] = useState<string | null>(null);
@@ -236,8 +281,15 @@ export function FirstMateTopicsPanel({
                   <button
                     type="button"
                     disabled={linkingSupervisor}
+                    aria-current={
+                      isOnScreen(supervisor.environmentId, supervisor.threadId) ? "page" : undefined
+                    }
                     onClick={() => void openFirstMate(supervisor)}
-                    className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-left outline-none active:scale-[0.99] hover:bg-sidebar-row-hover focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+                    className={cn(
+                      "flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-left outline-none active:scale-[0.99] hover:bg-sidebar-row-hover focus-visible:ring-2 focus-visible:ring-sidebar-ring",
+                      isOnScreen(supervisor.environmentId, supervisor.threadId) &&
+                        "bg-sidebar-row-active hover:bg-sidebar-row-active",
+                    )}
                   >
                     <CompassIcon aria-hidden className="size-3.5 shrink-0 text-sky-500" />
                     <span className="min-w-0 flex-1 truncate text-xs text-sidebar-foreground">
@@ -247,15 +299,15 @@ export function FirstMateTopicsPanel({
                       {model.projectCount > 1 ? supervisor.projectTitle : "Supervisor"}
                     </span>
                   </button>
-                  <button
-                    type="button"
-                    aria-label={`Stop using this thread as the FirstMate supervisor for ${supervisor.projectTitle}`}
+                  <RowIconButton
+                    label={`Stop using this thread as the FirstMate supervisor for ${supervisor.projectTitle}`}
+                    tooltip="Stop using this thread as the FirstMate chat"
                     disabled={unlinkingKey !== null}
                     onClick={() => void unlinkSupervisor(supervisor)}
-                    className="my-0.5 flex w-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-sidebar-muted-foreground outline-none hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring disabled:cursor-wait disabled:opacity-50"
+                    className="my-0.5 disabled:cursor-wait"
                   >
                     <Unlink2Icon aria-hidden className="size-3.5" />
-                  </button>
+                  </RowIconButton>
                 </li>
               ))}
             </ul>
@@ -290,6 +342,9 @@ export function FirstMateTopicsPanel({
                   <button
                     type="button"
                     disabled={item.threadId === null}
+                    aria-current={
+                      isOnScreen(item.environmentId, item.threadId) ? "page" : undefined
+                    }
                     onClick={() => {
                       if (item.threadId === null) return;
                       onOpenThread({ environmentId: item.environmentId, threadId: item.threadId });
@@ -297,6 +352,8 @@ export function FirstMateTopicsPanel({
                     className={cn(
                       "group flex min-w-0 flex-1 cursor-pointer items-start gap-2 rounded-md px-2 py-1.5 text-left outline-none active:scale-[0.99] hover:bg-sidebar-row-hover focus-visible:ring-2 focus-visible:ring-sidebar-ring disabled:cursor-default disabled:hover:bg-transparent",
                       item.selected && "bg-sidebar-accent/60",
+                      isOnScreen(item.environmentId, item.threadId) &&
+                        "bg-sidebar-row-active hover:bg-sidebar-row-active",
                     )}
                   >
                     <span
@@ -383,9 +440,9 @@ export function FirstMateTopicsPanel({
                   </button>
                   {item.postMergeActionRequired && item.threadId !== null ? (
                     <>
-                      <button
-                        type="button"
-                        aria-label={`Mark ${item.title} as waiting to deploy`}
+                      <RowIconButton
+                        label={`Mark ${item.title} as waiting to deploy`}
+                        tooltip="PRs merged: mark as waiting to deploy"
                         disabled={actingKey !== null}
                         onClick={() => {
                           setActingKey(item.key);
@@ -394,13 +451,13 @@ export function FirstMateTopicsPanel({
                             threadId: item.threadId!,
                           }).finally(() => setActingKey(null));
                         }}
-                        className="my-1 flex w-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-violet-500 outline-none hover:bg-sidebar-row-hover focus-visible:ring-2 focus-visible:ring-sidebar-ring disabled:cursor-wait disabled:opacity-50"
+                        className="text-violet-500 hover:text-violet-500 disabled:cursor-wait"
                       >
                         <RocketIcon aria-hidden className="size-3.5" />
-                      </button>
-                      <button
-                        type="button"
-                        aria-label={`Archive ${item.title}`}
+                      </RowIconButton>
+                      <RowIconButton
+                        label={`Archive ${item.title}`}
+                        tooltip="Archive thread"
                         disabled={actingKey !== null}
                         onClick={() => {
                           setActingKey(item.key);
@@ -409,29 +466,33 @@ export function FirstMateTopicsPanel({
                             threadId: item.threadId!,
                           }).finally(() => setActingKey(null));
                         }}
-                        className="my-1 flex w-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-sidebar-muted-foreground outline-none hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring disabled:cursor-wait disabled:opacity-50"
+                        className="disabled:cursor-wait"
                       >
                         <ArchiveIcon aria-hidden className="size-3.5" />
-                      </button>
+                      </RowIconButton>
                     </>
                   ) : null}
-                  <button
-                    type="button"
-                    aria-label={
+                  <RowIconButton
+                    label={
                       item.selected
                         ? `${item.title} is the active topic`
                         : `Use ${item.title} as active topic`
                     }
-                    aria-pressed={item.selected}
+                    tooltip={
+                      item.selected
+                        ? "Active topic: FirstMate chat messages go here"
+                        : "Make active: FirstMate chat messages go here"
+                    }
+                    pressed={item.selected}
                     disabled={item.threadId === null || item.selected || selectingKey !== null}
                     onClick={() => void selectTopic(item)}
-                    className="my-1 flex w-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-sidebar-muted-foreground outline-none hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring disabled:cursor-default disabled:opacity-50"
+                    className="disabled:cursor-default"
                   >
                     <CircleDotIcon
                       aria-hidden
                       className={cn("size-3.5", item.selected && "text-sky-500")}
                     />
-                  </button>
+                  </RowIconButton>
                 </li>
               ))}
             </ul>
